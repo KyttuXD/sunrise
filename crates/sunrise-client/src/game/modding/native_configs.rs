@@ -8,7 +8,8 @@
 //! `ConfigEvent::Loading` with a `ConfigSnapshot` only to the config's
 //! registered owner. Once a second it checks tracked files' text and delivers
 //! `ConfigEvent::Reloading` to the owning listener when text changed. A
-//! server's `Server` configs unload with `ConfigEvent::Unloading` when it stops.
+//! server's `Server` configs unload after `server_stopped`, including cleanup
+//! of already loaded configs if dedicated world preparation fails.
 use super::Game;
 use mod_api::{
     __private::{RegisteredConfig, parts_installation::registered_configs},
@@ -48,7 +49,7 @@ fn locate(
         && let Some(world) = world
     {
         let own = world.join("serverconfig").join(&config.file);
-        match fs::symlink_metadata(&own) {
+        match fs::metadata(&own) {
             Ok(_) => return Ok(own),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err((own, error)),
@@ -216,7 +217,8 @@ impl Game<'_> {
         self.native_configs_load(kinds, Some(world));
     }
 
-    /// The server stops: its `Server` configs unload.
+    /// Release the `Server` configs loaded for this run, after the stopped
+    /// event on a started server.
     pub(super) fn native_configs_server_stop(&mut self) {
         for (config, snapshot) in self.native_configs.drop_server() {
             config.notify_snapshot(

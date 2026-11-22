@@ -103,10 +103,16 @@ impl PackFinders for Registry {
 }
 
 /// A repository may be discovered before Game exists. As with startup reload
-/// listeners, registration has no world reads; only the supplied builder is live.
+/// listeners, only instance config and the supplied builder are available,
+/// not the world.
 struct DiscoveryHost;
 impl Host for DiscoveryHost {}
-mod_api::impl_host_areas!(DiscoveryHost, except(text));
+mod_api::impl_host_areas!(DiscoveryHost, except(config, text));
+impl mod_api::prelude::ConfigHost for DiscoveryHost {
+    fn config_dir(&self) -> &std::path::Path {
+        crate::entry::runtime_environment::config_dir()
+    }
+}
 impl mod_api::prelude::TextHost for DiscoveryHost {
     fn text_string(&self, _: &mod_api::Text) -> Result<String, mod_api::text::TextFormError> {
         Err(mod_api::text::TextFormError::Unavailable)

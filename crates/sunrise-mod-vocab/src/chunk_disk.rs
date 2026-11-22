@@ -1,5 +1,6 @@
 //! Isolated attachment stores for chunk-worker disk callbacks.
 use crate::*;
+use std::path::Path;
 
 #[path = "chunk_disk/data.rs"]
 mod data;
@@ -82,6 +83,8 @@ pub struct ChunkDiskFailure {
 /// Registry and settings reads use the frozen resource generation retained by
 /// the disk worker. Neither getter reads files. The inherited
 /// [`ConfigHost::setting`](prelude::ConfigHost::setting) still returns an owned `Option<String>`.
+/// [`ConfigHost::config_dir`](prelude::ConfigHost::config_dir) borrows the instance config
+/// directory, not the disk job's world directory.
 pub trait ChunkDiskHost: Host {
     /// Borrow the captured world, dimension, chunk, representation and phase.
     fn job(&self) -> &ChunkDiskContext;
@@ -98,12 +101,21 @@ pub trait ChunkDiskHost: Host {
 pub struct OwningChunkDisk<'a> {
     job: &'a ChunkDiskContext,
     resources: &'a dyn WorldgenHost,
+    config_dir: &'a Path,
 }
 
 impl<'a> OwningChunkDisk<'a> {
-    /// Bind the captured identity to immutable resource-generation reads.
-    pub fn new(job: &'a ChunkDiskContext, resources: &'a dyn WorldgenHost) -> Self {
-        Self { job, resources }
+    /// Bind the captured identity to immutable resource and instance-path reads.
+    pub fn new(
+        job: &'a ChunkDiskContext,
+        resources: &'a dyn WorldgenHost,
+        config_dir: &'a Path,
+    ) -> Self {
+        Self {
+            job,
+            resources,
+            config_dir,
+        }
     }
 }
 
@@ -118,6 +130,10 @@ impl prelude::LevelsHost for OwningChunkDisk<'_> {
     }
 }
 impl prelude::ConfigHost for OwningChunkDisk<'_> {
+    fn config_dir(&self) -> &Path {
+        self.config_dir
+    }
+
     fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
         self.resources.setting(mod_id, key).map(str::to_owned)
     }

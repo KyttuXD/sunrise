@@ -1044,7 +1044,6 @@ impl Game<'_> {
         self.levels.abort_parked_generation();
         // The close request: lifecycle observation stops.
         self.native_lifecycle.begin_close();
-        self.native_configs_server_stop();
         self.native_players_leaving();
         // IntegratedServer.stopServer: teardownPublishedState.
         self.stop_serving();

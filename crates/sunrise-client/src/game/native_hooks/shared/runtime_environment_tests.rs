@@ -142,21 +142,6 @@ fn block_containers_cannot_bind_an_owned_menu_type() {
     );
 }
 
-/// The config folder is `config/` beside `options.txt`, made when
-/// missing.
-#[test]
-fn config_dir_is_config_in_the_game_folder() {
-    use super::config_dir;
-    let root = std::env::temp_dir().join(format!("sunrise-config-dir-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    assert!(!root.join("config").exists());
-    let dir = config_dir(&root).unwrap();
-    assert_eq!(dir, root.join("config"));
-    assert!(dir.is_dir());
-    assert_eq!(config_dir(&root).unwrap(), dir);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// Vanilla's F3 draws a column in each top corner (`extractLines`, left
 /// and right aligned), and its charts along the bottom.
 #[test]

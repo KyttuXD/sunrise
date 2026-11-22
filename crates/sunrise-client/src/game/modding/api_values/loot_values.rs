@@ -196,7 +196,12 @@ impl TryIntoApi for engine::LootContext<'_> {
 
 struct LootAbilityHost;
 impl mod_api::Host for LootAbilityHost {}
-mod_api::impl_host_areas!(LootAbilityHost);
+mod_api::impl_host_areas!(LootAbilityHost, except(config));
+impl mod_api::prelude::ConfigHost for LootAbilityHost {
+    fn config_dir(&self) -> &std::path::Path {
+        crate::entry::runtime_environment::config_dir()
+    }
+}
 
 pub(crate) fn dispatch_loot_ability(tool: &engine::LootStack, ability: &str, holds: &mut bool) {
     if !mod_api::__private::item_listens(mod_api::HookId::CanPerformAction, &tool.item) {

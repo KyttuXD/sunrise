@@ -39,8 +39,9 @@ pub trait ConfigHost {
     /// Side: both.
     /// The game's `config/` folder beside `options.txt` (beside
     /// `server.properties` on a dedicated server), as on NeoForge
-    /// (`FMLPaths.CONFIGDIR`). Shared by every mod; mods read and write their
-    /// own config files with ordinary `std::fs` calls. Nothing is created here.
+    /// (`FMLPaths.CONFIGDIR`). The path is captured at startup and available
+    /// even before a world exists or on a chunk worker. Mods read and write
+    /// their own config files with ordinary `std::fs` calls. Nothing is created here.
     #[access(Always)]
     fn config_dir(&self) -> &std::path::Path;
     /// Side: both.

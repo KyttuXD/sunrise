@@ -194,17 +194,23 @@ struct PlayerMoveState {
     velocity: [f64; 3],
 }
 
-/// The Host used while the entity's world view is borrowed. It answers only
-/// reads from the current write; other operations retain their typed refusal.
+/// The Host used while the entity's world view is borrowed. Its world reads
+/// are limited to the current write.
 struct LiveSectionHost(Option<SectionWriter>);
 
-mod_api::impl_host_areas!(LiveSectionHost);
+mod_api::impl_host_areas!(LiveSectionHost, except(config));
 mod_api::impl_server_host_areas!(LiveSectionHost);
 mod_api::impl_client_host_areas!(LiveSectionHost, except(client_render, menus));
 mod_api::impl_backend_areas!(
     LiveSectionHost,
     partial(entity_position, entity_on_ground, entity_velocity)
 );
+
+impl mod_api::prelude::ConfigHost for LiveSectionHost {
+    fn config_dir(&self) -> &std::path::Path {
+        crate::entry::runtime_environment::config_dir()
+    }
+}
 
 impl mod_api::prelude::ClientRenderClientHost for LiveSectionHost {
     fn biome_tint(

@@ -42,8 +42,9 @@ pub enum ConfigEvent {
     Loading,
     /// A loaded config's text changed (`ModConfigEvent.Reloading`).
     Reloading,
-    /// A loaded config is being dropped; the snapshot is its last loaded text
-    /// (`ModConfigEvent.Unloading`).
+    /// A world config is being dropped; the snapshot is its last loaded text
+    /// (`ModConfigEvent.Unloading`). This runs after `server_stopped`, or
+    /// when dedicated world preparation fails after loading the config.
     Unloading,
 }
 

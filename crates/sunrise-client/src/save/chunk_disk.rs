@@ -14,6 +14,7 @@ pub(super) struct DiskRuntime {
     world: WorldEpoch,
     dimension: mod_api::Identifier,
     resources: Arc<sunrise_world::native_load_context::WorldgenContext>,
+    config_dir: PathBuf,
 }
 
 impl DiskRuntime {
@@ -44,11 +45,14 @@ impl DiskRuntime {
         let reader = WorldgenReader(&self.resources);
         // A disk job has no block-state index (that is the game's, published for worldgen), so
         // `state_with_property` answers None, as worldgen does before the index is published.
-        job.run(&mod_api::OwningWorldgen::new(&reader, &|_, _, _| None))
-            .clone()
-            .map_err(|failure| {
-                std::io::Error::other(format!("chunk disk callback refused: {failure:?}"))
-            })
+        job.run(
+            &mod_api::OwningWorldgen::new(&reader, &|_, _, _| None),
+            &self.config_dir,
+        )
+        .clone()
+        .map_err(|failure| {
+            std::io::Error::other(format!("chunk disk callback refused: {failure:?}"))
+        })
     }
 }
 
@@ -145,19 +149,23 @@ impl SaveDir {
         world: WorldEpoch,
         dimension: mod_api::Identifier,
         resources: Arc<sunrise_world::native_load_context::WorldgenContext>,
+        config_dir: &Path,
     ) {
         if !mod_api::__private::listened(mod_api::HookId::ChunkDataLoad)
             && !mod_api::__private::listened(mod_api::HookId::ChunkDataSave)
         {
             return;
         }
-        let _ = self.disk.set(Arc::new(DiskRuntime {
-            save_suppressed: Mutex::default(),
-            failed_saves: Mutex::default(),
-            world,
-            dimension,
-            resources,
-        }));
+        self.disk.get_or_init(|| {
+            Arc::new(DiskRuntime {
+                save_suppressed: Mutex::default(),
+                failed_saves: Mutex::default(),
+                world,
+                dimension,
+                resources,
+                config_dir: config_dir.to_path_buf(),
+            })
+        });
     }
 
     /// Whether `x`, `z` failed its load listener this session. Such a chunk loads with its stored

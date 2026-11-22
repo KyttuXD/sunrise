@@ -22,44 +22,6 @@ impl Drop for ScratchDir {
     }
 }
 
-fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_owned()
-    } else {
-        panic!("unexpected panic payload");
-    }
-}
-
-#[test]
-fn config_dir_is_available_in_setup_and_config_phases_without_refusal() {
-    use mod_api::{
-        __private::{ModPhase, PhaseOwner},
-        Host,
-        prelude::{ConfigHost, EntitiesHost},
-    };
-    Game::initialize_mod_runtime_for_tests();
-    struct EmptyHost;
-    impl Host for EmptyHost {}
-    mod_api::impl_host_areas!(EmptyHost);
-
-    for phase in [ModPhase::Setup, ModPhase::Config] {
-        let _guard = PhaseOwner::scope(phase);
-        let unimplemented = std::panic::catch_unwind(|| {
-            let _ = EmptyHost.config_dir();
-        })
-        .unwrap_err();
-        let message = panic_text(unimplemented);
-        assert!(message.contains("Host::config_dir"), "{message}");
-    }
-
-    let _config = PhaseOwner::scope(ModPhase::Config);
-    let refused = std::panic::catch_unwind(|| EmptyHost.entity(1)).unwrap_err();
-    let message = panic_text(refused);
-    assert!(message.contains("Config"), "{message}");
-}
-
 #[test]
 fn native_configs_load_and_reload_follow_native_paths_and_symlinks() {
     let root = ScratchDir::new("native-paths");

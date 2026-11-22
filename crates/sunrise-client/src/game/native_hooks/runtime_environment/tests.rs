@@ -1,12 +1,20 @@
-//! Bootstrap capture, mod registration and the real Game hosts.
+//! Bootstrap capture, mod registration and the live hosts.
 use crate::game::{Game, Options, api_values, execution_role::ExecutionRole, mods};
-use mod_api::{Dist, Hooks, Host, ModEntry, PackageInfo, RegistrationContext, RuntimeEnvironment};
-use std::sync::{Arc, Mutex};
+use mod_api::{
+    AddClientReloadListenersEvent, ClientHost, Dist, Hooks, Host, ModEntry, PackageInfo,
+    RegistrationContext, RuntimeEnvironment,
+};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use sunrise_mod_package::selection::LaunchArguments;
 
 #[derive(Default)]
 struct Observed {
     registration: Vec<RuntimeEnvironment>,
+    registration_instance: Vec<PathBuf>,
+    startup_config_dir: Vec<PathBuf>,
     later: Vec<RuntimeEnvironment>,
     tests: usize,
 }
@@ -22,16 +30,27 @@ fn from_host(host: &dyn Host, tests: bool) -> RuntimeEnvironment {
 #[mod_api::__subscriptions]
 impl Hooks for Probe {
     fn register(&self, _: &mut dyn mod_api::Registrar, cx: &RegistrationContext) {
+        let mut observed = self.0.lock().unwrap();
+        observed.registration.push(RuntimeEnvironment::new(
+            cx.dist(),
+            cx.game_version().to_owned(),
+            cx.sunrise_version().to_owned(),
+            cx.game_tests_enabled(),
+        ));
+        observed
+            .registration_instance
+            .push(cx.instance_dir().unwrap().to_path_buf());
+    }
+    fn add_client_reload_listeners(
+        &self,
+        host: &dyn ClientHost,
+        _: &mut AddClientReloadListenersEvent<'_>,
+    ) {
         self.0
             .lock()
             .unwrap()
-            .registration
-            .push(RuntimeEnvironment::new(
-                cx.dist(),
-                cx.game_version().to_owned(),
-                cx.sunrise_version().to_owned(),
-                cx.game_tests_enabled(),
-            ));
+            .startup_config_dir
+            .push(host.config_dir().to_path_buf());
     }
     fn client_tick_pre(
         &self,
@@ -140,7 +159,7 @@ fn native_process_environment_in_registration_and_game_hosts() {
         || case.ends_with("after")
         || case.ends_with("env_one")
         || case.ends_with("env_true");
-    let mut args = Vec::new();
+    let mut args = vec!["--game-dir".to_owned(), "launch-instance".to_owned()];
     if case.ends_with("flag") || case.ends_with("before") {
         args.push("--game-tests".to_owned());
     }
@@ -222,6 +241,24 @@ fn native_process_environment_in_registration_and_game_hosts() {
         "Hooks::register must execute"
     );
     assert!(observed.registration.iter().all(|value| value == &expected));
+    let instance = cwd.join("launch-instance");
+    assert_eq!(
+        observed.registration_instance.len(),
+        observed.registration.len()
+    );
+    assert!(
+        observed
+            .registration_instance
+            .iter()
+            .all(|path| path == &instance)
+    );
+    if case.starts_with("client") {
+        // with_game_role stages the real startup reload before constructing Game.
+        assert_eq!(observed.startup_config_dir, [instance.join("config")]);
+        assert!(!instance.exists(), "borrowing the root must not create it");
+    } else {
+        assert!(observed.startup_config_dir.is_empty());
+    }
     assert_eq!(
         observed.later.len(),
         if case.starts_with("client") { 2 } else { 1 },

@@ -40,6 +40,7 @@ fn context(save: &SaveDir) {
         mod_api::WorldEpoch::new(17),
         mod_api::Identifier::parse("minecraft:overworld").unwrap(),
         Arc::new(load.worldgen_context([])),
+        &save.root.join("config"),
     );
 }
 fn chunk(value: i32) -> Chunk {

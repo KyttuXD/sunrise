@@ -26,12 +26,23 @@ impl Game<'_> {
                 Err(format!("the server thread panicked: {message}").into())
             }
         };
-        if !startup_began {
-            return result;
-        }
-        let run_error = result.as_ref().err().map(ToString::to_string);
-        let shutdown = self.shutdown_started_server(dedicated, crashed, run_error.as_deref());
-        result.and(shutdown)
+        let shutdown = if startup_began {
+            let run_error = result.as_ref().err().map(ToString::to_string);
+            self.shutdown_started_server(dedicated, crashed, run_error.as_deref())
+        } else {
+            Ok(())
+        };
+        // NeoForge's handleServerStopped posts ServerStoppedEvent before
+        // unloading world configs. Unload even if dedicated preparation
+        // failed after loading configs but before starting the world.
+        let unload = catch_unwind(AssertUnwindSafe(|| self.native_configs_server_stop())).map_err(
+            |payload| {
+                let message = shutdown_panic(payload.as_ref());
+                log::error!("{message}");
+                message.into()
+            },
+        );
+        result.and(shutdown).and(unload)
     }
 
     /// Vanilla's nested `stopServer` finally: a listener panic still reaches
@@ -90,7 +101,7 @@ impl Game<'_> {
                 // The callback can panic inside a new player's turn, and the save below writes
                 // every player the exclusion does not name.
                 self.exclude_interrupted_players(crashed, |m| log::warn!("{m}"));
-                // A config/player callback may unwind before the stop path
+                // A player callback may unwind before the stop path
                 // reaches its final save. Complete that same tail, not just
                 // the writes already queued, while retaining the first error.
                 if let Err(error) = self.finish_server_save(crashed) {

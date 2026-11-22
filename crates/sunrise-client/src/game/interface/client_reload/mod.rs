@@ -22,12 +22,16 @@ use sunrise_client::datapack::DataPack;
 /// listener's prepared apply.
 pub(super) type PreparedClientReload = PreparedStep<()>;
 
-/// The registration host of the first load: no game exists yet, so it reads
-/// nothing — a host read during registration panics, as its contract forbids
-/// one. The reload itself reads through the game's host.
-pub(super) struct StartupClientHost;
+/// The registration host of the first load: the process config path is known
+/// even though there is no game or world yet.
+struct StartupClientHost;
 impl Host for StartupClientHost {}
-mod_api::impl_host_areas!(StartupClientHost);
+mod_api::impl_host_areas!(StartupClientHost, except(config));
+impl mod_api::prelude::ConfigHost for StartupClientHost {
+    fn config_dir(&self) -> &std::path::Path {
+        crate::entry::runtime_environment::config_dir()
+    }
+}
 impl ClientHost for StartupClientHost {}
 mod_api::impl_client_host_areas!(StartupClientHost, except(audio, client_render));
 impl mod_api::prelude::ClientRenderClientHost for StartupClientHost {

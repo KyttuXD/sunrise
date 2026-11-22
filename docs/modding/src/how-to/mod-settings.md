@@ -83,9 +83,10 @@ dedicated server), as Fabric and NeoForge mods' do.
      input, render or tick callbacks.
    - Dedicated server: `Common` once and `Server` per world, before `server_about_to_start`.
    - Single-player integrated server: `Server` per world, before `server_about_to_start`.
-   For a `Server` config, if `<world>/serverconfig/<file>` already exists on disk, that override path wins
-   (`snapshot.path` points there and no missing base file is created). Otherwise the loader uses
-   `<config_dir>/<file>`, creating parent folders and writing `default` only when that base file is missing.
+   For a `Server` config, if `<world>/serverconfig/<file>` exists on disk (following symlinks), that override
+   path wins: `snapshot.path` points there and no missing base file is created. If the override or its target
+   is missing, the loader uses `<config_dir>/<file>`, creating parent folders and writing `default` only when
+   that base file is missing. Other override I/O errors are reported on the override path.
    `ConfigEvent::Loading` runs in the `Config` [load phase](../concepts/load-phases.md): settings reads and
    `Host::config_dir()` are available; world handles and transactions panic naming `Config`.
 3. **Reloading (`ConfigEvent::Reloading`):** Once a second on the owning side's tick, the game reads each
@@ -94,9 +95,10 @@ dedicated server), as Fabric and NeoForge mods' do.
    Files saved with unchanged text fire nothing. An I/O error (including a deleted or unreadable file) is
    logged with owner and path and keeps the last successfully read snapshot without substituting another
    path, retrying, or latching.
-4. **Unloading (`ConfigEvent::Unloading`):** When a server stops, each tracked `Server` config is dropped
-   and only its registration's listener receives `ConfigEvent::Unloading` in the `World` phase with its last
-   snapshot. `Client` and `Common` configs stay until the process exits.
+4. **Unloading (`ConfigEvent::Unloading`):** Each tracked `Server` config stays loaded through player logout,
+   the final save and `server_stopped`. After that event, or if dedicated world preparation failed before
+   startup began, only that config's listener receives `ConfigEvent::Unloading` with its last snapshot.
+   `Client` and `Common` configs stay until the process exits.
 5. **Listener errors and panics:** Returning `Err(message)` from a listener logs the failure with owner,
    operation and `snapshot.path` on every invocation without disabling future deliveries. A panic disables
    only that registration's callback for the rest of the session and raises an error notice naming that mod
@@ -105,8 +107,9 @@ dedicated server), as Fabric and NeoForge mods' do.
 ## Native filesystem operations under `config/`
 
 For files outside the managed config lifecycle, `Host::config_dir()` lends `&std::path::Path` for the game's
-`config/` folder (NeoForge's `FMLPaths.CONFIGDIR`). It is available in both the `Config` and `World` phases,
-and lending it performs no I/O. During `Registration` (where there is no `Host`), derive the same folder
+`config/` folder (NeoForge's `FMLPaths.CONFIGDIR`). Every host lends the same startup path, including early
+client reload registration and chunk disk callbacks, with no filesystem access. During `Registration`
+(where there is no `Host`), derive the same folder
 with `cx.instance_dir()?.join("config")`.
 
 Use `std::fs` directly on paths joined from `host.config_dir()`:

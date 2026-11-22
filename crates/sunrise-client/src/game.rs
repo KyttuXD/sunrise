@@ -13696,6 +13696,10 @@ impl<'a> Game<'a> {
             resident_entities: Default::default(),
             lent_mobs: Default::default(),
             held_out: Vec::with_capacity(4),
+            #[cfg(not(test))]
+            config_root: crate::entry::runtime_environment::config_dir().to_path_buf(),
+            // Game fixtures that bypass entry own the test game's working directory.
+            #[cfg(test)]
             config_root: Self::game_dir().join("config"),
             native_configs: Default::default(),
             mod_phase,
@@ -13979,8 +13983,9 @@ pub(crate) fn run_with(
         .select(&std::env::current_dir()?, &early_settings.mods.enabled);
     let mod_phase = mod_api::__private::PhaseOwner::new(mod_api::__private::ModPhase::Packages);
     api_values::install_packages(options.mods.native.packages(), &options.mods.selected)?;
-    if let Err(error) = native_hooks::config_dir(&Game::game_dir()) {
-        log::warn!("Sunrise: config folder: {error}");
+    let config_dir = crate::entry::runtime_environment::config_dir();
+    if let Err(error) = std::fs::create_dir_all(config_dir) {
+        log::warn!("Sunrise: config folder {}: {error}", config_dir.display());
     }
     mods::install_registration_data(&vanilla_root, mods::runtime_files::sources(&options.mods))?;
     mod_phase.advance(mod_api::__private::ModPhase::Registration)?;

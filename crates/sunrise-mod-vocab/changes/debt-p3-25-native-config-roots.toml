@@ -94,9 +94,9 @@ Native mods no longer cross a guest sandbox, so config declarations, lifecycle d
 
 This follows NeoForge/FML 12.0.16 (`FMLPaths.CONFIGDIR` / `FMLPaths.loadAbsolutePaths`, `ModContainer.registerConfig`, `ConfigTracker.trackConfig`, `ConfigTracker.resolveBasePath`, `ConfigTracker.loadConfigs`, `ConfigTracker.unloadConfig`, `ModConfig.setConfig`, `ModConfig.getFullPath`, and `ModConfigEvent.{Loading, Reloading, Unloading}`), NeoForge's lifecycle sites (`CommonModLoader.begin` and `ServerLifecycleHooks.handleServerAboutToStart` / `handleServerStopped`), and vanilla 26.3's instance root (`net.minecraft.client.Options` working directory beside `options.txt`, and `net.minecraft.server.Main.main` / `DedicatedServerSettings` beside `server.properties`).
 
-Declarations freeze in installed dependency and registration order during `Hooks::register` with the registering mod's identity and uniqueness by registered filename spelling across mods and kinds; lifecycle events deliver only to the registered owner rather than broadcasting globally to every mod; and `Host::config_dir()` lends `&std::path::Path` for `config/` in both `Config` and `World` phases (alongside `Host::instance_dir()`, `ServerHost::world_dir()`, and `RegistrationContext::instance_dir()`) instead of proxying reads, writes, directory listings, stats and removals through `ConfigFiles` with guest ownership, symlink, cursor and size caps. Shipped verified `[runtime]` package files (`RegistrationContext::runtime_files()`) and scalar settings (`Registrar::register_setting`) remain separate.
+Declarations freeze in installed dependency and registration order during `Hooks::register` with the registering mod's identity and uniqueness by registered filename spelling across mods and kinds; lifecycle events deliver only to the registered owner rather than broadcasting globally to every mod; and `Host::config_dir()` lends `&std::path::Path` for the same startup `config/` folder on every host (including early reload and chunk disk hosts) instead of proxying reads, writes, directory listings, stats and removals through `ConfigFiles` with guest ownership, symlink, cursor and size caps. Shipped verified `[runtime]` package files (`RegistrationContext::runtime_files()`) and scalar settings (`Registrar::register_setting`) remain separate.
 
-This restores the ordinary filesystem path and preserves Sunrise's existing local load points (`Client`/`Common` once on the window, `Common` once and `Server` per world on a dedicated server, `Server` per world on an integrated server, existing world `serverconfig/` overrides winning without creating a missing base file, and 1-second text-comparison reload checks) rather than claiming FML `FileWatcher` or `SYNCED` network-sync parity. Real I/O failures are logged with owner and path while keeping the last successfully read snapshot without substituting another path, retrying or latching; listener `Err` returns are logged on every invocation without disabling future deliveries, while a listener panic disables only that registration for the session without aborting server shutdown.
+This restores the ordinary filesystem path and preserves Sunrise's existing local load points (`Client`/`Common` once on the window, `Common` once and `Server` per world on a dedicated server, `Server` per world on an integrated server, existing world `serverconfig/` overrides winning when their targets exist without creating a missing base file, and 1-second text-comparison reload checks) rather than claiming FML `FileWatcher` or `SYNCED` network-sync parity. As in `ServerLifecycleHooks.handleServerStopped`, world configs remain loaded through logout, the final save and `server_stopped`; if dedicated preparation fails before startup begins, only the already loaded world configs are unloaded. Real I/O failures are logged with owner and path while keeping the last successfully read snapshot without substituting another path, retrying or latching; listener `Err` returns are logged on every invocation without disabling future deliveries, while a listener panic disables only that registration for the session without aborting server shutdown.
 """
 migrate = """
 ### 1. Register configs in `Hooks::register` instead of `Hooks::register_configs`
@@ -105,7 +105,7 @@ Remove `Hooks::register_configs`, `Hooks::config_loading`, `Hooks::config_reload
 
 Old:
 ```rust
-fn register_configs(&self, _host: &mut dyn Host, event: &mut RegisterConfigsEvent<'_>) {
+fn register_configs(&self, _host: HostSide<'_>, event: &mut RegisterConfigsEvent<'_>) {
     event.configs.push(Config::new("mymod", ConfigKind::Server, DEFAULT_TOML).file("mymod/machines.toml"));
 }
 ```
@@ -143,6 +143,8 @@ let listener = move |host: HostSide<'_>, event: ConfigEvent, snapshot: &ConfigSn
 
 - Remove `if config.mod_id != "mymod" { return; }` filters: only this registration's listener is called.
 - `ConfigSnapshot` replaces `ConfigFile`:
+  - Replace `config.mod_id` with `snapshot.mod_id` (now `&'static str`): use it directly instead of `config.mod_id.as_str()`, or use `snapshot.mod_id.to_owned()` instead of cloning the old `String`.
+  - Replace `config.kind` with `snapshot.kind` (still `ConfigKind`).
   - `snapshot.file` (`PathBuf`) is the registered filename (for example `"mymod/machines.toml"` or `"mymod-server.toml"`).
   - `snapshot.path` (`PathBuf`) is the actual resolved filesystem path on disk (for example `<world>/serverconfig/mymod/machines.toml` when an override is present, or `<config_dir>/mymod/machines.toml` otherwise).
   - `snapshot.text` (`String`) is the file text read by the loader.
@@ -152,7 +154,7 @@ let listener = move |host: HostSide<'_>, event: ConfigEvent, snapshot: &ConfigSn
 
 Remove all imports and uses of `ConfigFiles`, `ConfigPath`, `ConfigEntry`, `ConfigEntryKind`, `ConfigStat`, `ConfigFileError`, and the three removed constants `CONFIG_FILE_MAX`, `DATA_FILE_MAX`, and `CONFIG_LIST_MAX` (as well as any `Wire` encoding of those removed types).
 
-During `Config` and `World` phases, borrow `config/` with `host.config_dir()` (`&std::path::Path`). During `Registration` (which has no `Host`), join `"config"` onto `cx.instance_dir()?` (`cx.instance_dir()?.join("config")`).
+Borrow `config/` with `host.config_dir()` (`&std::path::Path`), including from hooks without a live world. During `Registration` (which has no `Host`), join `"config"` onto `cx.instance_dir()?` (`cx.instance_dir()?.join("config")`).
 
 Replace each `ConfigFiles` call with ordinary `std::fs` calls (handling `std::io::Error` directly at the caller, or propagating it as `Err(e.to_string())` from a `ConfigListener`):
 
@@ -171,10 +173,11 @@ Replace each `ConfigFiles` call with ordinary `std::fs` calls (handling `std::io
     ```
 - List directory:
   - Old: `host.config_files().list(&ConfigPath::new("mymod")?, after, limit)?`
-  - New: `std::fs::read_dir(host.config_dir().join("mymod"))?`
+  - New: `std::fs::read_dir(host.config_dir().join("mymod"))?`; for each successful `DirEntry`, replace `ConfigEntry.name` with `entry.file_name()` and `ConfigEntry.stat` with `entry.metadata()?`.
 - Stat / metadata:
   - Old: `host.config_files().stat(&ConfigPath::new("mymod/extra.toml")?)?`
-  - New: `std::fs::metadata(host.config_dir().join("mymod/extra.toml"))` (map `ErrorKind::NotFound` to `None` when checking optional files)
+  - New: `std::fs::metadata(host.config_dir().join("mymod/extra.toml"))` (map `ErrorKind::NotFound` to `None` when checking optional files).
+  - Replace `ConfigStat.kind` with `metadata.is_file()` or `metadata.is_dir()`, and `ConfigStat.len` with `metadata.len()` for a file (if you still need the old zero for a folder, branch on `metadata.is_dir()`). Replace `ConfigStat.modified_millis` with `metadata.modified()` (`io::Result<SystemTime>`). If you still need optional milliseconds since the Unix epoch, use `metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())`. Add `.unwrap_or(0)` only if you still need the old numeric sentinel for an unavailable timestamp.
 - Remove file:
   - Old: `host.config_files().remove(&ConfigPath::new("mymod/extra.toml")?)?`
   - New: `std::fs::remove_file(host.config_dir().join("mymod/extra.toml"))` (map `ErrorKind::NotFound` to `false` if you previously checked the `bool`)

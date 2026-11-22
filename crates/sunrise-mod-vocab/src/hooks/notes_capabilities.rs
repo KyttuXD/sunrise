@@ -181,9 +181,10 @@ pub trait Notes {
 - `Registrar::register_config(ConfigSpec, Option<Arc<ConfigListener>>)` registers config files in startup
   declaration order (`ModContainer.registerConfig`) and delivers `ConfigEvent::{Loading, Reloading, Unloading}`
   (`ModConfigEvent`) with `&ConfigSnapshot` (`mod_id`, `kind`, registered `file`, actual on-disk `path`, `text`)
-  only to the registered owner. `Host::config_dir()` lends `&std::path::Path` for the game's `config/` folder
-  beside `options.txt` (beside `server.properties` on a dedicated server), matching NeoForge's
-  `FMLPaths.CONFIGDIR`, and is available in both the `Config` and `World` load phases; registration-phase code
+  only to the registered owner. World configs unload after `server_stopped` or on failed world preparation.
+  `Host::config_dir()` lends `&std::path::Path` for the game's `config/` folder beside `options.txt` (beside
+  `server.properties` on a dedicated server), matching NeoForge's `FMLPaths.CONFIGDIR`. The path is available
+  even on hosts without access to a world; registration-phase code
   reaches the same folder via `RegistrationContext::instance_dir()?.join("config")`.
   Native mods read and write their own config and bulk files directly with `std::fs` under `Host::config_dir()`,
   `Host::instance_dir()` (for instance-wide data such as `<instance>/sunrise-mod-data/<mod id>/`), or

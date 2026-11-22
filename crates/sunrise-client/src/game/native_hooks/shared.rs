@@ -3257,13 +3257,6 @@ fn property_change(
     with_property(registry, state, key, value).filter(|&id| id != state)
 }
 
-/// `config/` in the game folder, beside `options.txt`, made when missing.
-pub(super) fn config_dir(game_dir: &Path) -> std::io::Result<PathBuf> {
-    let dir = game_dir.join("config");
-    fs::create_dir_all(&dir)?;
-    Ok(dir)
-}
-
 /// An item entity as `native_item_entities` lists it.
 /// Read by mods only.
 #[allow(dead_code)]

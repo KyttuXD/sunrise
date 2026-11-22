@@ -1,9 +1,19 @@
 //! Physical process information, frozen before any mod is loaded.
 use mod_api::{Dist, RuntimeEnvironment};
-use std::sync::OnceLock;
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use sunrise_mod_package::selection::{Argument, LaunchArguments};
 
-static ENVIRONMENT: OnceLock<RuntimeEnvironment> = OnceLock::new();
+#[derive(Debug)]
+struct StartupEnvironment {
+    runtime: RuntimeEnvironment,
+    instance_dir: PathBuf,
+    config_dir: PathBuf,
+}
+
+static ENVIRONMENT: OnceLock<StartupEnvironment> = OnceLock::new();
 
 fn snapshot(launch: &LaunchArguments, enabled: Option<&str>) -> RuntimeEnvironment {
     let dedicated = launch
@@ -29,18 +39,34 @@ fn snapshot(launch: &LaunchArguments, enabled: Option<&str>) -> RuntimeEnvironme
 }
 
 pub(crate) fn capture(launch: &LaunchArguments) {
+    let instance_dir = launch.context.game_dir.clone();
     ENVIRONMENT
-        .set(snapshot(
-            launch,
-            std::env::var("SUNRISE_GAME_TESTS").ok().as_deref(),
-        ))
+        .set(StartupEnvironment {
+            runtime: snapshot(launch, std::env::var("SUNRISE_GAME_TESTS").ok().as_deref()),
+            config_dir: instance_dir.join("config"),
+            instance_dir,
+        })
         .expect("process runtime environment captured once");
 }
 
-pub(crate) fn get() -> &'static RuntimeEnvironment {
+fn startup() -> &'static StartupEnvironment {
     ENVIRONMENT
         .get()
         .expect("process runtime environment captured before registration")
+}
+
+pub(crate) fn get() -> &'static RuntimeEnvironment {
+    &startup().runtime
+}
+
+/// The validated launch's game folder, also published to registration.
+pub(crate) fn instance_dir() -> &'static Path {
+    &startup().instance_dir
+}
+
+/// `FMLPaths.CONFIGDIR`: shared by every logical side and worker.
+pub(crate) fn config_dir() -> &'static Path {
+    &startup().config_dir
 }
 
 #[cfg(test)]

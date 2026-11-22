@@ -24,6 +24,7 @@ impl Game<'_> {
                 world,
                 mod_api::Identifier::parse(dim.id()).expect("registered dimension"),
                 resources,
+                self.config_dir(),
             );
         }
     }

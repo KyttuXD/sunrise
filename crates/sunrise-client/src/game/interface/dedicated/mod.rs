@@ -2314,7 +2314,6 @@ impl Game<'_> {
         self.levels.abort_parked_generation();
         // The close request starts before player and world saves.
         self.native_lifecycle.begin_close();
-        self.native_configs_server_stop();
         log("INFO", "Stopping server");
         self.native_players_leaving();
         log("INFO", "Saving players");

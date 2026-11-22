@@ -87,8 +87,9 @@ with `&ConfigSnapshot` only to each config's registered owner. This includes pac
 selection is cleared and saved during initialization, but its options screen opens only after Config
 completes. A title-screen callback is already in World: world-handle constructors can return `None`,
 rather than being forbidden in Setup. A dedicated server loads Common once before its first world; Server
-configs load and unload per world. A second world does not repeat registration or client setup. Config
-loading can read settings and call `Host::config_dir()` to reach the `config/` folder with `std::fs`.
+configs load per world and unload after `server_stopped` (or when dedicated world preparation fails).
+A second world does not repeat registration or client setup. Config loading can read settings and call
+`Host::config_dir()` to reach the `config/` folder with `std::fs`; the startup path does not require a world.
 World handles, transactions and other game operations panic with `Config` in the diagnostic.
 Config file polling (`ConfigEvent::Reloading`) is not a phase transition, and Server config unloading
 (`ConfigEvent::Unloading`) runs in the World phase when a server stops. See

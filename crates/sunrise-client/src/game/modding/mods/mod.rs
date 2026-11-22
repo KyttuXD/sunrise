@@ -225,8 +225,8 @@ pub(super) fn install_registration_data(
     root: &Path,
     runtime_files: BTreeMap<String, Arc<dyn mod_api::RuntimeFileSource>>,
 ) -> sunrise_client::Result<()> {
+    use crate::entry::runtime_environment;
     let packages = mod_api::__private::loaded_mods();
-    let directory = Game::game_dir();
     (mod_api::__private::platform::platform()?.install_registration_data)(
         mod_api::__private::RegistrationData::new(
             builtin_registry_names(root)?,
@@ -234,8 +234,8 @@ pub(super) fn install_registration_data(
                 &Game::mod_data_root(),
                 packages.ids(),
             ),
-            directory,
-            crate::entry::runtime_environment::get().clone(),
+            runtime_environment::instance_dir().to_path_buf(),
+            runtime_environment::get().clone(),
         )
         .with_capability_coverage(coverage::builtin, coverage::block_entity)
         .with_runtime_files(runtime_files),

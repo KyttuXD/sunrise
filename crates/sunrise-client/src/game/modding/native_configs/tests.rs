@@ -575,6 +575,43 @@ fn a_world_overrides_a_server_config_and_the_folder_serves_the_rest() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_server_config_override_symlink_only_wins_when_its_target_exists() {
+    let root = Folder::new("override-link");
+    let config = root.0.join("config");
+    let world = root.0.join("world");
+    fs::create_dir_all(&config).unwrap();
+    fs::create_dir_all(world.join("serverconfig")).unwrap();
+
+    let base = config.join("gt-server.toml");
+    let target = root.0.join("override.toml");
+    let override_path = world.join("serverconfig/gt-server.toml");
+    fs::write(&base, "value = 7\n").unwrap();
+    std::os::unix::fs::symlink(&target, &override_path).unwrap();
+
+    with_registered_configs(&[("gt", &[(Server, None, "value = 0\n")])], |registered| {
+        let mut configs = NativeConfigs::default();
+        let loaded = configs.load(registered, &[Server], &config, Some(&world));
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1.path, base);
+        assert_eq!(loaded[0].1.text, "value = 7\n");
+
+        configs.drop_server();
+        fs::write(&target, "value = 9\n").unwrap();
+        let loaded = configs.load(registered, &[Server], &config, Some(&world));
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1.path, override_path);
+        assert_eq!(loaded[0].1.text, "value = 9\n");
+
+        fs::remove_file(&override_path).unwrap();
+        std::os::unix::fs::symlink(&override_path, &override_path).unwrap();
+        let (path, error) = locate(&registered[0], &config, Some(&world)).unwrap_err();
+        assert_eq!(path, override_path);
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    });
+}
+
 #[test]
 fn registered_configs_load_in_declaration_order_and_keep_io_failures_isolated() {
     let root = Folder::new("order");
