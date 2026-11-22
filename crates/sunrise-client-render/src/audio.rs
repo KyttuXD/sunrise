@@ -184,11 +184,10 @@ impl Reverbs {
 struct Mixer {
     channels: HashMap<ChannelId, Channel>,
     listener: [f64; 3],
-    listener_yaw: f32,
-    listener_pitch: f32,
-    /// Additional listeners' cameras (position, yaw, pitch) by owner. A world sound is
-    /// heard from the nearest camera, and panned half as wide while several share the speakers.
-    listeners: HashMap<u8, ([f64; 3], f32, f32)>,
+    listener_orientation: ListenerOrientation,
+    /// Additional listeners' cameras by owner. A world sound is heard from the nearest camera,
+    /// and panned half as wide while several share the speakers.
+    listeners: HashMap<u8, ([f64; 3], ListenerOrientation)>,
     /// Each camera's world by owner, as ids: the callback compares and copies integers.
     worlds: HashMap<u8, u32>,
     /// World names by id - 1 (`world_id`).
@@ -284,6 +283,34 @@ impl Reopen {
 }
 /// A camera's forward, up and right vectors.
 type Basis = ([f64; 3], [f64; 3], [f64; 3]);
+
+#[derive(Clone, Copy, PartialEq)]
+struct ListenerOrientation {
+    forward: [f32; 3],
+    up: [f32; 3],
+}
+impl Default for ListenerOrientation {
+    fn default() -> Self {
+        Self {
+            forward: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
+        }
+    }
+}
+impl ListenerOrientation {
+    fn basis(self) -> Basis {
+        // `Listener.setTransform` takes the camera's forward and up. OpenAL gets right from
+        // their cross product; the up component carries camera roll.
+        let forward = glam::DVec3::from_array(self.forward.map(f64::from));
+        let up = glam::DVec3::from_array(self.up.map(f64::from));
+        (
+            forward.to_array(),
+            up.to_array(),
+            forward.cross(up).to_array(),
+        )
+    }
+}
+
 impl Mixer {
     /// The id of world `name` (1 and up), given once per name.
     fn world_id(&mut self, name: &str) -> u32 {
@@ -467,8 +494,7 @@ pub struct Audio {
     /// Record `Heard` sounds (the subtitle overlay is listening).
     pub record_heard: bool,
     pub listener: [f64; 3],
-    pub listener_yaw: f32,
-    pub listener_pitch: f32,
+    listener_orientation: ListenerOrientation,
     pub master: f32,
     /// Seeds of positional plays (the client level random's `nextLong`).
     random: LegacyRandom,
@@ -960,41 +986,23 @@ fn mix_pieces(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
 fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     data.fill(0.0);
-    // The camera's forward and up vectors (`Camera.forwardVector`/`upVector`)
-    // and OpenAL's right = forward x up.
-    let basis = |yaw: f32, pitch: f32| {
-        let (yaw, pitch) = (f64::from(yaw.to_radians()), f64::from(pitch.to_radians()));
-        let (yaw_sin, yaw_cos) = yaw.sin_cos();
-        let (pitch_sin, pitch_cos) = pitch.sin_cos();
-        let forward = [-yaw_sin * pitch_cos, -pitch_sin, yaw_cos * pitch_cos];
-        let up = [-yaw_sin * pitch_sin, pitch_cos, yaw_cos * pitch_sin];
-        let right = [
-            forward[1] * up[2] - forward[2] * up[1],
-            forward[2] * up[0] - forward[0] * up[2],
-            forward[0] * up[1] - forward[1] * up[0],
-        ];
-        (forward, up, right)
-    };
     // Every active listener's camera, in the mixer's scratch buffer.
     mixer.cameras.clear();
     mixer.cameras.extend(
-        std::iter::once((
-            0,
-            (mixer.listener, mixer.listener_yaw, mixer.listener_pitch),
-        ))
-        .chain(
-            mixer
-                .listeners
-                .iter()
-                .map(|(&owner, &camera)| (owner, camera)),
-        )
-        .map(|(owner, (at, yaw, pitch))| {
-            (
-                at,
-                basis(yaw, pitch),
-                mixer.worlds.get(&owner).copied().unwrap_or_default(),
+        std::iter::once((0, (mixer.listener, mixer.listener_orientation)))
+            .chain(
+                mixer
+                    .listeners
+                    .iter()
+                    .map(|(&owner, &camera)| (owner, camera)),
             )
-        }),
+            .map(|(owner, (at, orientation))| {
+                (
+                    at,
+                    orientation.basis(),
+                    mixer.worlds.get(&owner).copied().unwrap_or_default(),
+                )
+            }),
     );
     let shared = mixer.cameras.len() > 1;
     let dot = |a: [f64; 3], b: [f64; 3]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) as f32;
@@ -1560,8 +1568,7 @@ impl Audio {
             mics: Arc::new(mic::MicPool::new(mics_enabled)),
             record_heard: false,
             listener: [0.0; 3],
-            listener_yaw: 0.0,
-            listener_pitch: 0.0,
+            listener_orientation: ListenerOrientation::default(),
             master: 1.0,
             random: crate::random_source::create(),
             source_override: None,
@@ -1693,23 +1700,21 @@ impl Audio {
         }
     }
 
-    /// `SoundManager.updateSource`: the camera position and rotation
-    /// (`Listener.setTransform` takes its forward and up vectors).
-    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
-        if self.listener == position && self.listener_yaw == yaw && self.listener_pitch == pitch {
+    /// `SoundEngine.updateSource`: the effective camera position and its forward and up vectors.
+    pub fn set_listener(&mut self, position: [f64; 3], forward: [f32; 3], up: [f32; 3]) {
+        let orientation = ListenerOrientation { forward, up };
+        if self.listener == position && self.listener_orientation == orientation {
             return;
         }
         self.listener = position;
-        self.listener_yaw = yaw;
-        self.listener_pitch = pitch;
+        self.listener_orientation = orientation;
         if let Ok(mut m) = self.backend.mixer.lock() {
             if self.backend.owner == 0 {
                 m.listener = position;
-                m.listener_yaw = yaw;
-                m.listener_pitch = pitch;
+                m.listener_orientation = orientation;
             } else {
                 m.listeners
-                    .insert(self.backend.owner, (position, yaw, pitch));
+                    .insert(self.backend.owner, (position, orientation));
             }
         }
     }
@@ -1742,8 +1747,7 @@ impl Audio {
             mics: self.mics.clone(),
             record_heard: false,
             listener: [0.0; 3],
-            listener_yaw: 0.0,
-            listener_pitch: 0.0,
+            listener_orientation: ListenerOrientation::default(),
             master: self.master,
             random: crate::random_source::create(),
             source_override: None,
@@ -2993,6 +2997,14 @@ mod tests {
         }
     }
 
+    fn camera_orientation(yaw: f32, pitch: f32, roll: f32) -> ListenerOrientation {
+        let rotation = crate::camera::rotation_with_roll(yaw, pitch, roll);
+        ListenerOrientation {
+            forward: rotation.transform([0.0, 0.0, -1.0]),
+            up: rotation.transform([0.0, 1.0, 0.0]),
+        }
+    }
+
     #[test]
     fn stereo_sounds_play_direct_without_panning_or_distance() {
         // OpenAL Soft plays a multi-channel buffer direct (its non-spatialized path), so vanilla's
@@ -3008,7 +3020,7 @@ mod tests {
         ] {
             let mut m = Mixer {
                 listener,
-                listener_yaw: yaw,
+                listener_orientation: camera_orientation(yaw, 0.0, 0.0),
                 ..Mixer::default()
             };
             m.channels
@@ -3023,8 +3035,7 @@ mod tests {
     fn panning_follows_the_camera_rotation() {
         let gains = |yaw: f32, pitch: f32, at: [f32; 3]| {
             let mut m = Mixer {
-                listener_yaw: yaw,
-                listener_pitch: pitch,
+                listener_orientation: camera_orientation(yaw, pitch, 0.0),
                 ..Mixer::default()
             };
             m.channels.insert(1, channel(vec![1.0; 4], None, at, true));
@@ -3043,13 +3054,37 @@ mod tests {
     }
 
     #[test]
+    fn changing_only_camera_roll_changes_the_stereo_image() {
+        let mut audio = Audio::silent(&ResourceSource::indexed(Default::default()));
+        let mut gains = |roll| {
+            let orientation = camera_orientation(180.0, 0.0, roll);
+            audio.set_listener([0.0; 3], orientation.forward, orientation.up);
+            let mut mixer = audio.backend.mixer.lock().unwrap();
+            mixer
+                .channels
+                .insert(1, channel(vec![1.0; 4], None, [0.0, 1.0, 0.0], true));
+            let mut stereo = [0.0; 2];
+            mix(&mut mixer, &mut stereo, 2, 48_000);
+            stereo
+        };
+        let [left, right] = gains(0.0);
+        assert_eq!(left, right, "source directly above an upright camera");
+        let [left, right] = gains(90.0);
+        assert!(
+            left > right,
+            "the same source is to the rolled camera's left"
+        );
+    }
+
+    #[test]
     fn shared_sounds_are_heard_from_the_nearest_camera() {
         // The primary listener is far away; the nearer listener hears full, centred gain.
         let mut m = Mixer {
             listener: [100.0, 0.0, 0.0],
             ..Mixer::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners
+            .insert(1, ([0.0, 0.0, 1.0], ListenerOrientation::default()));
         m.channels
             .insert(1, channel(vec![1.0; 4], Some(16.0), [0.0, 0.0, 2.0], true));
         let mut data = [0.0; 2];
@@ -3073,7 +3108,7 @@ mod tests {
         host.set_world("minecraft:overworld");
         let mut guest = host.share(1);
         guest.set_world("minecraft:overworld");
-        guest.set_listener([1.0, 2.0, 3.0], 0.0, 0.0);
+        guest.set_listener([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
         let id = guest.backend.create(false).unwrap();
         let mixer = host.backend.mixer.lock().unwrap();
         let overworld = mixer
@@ -3091,7 +3126,8 @@ mod tests {
             listener: [100.0, 0.0, 0.0],
             ..Default::default()
         };
-        m.listeners.insert(1, ([0.0, 0.0, 1.0], 0.0, 0.0));
+        m.listeners
+            .insert(1, ([0.0, 0.0, 1.0], ListenerOrientation::default()));
         let nether = m.world_id("nether");
         m.worlds.insert(1, nether);
         m.channels
@@ -3188,7 +3224,7 @@ mod tests {
             .lock()
             .unwrap()
             .listeners
-            .insert(1, ([0.0; 3], 0.0, 0.0));
+            .insert(1, ([0.0; 3], ListenerOrientation::default()));
         let started = |b: &mut MixerBackend, at: [f64; 3]| {
             let id = b.create(false).unwrap();
             b.set_position(id, at);
@@ -3222,7 +3258,7 @@ mod tests {
         ));
         let mut guest = host.share(1);
         guest.set_world("overworld");
-        guest.set_listener([1.0, 0.0, 0.0], 0.0, 0.0);
+        guest.set_listener([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
         let old = guest.backend.create(false).unwrap();
         drop(guest);
         {

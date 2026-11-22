@@ -198,6 +198,8 @@ pub struct Camera {
     pub yaw: f32,
     /// The vertical rotation in degrees; negative looks up.
     pub pitch: f32,
+    /// The roll rotation around the view axis in degrees (`ViewportEvent.ComputeCameraAngles`).
+    pub roll: f32,
     /// The vertical field of view in degrees.
     pub fov_degrees: f32,
     /// The near clip distance in blocks.
@@ -292,6 +294,8 @@ pub struct ClientGuiOptions {
     pub text_background_opacity: f32,
     /// Menu background blur radius.
     pub menu_blur: i32,
+    /// Distortion / screen effect intensity scale (`Options.screenEffectScale`, 0 to 1).
+    pub screen_effect_scale: f32,
 }
 
 /// A snapshot of the client's chat preferences.

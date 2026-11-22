@@ -777,7 +777,6 @@ mod stubs {
         Held,
     }
     pub(super) struct MobRender<'a>(pub &'a ());
-    pub(super) struct Shake;
     pub(super) struct Music;
     pub(super) struct MusicLayer;
     pub(super) struct BlockRim;

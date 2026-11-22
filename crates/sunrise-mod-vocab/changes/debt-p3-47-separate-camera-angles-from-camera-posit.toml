@@ -1,0 +1,88 @@
+ids = [
+    "hook:camera_pose",
+    "method:Hooks::camera_pose",
+    "type:CameraPoseEvent",
+    "hook:camera_shake",
+    "method:Hooks::camera_shake",
+    "type:CameraShakeEvent",
+    "type:Shake",
+    "hook:compute_camera_angles",
+    "method:Hooks::compute_camera_angles",
+    "type:ComputeCameraAnglesEvent",
+    "hook:camera_position",
+    "method:Hooks::camera_position",
+    "type:CameraPositionEvent",
+    "hook:render_view_transform",
+    "method:Hooks::render_view_transform",
+    "type:RenderViewTransformEvent",
+    "type:ViewTransform",
+    "handle:ViewTransform::from_matrix",
+    "handle:ViewTransform::set_matrix",
+    "handle:ViewTransform::mul",
+    "handle:ViewTransform::translate",
+    "handle:ViewTransform::rotate_x",
+    "handle:ViewTransform::rotate_y",
+    "handle:ViewTransform::rotate_z",
+    "handle:ViewTransform::scale",
+    "method:prelude::ClientViewClientHost::set_camera_type",
+    "method:prelude::ClientViewClientHost::camera",
+    "method:prelude::ClientViewClientHost::project",
+    "method:prelude::ClientOptionsClientHost::gui_options",
+    "type:Camera",
+    "type:Camera.roll",
+    "type:ClientGuiOptions",
+    "type:ClientGuiOptions.screen_effect_scale",
+]
+why = """
+`camera_pose` conflated camera angles with camera position and ran after `Camera.alignWithEntity`
+had already performed third-person mirroring, detached back-off, and sleeping rotation; meanwhile
+`camera_shake` was a Sunrise-only presentation hook with unsourced 10-degree and 0.5-block caps
+(`SHAKE_MAX_DEGREES`, `SHAKE_MAX_OFFSET`) and no general view-transform composition.
+
+This replaces `camera_pose` and `camera_shake` (along with `Shake`) with three distinct hooks
+anchored to vanilla 26.3 and NeoForge:
+- `compute_camera_angles` matches NeoForge `ViewportEvent.ComputeCameraAngles` inside
+  `Camera.alignWithEntity`, firing with `(view_y_rot(partial), view_x_rot(partial), 0.0)` before
+  `Camera.setRotation`, third-person front mirroring (`yaw + 180`, `-pitch`, `-roll`), detached
+  back-off, and sleeping bed rotation. Like NeoForge's `Camera` patch, it skips the interpolating
+  `NewMinecartBehavior` rider branch. The resulting rotation orients rendering, projection and
+  the listener's forward/up basis (`SoundEngine.updateSource`), but not the entity eye or player aim.
+- `camera_position` follows vanilla `Camera.update` / `Camera.setPosition`: it sees the final placed
+  world position, including the minecart path or the selected studio camera. It moves the render
+  camera and its audio listener without moving the player or their eye. If a listener requests a new
+  perspective, only the changed axes survive entity re-alignment.
+- These angle and position hooks refuse a non-finite mod write at the listener boundary, naming the
+  mod without losing previous accepted changes. A panicking listener is reported and disabled;
+  later listeners continue from the last accepted output.
+- `render_view_transform` composes at vanilla `GameRenderer.renderLevel`'s `bobHurt` / `bobView`
+  stage, even if a screen has input focus and the world still draws. The matrix and inverse must
+  be finite so the renderers that invert them stay usable. There are no artificial degree or offset
+  caps; `ClientGuiOptions::screen_effect_scale` exposes vanilla `Options.screenEffectScale` for
+  effects that choose to respect the slider.
+"""
+migrate = """
+- Replace `Hooks::camera_pose` angle overrides with `fn compute_camera_angles(&self, host: &dyn
+  ClientHost, event: &mut ComputeCameraAnglesEvent)`. Assign `event.yaw` and `event.pitch` directly
+  in degrees (no dereference); use `event.roll` for an actual camera roll. Write only finite angles.
+  The hook runs before front-view mirroring and detached back-off, and not in the interpolating
+  minecart rider or studio camera paths.
+- Replace `Hooks::camera_pose` world position overrides with `Hooks::camera_position` using
+  `&mut CameraPositionEvent<'_>` and `*event.position = [x, y, z]` (or edit individual coordinates).
+  Position writes must be finite. Call `host.set_camera_type(kind)` in `compute_camera_angles`
+  to change perspective before the first detached placement, or in `camera_position` to inspect
+  the placement first and then refresh it, carrying only coordinates you changed. These requests
+  do not re-align the studio camera.
+- Replace `Hooks::camera_shake` and `Shake` with `Hooks::render_view_transform`. For the same
+  presentation transform, let `[x, y, z]` be the old camera offset in blocks and `(roll, pitch,
+  yaw)` the old angles in degrees. Set `s = host.gui_options().screen_effect_scale` to opt into the old
+  Distortion Effects scaling (or `1.0` if your effect should ignore the slider). In order,
+  call `event.transform.translate(-x*s, -y*s, -z*s)`, `rotate_z((roll*s).to_radians())`,
+  `rotate_x((pitch*s).to_radians())`, then `rotate_y((yaw*s).to_radians())`. These post-multiply
+  `T · Rz · Rx · Ry`. Do not copy the old shake caps. A method returning `false` (or `from_matrix`
+  returning `None`) means the proposed transform or its inverse is non-finite; keep the previous
+  transform or handle the refusal in the mod, not by passing a singular replacement matrix.
+- `host.camera()` and `host.project(at)` still take the same calls; the snapshot and projection
+  include camera roll, and `project` still excludes bob and the presentation transform.
+  `host.gui_options()` still takes no arguments. Update any exhaustive literal or pattern on
+  `Camera` or `ClientGuiOptions` for the new `roll: f32` and `screen_effect_scale: f32` fields.
+"""

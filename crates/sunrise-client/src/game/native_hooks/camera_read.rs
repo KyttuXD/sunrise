@@ -27,11 +27,12 @@ impl Game<'_> {
             return None;
         }
         let camera = self.native_camera_frame.as_ref()?;
-        sunrise_client::camera::project_point(
+        sunrise_client::camera::project_point_rolled(
             &camera.projection,
             camera.position,
             camera.yaw,
             camera.pitch,
+            camera.roll,
             at,
         )
     }

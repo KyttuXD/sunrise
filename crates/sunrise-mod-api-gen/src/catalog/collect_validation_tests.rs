@@ -27,7 +27,7 @@ fn validators_are_paths_and_only_apply_to_global_collectors() {
 }
 
 #[test]
-fn an_output_validator_is_a_path_on_a_global_cancel_hook_only() {
+fn an_output_validator_is_a_path_on_a_global_listen_or_cancel_hook() {
     let parse = |api| {
         Hook::parse(json!({
             "name": "checked", "doc": "Doc.", "side": "server", "target": "crate::native_checked",
@@ -42,7 +42,7 @@ fn an_output_validator_is_a_path_on_a_global_cancel_hook_only() {
         Some("crate::check")
     );
     for api in [
-        json!({"contract":"listen", "output_validator":"crate::check"}),
+        json!({"contract":"replace", "out":"answer", "output_validator":"crate::check"}),
         json!({"contract":"cancel", "out":"canceled", "scope":"item", "key":"stack", "output_validator":"crate::check"}),
         json!({"contract":"cancel", "out":"canceled", "output_validator":"not a path"}),
     ] {

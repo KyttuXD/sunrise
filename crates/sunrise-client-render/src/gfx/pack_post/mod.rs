@@ -77,6 +77,7 @@ fn frame_view<'a>(frame: &'a Frame) -> UniformFrameView<'a> {
         camera: frame.camera,
         yaw: frame.yaw,
         pitch: frame.pitch,
+        roll: frame.roll,
         fov_degrees: frame.fov_degrees,
         eye: frame.eye,
         eye_rotation: frame.eye_rotation,

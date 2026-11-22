@@ -1323,6 +1323,28 @@ pub(super) fn emit<'a>(
             } else {
                 run(mod_id_expr, on_abort, &listener_call(callee))
             };
+            let validate = if contract == Contract::Listen {
+                hook.output_validator
+                    .as_ref()
+                    .map_or_else(String::new, |validator| {
+                        let arguments = rollback
+                            .iter()
+                            .map(|(field, by_reference)| {
+                                format!("&{}{event}.{field}", if *by_reference { "*" } else { "" })
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "if let Err(field) = {validator}({arguments}) {{
+                            {restore_statement}
+                            super::runtime::report_output_refusal({mod_id_expr}, \"{name}\", field);
+                            {on_abort}
+                        }}"
+                        )
+                    })
+            } else {
+                String::new()
+            };
             let invocation = match contract {
                 Contract::Cancel => format!(
                     "if matches!({plain_call}, Flow::Cancel) {{ *{o} = true; {exit}; }}",
@@ -1360,7 +1382,7 @@ pub(super) fn emit<'a>(
                 _ => format!("{plain_call};"),
             };
             format!(
-                "{local_event} {snapshot_statement}{invocation} {local_write_back} {stack_after}"
+                "{local_event} {snapshot_statement}{invocation} {validate} {local_write_back} {stack_after}"
             )
         };
         // Global cancel hooks use the same snapshot and invoke path even when they validate

@@ -8,7 +8,8 @@ entity. It is `None` on the title screen and outside a world. Together with `cam
 
 `ClientHost::set_camera_entity(entity)` is `Minecraft.setCameraEntity`: it moves the view onto a
 mob (or back onto the player with the player's own ref) and returns whether it did. It selects
-the entity only; the camera angle stays the entity's, and `camera_pose` is the way to override it.
+the entity only; the camera angle stays the entity's, and `compute_camera_angles` and
+`camera_position` are the hooks that override angles and render-only camera position.
 
 ## Client heights
 

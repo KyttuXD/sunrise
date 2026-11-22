@@ -4,7 +4,7 @@ pub mod game;
 pub use crate::game::{
     BlockEdit, BlockRun, Clock, ColumnBlocks, Config, ConfigFile, ConfigKind, CubeFace,
     DataMapType, ExperienceOrb, Falling, Heightmap, Hit, MapDecoration, MapInfo, MobRender,
-    ModMismatch, ModMismatchResolution, PhantomSpawnResult, PlayerRender, Shake, SleepProblem,
+    ModMismatch, ModMismatchResolution, PhantomSpawnResult, PlayerRender, SleepProblem,
 };
 pub use crate::game::{MAX_TERRAIN_COLUMNS, NbtUpgradeError, TerrainColumn};
 mod __private {

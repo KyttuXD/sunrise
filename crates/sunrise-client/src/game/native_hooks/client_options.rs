@@ -80,6 +80,7 @@ fn gui_options_snapshot(s: &sunrise_client::settings::Settings) -> ClientGuiOpti
         notification_display_time: s.notification_display_time as f32,
         text_background_opacity: s.text_background_opacity as f32,
         menu_blur: s.menu_blur,
+        screen_effect_scale: s.file.double("screenEffectScale") as f32,
     }
 }
 
@@ -106,6 +107,11 @@ mod tests {
                 enabled
             );
         }
+        settings.file.set(
+            "screenEffectScale",
+            sunrise_client::options_file::V::Double(0.25),
+        );
+        assert_eq!(gui_options_snapshot(&settings).screen_effect_scale, 0.25);
     }
 
     /// The literal `Window.calculateScale` outcomes the issue asks for: the

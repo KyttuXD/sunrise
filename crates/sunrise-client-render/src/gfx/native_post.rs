@@ -1523,7 +1523,11 @@ pub fn frame_inputs(
     shadow: Option<&sunrise_shaders::Shadow>,
 ) -> FrameInputs {
     let aspect = size[0] as f32 / size[1].max(1) as f32;
-    let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
+    let view = if frame.roll == 0.0 {
+        crate::camera::view_matrix(frame.yaw, frame.pitch)
+    } else {
+        crate::camera::view_matrix_rolled(frame.yaw, frame.pitch, frame.roll)
+    };
     let projection = super::world_projection(frame.fov_degrees, aspect, frame.depth_far)
         * frame.bob
         * frame.spin;

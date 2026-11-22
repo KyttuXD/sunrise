@@ -1,0 +1,3 @@
+sunrise-client game::native_hooks::camera_type::camera_type_tests::camera_angle_failures_keep_accepted_angles_and_only_panics_disable_the_listener lib daily resources
+sunrise-client game::native_hooks::camera_type::camera_type_tests::frame_camera_position_keeps_only_changed_axes_when_realigning lib daily resources
+sunrise-client game::screenshot_sequence::tests::sequence_checks_the_extracted_camera_and_paused_worlds_still_apply_view_transforms lib daily resources
