@@ -702,6 +702,39 @@ impl Game<'_> {
                 refreshed_result = Some(craft.result);
             }
         }
+        let refresh = |game: &Game<'_>, menu: &mut Menu| {
+            if generation != game.world.block_entities.generation(&pos)
+                || !game
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.hub.guest(conn))
+                    .is_some_and(live)
+            {
+                return false;
+            }
+            let Some(BlockEntity::Mod(entity)) = game.world.block_entities.get(&pos) else {
+                return false;
+            };
+            let mut actual = entity.items.clone();
+            actual.resize(items.len(), None);
+            overlay_links(&game.world, &mut actual);
+            let old = menu.container_items();
+            // `load_container` recomputes from the grid. Keep the current (possibly
+            // customized) result when the listener only edited slots outside the grid.
+            let kept_result = menu
+                .mod_crafting()
+                .filter(|c| c.grid_slots().all(|k| old[k] == actual[k]))
+                .map(|c| menu.slot(c.result).cloned());
+            let Some(host) = game.lan.as_ref() else {
+                return false;
+            };
+            let Some(gi) = host.hub.guests.connection_index(conn) else {
+                return false;
+            };
+            let env = game.load_guest_menu(menu, host, gi);
+            menu.load_container(&env, &actual, kept_result);
+            true
+        };
         let prepare = |menu: &mut Menu, env: &Env| {
             if !matches!(kind, Kind::Mod(_)) {
                 for (k, s) in items.iter().enumerate() {
@@ -747,7 +780,12 @@ impl Game<'_> {
                 }
                 return Some(applied);
             }
-            // An unhandled override leaves this very menu at the start of quickMoveStack.
+            // The listener can leave live edits even when it doesn't handle the click.
+            // Refresh the already-admitted menu without asking the pickup rule again.
+            if !refresh(self, &mut menu) {
+                self.reply_menu_click(conn, ClickReply::Resend(p.container));
+                return Some(false);
+            }
             true
         } else {
             false
@@ -851,35 +889,6 @@ impl Game<'_> {
             let original = menu.snapshot();
             let uuid = host.hub.guests[gi].uuid;
             let offhand_before = host.hub.guests[gi].offhand.clone();
-            let refresh = |game: &Game<'_>, menu: &mut Menu| {
-                if generation != game.world.block_entities.generation(&pos)
-                    || !game
-                        .lan
-                        .as_ref()
-                        .and_then(|host| host.hub.guest(conn))
-                        .is_some_and(live)
-                {
-                    return false;
-                }
-                let Some(BlockEntity::Mod(entity)) = game.world.block_entities.get(&pos) else {
-                    return false;
-                };
-                let mut actual = entity.items.clone();
-                actual.resize(items.len(), None);
-                overlay_links(&game.world, &mut actual);
-                let old = menu.container_items();
-                if old == actual {
-                    return true;
-                }
-                // `load_container` recomputes from the grid. Keep the current (possibly
-                // customized) result when the listener only edited slots outside the grid.
-                let kept_result = menu
-                    .mod_crafting()
-                    .filter(|c| c.grid_slots().all(|k| old[k] == actual[k]))
-                    .map(|c| menu.slot(c.result).cloned());
-                menu.load_container(&game.menu_env(), &actual, kept_result);
-                true
-            };
             let applied = mod_api::run_transaction(self, |game, _| {
                 game.journal_guest_click(conn);
                 game.guest_menu_action(
@@ -1624,8 +1633,11 @@ impl Game<'_> {
             return None;
         };
         let t = m.mod_type.filter(|t| t.crafting.is_some())?;
-        matches!(self.world.block_entities.get(&pos), Some(BlockEntity::Mod(e)) if !e.id().is_empty())
-            .then_some((pos, t))
+        matches!(
+            self.world.block_entities.get(&pos),
+            Some(BlockEntity::Mod(_))
+        )
+        .then_some((pos, t))
     }
 
     /// `apply` (a recipe book placement or a viewer's transfer) on guest
@@ -1734,13 +1746,12 @@ impl Game<'_> {
     /// The slots of the block container at `at` that a mod may lend a menu
     /// (`native_recipe_sources`, `native_menu_links`): a chest-like block
     /// entity's (chests, barrels, shulker boxes, hoppers, dispensers,
-    /// droppers) or a mod container's, while it is in the world (not
-    /// ticking). None for anything else.
+    /// droppers) or a mod container's. None for anything else.
     fn linkable_container(&self, at: (i32, i32, i32)) -> Option<Vec<Option<ItemStack>>> {
         let state = self.world.block(at.0, at.1, at.2).0;
         match self.world.block_entities.get(&at)? {
             BlockEntity::Chest(items) => Some(items.clone()),
-            BlockEntity::Mod(m) if !m.id().is_empty() => {
+            BlockEntity::Mod(m) => {
                 let c = self.world.block_entities.mod_container(state)?;
                 Some(m.items.iter().take(c.slots).cloned().collect())
             }

@@ -616,16 +616,21 @@ impl MenuPart for Mod {
     fn menu_subscribed(&self) -> &'static [Option<HookId>] {
         &[]
     }
-    fn menu_button(&self, _: &mut dyn ServerHost, event: &mut MenuButtonEvent<'_>) {
+    fn menu_button(&self, event: &mut MenuButtonEvent<'_>) {
         assert_eq!(event.context.player, 123);
         assert_eq!(event.context.player_entity_id, 42);
         assert_eq!(event.context.id, 9);
-        if let Some(entity) = event.entity.as_mut() {
-            assert_eq!(event.context.pos, Some([1, 2, 3]));
-            assert_eq!(entity.id(), "machine");
-            entity.data.push(9);
-        } else {
-            assert_eq!(event.context.pos, None);
+        let pos = event.context.pos;
+        if event
+            .subject
+            .with_view(|entity| {
+                assert_eq!(pos, Some([1, 2, 3]));
+                assert_eq!(entity.id(), "machine");
+                entity.data.push(9);
+            })
+            .is_none()
+        {
+            assert_eq!(pos, None);
         }
         *event.carried = Some(ItemStack {
             item: "bucket".into(),

@@ -985,7 +985,7 @@ impl Game<'_> {
     /// sent and whenever its block changes, on the server thread; a client's copy of the block
     /// entity (made by `native_block_entity` there) merges it into its `nbt`.
     /// Leave it unset to send no tag of yours. A block change puts the one-shot fields of
-    /// `ModBlockEntityView::set_client_update_fields` over it, and sends them alone when it is unset.
+    /// `BlockEntityView::set_client_update_fields` over it, and sends them alone when it is unset.
     pub(in crate::game) fn native_block_entity_update_tag(
         pos: [i32; 3],
         entity: &ModBlockEntity,
@@ -1268,18 +1268,18 @@ impl Game<'_> {
         self.fire_screen_char_typed_pre(screen, c, modifiers, field, canceled);
     }
     /// A player pressed a mod menu's button (`clickMenuButton`), on the
-    /// server. The block entity is out of the world during the call when the
-    /// menu has one; blockless menus pass None. Mods may change it and the
-    /// clicking player's carried stack.
+    /// server. `subject` lends sequential access to the live resident block
+    /// entity (when present) and the server `Host`; blockless menus lend no
+    /// view while keeping `host()` and `transaction(...)` usable. Mods may
+    /// change the block entity in place and the clicking player's carried stack.
     pub(in crate::game) fn native_menu_button(
-        &mut self,
         menu: &str,
         block: Option<&str>,
         context: &mod_api::item::menu::MenuButtonContext,
-        entity: Option<&mut ModBlockEntity>,
+        subject: mod_api::BlockEntityScope<'_>,
         carried: &mut Option<mod_api::ItemStack>,
     ) {
-        self.fire_menu_button(menu, block, context, entity, carried);
+        Self::fire_menu_button(menu, block, context, subject, carried);
     }
     /// Whether the owner of this menu accepts button `id`. The active menu's owner
     /// decides its own IDs; the game does not impose a shared numeric range.
@@ -1292,35 +1292,26 @@ impl Game<'_> {
     ) {
         self.fire_menu_button_valid(menu, block, id, accepted);
     }
-    /// A player shift-clicked slot `slot` of the menu of the mod block
-    /// entity at `pos` (`AbstractContainerMenu.quickMoveStack`, the method a
-    /// Java menu overrides), on the server, before the game's own routing:
-    /// move the stack where your block wants it. `slot` is the menu's index:
-    /// below `container_slots` it is a container slot (the block's own, a linked slot,
-    /// or a crafting result), from there on the player's inventory (27 main slots,
-    /// then the hotbar). After the live slot allows pickup, `stack` is a copy of what
-    /// it holds. If the handler takes the move, the actual source keeps the remainder
-    /// and the player's client gets the menu again. If it declines, its writes are
-    /// rolled back and the same menu routes the move without rechecking pickup.
-    ///
-    /// For a mod container on a vanilla menu type and on a mod menu type,
-    /// the left or right button, a slot that holds something and that the
-    /// mod's screen shows; not for a spectator or a dead player, a menu no
-    /// longer valid, nor during a drag.
-    /// Asked once per click, where vanilla asks `quickMoveStack` again while
-    /// it keeps moving the same item. The player's state is swapped in, so
-    /// `native_acting_player` names them; `entity` is out of the world
-    /// during the call, as in `native_menu_button`.
+    /// The accepted menu lends its resident block entity and asks the Parts to route the move.
     pub(in crate::game) fn native_menu_quick_move(
-        &mut self,
-        pos: [i32; 3],
-        entity: &mut ModBlockEntity,
+        kind: mod_api::BlockEntityTypeKey,
+        subject: mod_api::BlockEntityScope<'_>,
         container_slots: usize,
         slot: usize,
         stack: &mut Option<mod_api::ItemStack>,
         handled: &mut bool,
-    ) {
-        self.fire_menu_quick_move(pos, entity, container_slots, slot, stack, handled);
+    ) -> bool {
+        let mut panicked = false;
+        Self::fire_menu_quick_move(
+            kind,
+            subject,
+            container_slots,
+            slot,
+            stack,
+            handled,
+            &mut panicked,
+        );
+        panicked
     }
     /// The commands native mods add to the session's tree: push the complete current set.
     /// Asked at world open before functions compile, on each reload and data pack change,
@@ -4247,7 +4238,7 @@ impl Game<'_> {
     /// entities). Call it when what clients show changed (a machine started),
     /// not for every tick's progress: a menu's data slots carry that. Nothing
     /// happens for an unloaded block. It also sends the one-shot fields of
-    /// `ModBlockEntityView::set_client_update_fields`.
+    /// `BlockEntityView::set_client_update_fields`.
     pub(in crate::game) fn block_entity_sync(&mut self, pos: [i32; 3]) {
         if !self.world.loaded(pos[0], pos[2]) {
             return;

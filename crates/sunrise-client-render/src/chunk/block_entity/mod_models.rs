@@ -242,7 +242,7 @@ impl Drop for ModBlockEntity {
         drop(self.take_client_update_fields());
     }
 }
-/// The empty placeholder a tick leaves in a mod block entity's place: no type, nothing looked up.
+/// An empty mod block entity with no type id, for tests and defaults.
 impl Default for ModBlockEntity {
     fn default() -> Self {
         Self::with_type(String::new(), None, None, ModBlockEntityFields::default())

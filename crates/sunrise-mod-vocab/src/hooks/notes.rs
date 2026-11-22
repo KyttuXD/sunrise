@@ -1397,29 +1397,38 @@ The hook runs during clicks, drags and shift-clicks with the read-only `Host` on
 
 ### Shift-click in a mod container
 
-`menu_quick_move(pos, entity, container_slots, slot, stack, handled)` is a mod container's
+`menu_quick_move(kind, subject, container_slots, slot, stack, handled)` (contract version 5) is a mod container's
 `AbstractContainerMenu.quickMoveStack`, the method a Java menu overrides to say where a shift-clicked stack goes. It is
-asked on the server before the game's own routing, for the mod block entity at `pos` whose menu a player shift-clicked
-with the left or right button, on a vanilla menu type (`minecraft:generic_9x1`...) or on the mod's own menu type. `slot`
-is the menu's index: below `container_slots` a container slot (its own, linked, or the crafting result), from there the
-player's inventory, its 27 main slots, then the hotbar. The live menu asks `Slot.mayPickup` first, then passes a copy of
-what that slot holds as `stack`. Take what you move out of `stack` and return `Flow::Cancel` to handle the move.
-The same source keeps the remainder (`None` empties it) and the player's client gets the whole menu again.
-For a linked slot or result this does not replace an `entity.items` entry; the handler is responsible for consuming
-crafting inputs when it handles a result. The remainder stays in the result for those committed inputs until the grid
-next changes. An owner or clicked stack that the API cannot read refuses the click and reports why each time.
-If the callback panics, its answer is discarded, the move refuses and its existing journal rolls back. The shared
-failure path logs, shows an error toast naming the mod, and disables only that callback. If no part handles the move,
-journaled writes are undone and the same menu moves the stack without a second pickup check. A later part sees what
-an earlier one did to `stack`. If the mod removes its own block, the menu
-closes and the player's inventory is sent again. This is how a storage terminal
-whose items live in other blocks, or a screen that hides the container's slots, takes a shift-click from the
-inventory, and how a machine sends fuel to its fuel slot and ores to its input.
+asked on the server before the game's own routing, for the mod block entity whose menu a player shift-clicked
+with the left or right button, on a vanilla menu type (`minecraft:generic_9x1`...) or on the mod's own menu type.
+`subject` (`BlockEntityScope<'_>`) lends sequential access to the live resident block entity (`subject.with_view(...)`,
+which exposes `position()`, `item_slot(...)`, `set_item_slot(...)`, `nbt()`, `data_slots()` and returns `None` if the
+block entity was removed or replaced during the call), the server `Host` (`subject.host()`), and atomic transactions
+(`subject.transaction(...)`). `slot` is the menu's index: below `container_slots` a container slot (its own, linked,
+or the crafting result), from there the player's inventory, its 27 main slots, then the hotbar. The live menu asks
+`Slot.mayPickup` first, then passes a copy of what the slot holds as `stack`. Take what you move out of `stack` and
+return `Flow::Cancel`: the actual clicked source keeps the remainder (`None` empties it), the game's routing is
+skipped, and the player's client gets the whole menu again. For a linked slot or result this does not replace an
+own storage slot. A result handler must consume its inputs: the remainder stays available for the inputs it leaves
+until the grid changes. Left unhandled, the same menu routes the click without asking pickup again; a later Part
+sees earlier `stack` proposals. Writes through `subject.with_view(...)`
+validate at the boundary and apply to the live resident block entity in place, marking the chunk dirty. A handled move
+settles the clicked slot before publishing implicit `BlockEntity.setChanged` notices for its resident slot edits and
+committed `ITEMS` writes, then calls `menu_slot_take` where applicable. A destination's deferred notice is delivered
+only if the original backing container remains. Surviving slot edits on a refused or unhandled move still notify.
+An explicit `BlockEntityRef::set_changed` call is immediate; a same-block write made in that callback applies without
+queuing a second notice. Use `subject.transaction(...)` when an edit must span the subject and other world storage
+atomically. A panicking callback loses its `stack` and `handled` outputs and is disabled for `menu_quick_move` for
+the rest of the session. A later Part can still handle the move; if none does after a quick-move Part panics, the menu
+is resynced instead of falling back. A panic contained in a nested hook does not by itself reject the move.
+An invalid `stack` remainder leaves the clicked slot's original stack untouched. If the mod removes its own block, the menu
+closes and the player's inventory is sent again. This is how a storage terminal whose items live in other blocks, or a
+screen that hides the container's slots, takes a shift-click from the inventory, and how a machine sends fuel to its
+fuel slot and ores to its input.
 
 Not asked for an empty slot, a slot the mod's screen hides, another click type, a spectator or a dead player, a menu
 no longer valid, or a shift-click during a drag (it only ends the drag, as in vanilla). It is asked once per click, where vanilla asks `quickMoveStack` again while the same item keeps moving: move
-all you want in one call. The clicking player's state is swapped in (`host.players().acting_player` names them), and `entity`
-is out of the world during the call, as in `menu_button`. Only a server's players (single player's server
+all you want in one call. The clicking player's state is swapped in (`subject.host().players().acting_player()` names them), and the block entity stays resident in the level during the call. Only a server's players (single player's server
 thread, LAN guests, a dedicated server) shift-click this way; a native mod's own menus (`native_open_menu`) get their
 clicks already.
 
@@ -2673,7 +2682,7 @@ registration path.
 
 - The time players wake at after sleeping, as NeoForge's `SleepFinishedTimeEvent`: `sleep_finished_time(dimension, current, new_time, adjustment)` runs on the server once enough players have slept and the `advance_time` rule is on, before the clock moves. `adjustment` (a `ClockAdjustment`: `Absolute`, `Relative` or `Marker`, starting as vanilla's `wake_up_from_sleep` marker) says where the clock goes and a mod may change it; `new_time` is the vanilla morning, read only. A time before `current`, or an undefined marker, is refused. `time_skip` then hears the jump to the chosen time.
 
-- A shift-click in a mod container's menu routed by the mod, `AbstractContainerMenu.quickMoveStack`: `menu_quick_move(pos, entity, container_slots, slot, stack, handled)` runs on the server before the game's own routing, for a mod container on a vanilla menu type or its own menu type. After the live slot allows pickup, the mod takes what it moves out of `stack` and sets `handled`; that same source (including a linked slot or a shown crafting result) keeps the rest and the client gets the menu again.
+- A shift-click in a mod container's menu routed by the mod, `AbstractContainerMenu.quickMoveStack`: `menu_quick_move(kind, subject, container_slots, slot, stack, handled)` (version 5) runs on the server before the game's own routing, for a mod container on a vanilla menu type or its own menu type, lending the live resident block entity and server `Host` through `subject: BlockEntityScope<'_>`. The mod takes what it moves out of `stack` and sets `handled`; the slot keeps the rest and the client gets the menu again.
 
 
 - A server player's or fox's `teleport_randomly` consume effect (chorus fruit) is about to try a spot: version 2 of `item_consumption_teleport(consumer, consumed, from, target, cancel)`, once per attempt (up to 16). `consumer` is the living actor's handle and `consumed` is the public API stack captured before the use, with its count, damage and component patch, rather than the current contents of the hand. The living handle replaces version 1's player-only UUID/name fields; players retain their acting-player context. A mod may move `target`; the game still looks down from it for ground to land on. `cancel` ends the effect with no teleport and no more attempts, not consumption. A fox's callback runs with the full server host before its living AI/movement and before the next mob ticks; listener changes to its mouth item, position or eligibility invalidate the captured decision rather than being overwritten.

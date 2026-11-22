@@ -1091,13 +1091,11 @@ impl GameLevel<'_> {
         let generation = self.world.block_entities.generation(&key);
         // A mod's block entity answers its parts in place (its slot, so its
         // attachments, stay until `put`), as vanilla's override runs on `this`.
-        // A ticker leaves its row resident. A menu operation that detached the row
-        // leaves an empty id in its place, which cannot answer its part.
         let mut outputs = RemovalOutputs::default();
         if side_effects
             && matches!(
                 self.world.block_entities.get(&key),
-                Some(BlockEntity::Mod(m)) if !m.id().is_empty()
+                Some(BlockEntity::Mod(_))
             )
             && let Some((lease, BlockEntity::Mod(entity))) = self.world.block_entities.take(&key)
         {

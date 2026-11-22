@@ -57,12 +57,11 @@ fn place_subject(game: &mut Game<'_>, kind: &str) -> BlockEntityRef {
     game.block_entity(level, [POS.0, POS.1, POS.2]).unwrap()
 }
 
-fn access<'a, 'g>(game: &'a mut Game<'g>, subject: BlockEntityRef) -> TickAccess<'a, 'g> {
-    TickAccess {
-        game,
-        subject,
-        checked: None,
-    }
+fn access<'a, 'g>(
+    game: &'a mut Game<'g>,
+    subject: BlockEntityRef,
+) -> ResidentBlockEntityAccess<'a, 'g> {
+    ResidentBlockEntityAccess::new(game, Some(subject), Loan::Tick(None))
 }
 
 fn enable_block_ticks(game: &mut Game<'_>) {
@@ -119,7 +118,7 @@ fn retaking_the_view_checks_the_instance_and_state() {
             .default_state("minecraft:glass")
             .unwrap();
         let mut access = access(game, subject);
-        let mut scope = BlockEntityTickScope::new(&mut access);
+        let mut scope = BlockEntityScope::new(&mut access);
         assert_eq!(
             scope.with_view(|view| (view.data_slots()[0], view.state())),
             Some((23, unlit_api))
@@ -129,7 +128,7 @@ fn retaking_the_view_checks_the_instance_and_state() {
         let pos = subject.position(host).unwrap();
         access.game.world.set(pos[0], pos[1], pos[2], lit).unwrap();
         assert_eq!(
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|view| (view.data_slots()[0], view.state())),
             Some((23, lit_api))
         );
@@ -139,25 +138,16 @@ fn retaking_the_view_checks_the_instance_and_state() {
             .set(pos[0], pos[1], pos[2], glass)
             .unwrap();
         assert_eq!(access.game.block_entity(level, pos), Some(subject));
-        assert_eq!(
-            BlockEntityTickScope::new(&mut access).with_view(|_| ()),
-            None
-        );
+        assert_eq!(BlockEntityScope::new(&mut access).with_view(|_| ()), None);
         access.game.world.set(pos[0], pos[1], pos[2], lit).unwrap();
         assert_eq!(
-            BlockEntityTickScope::new(&mut access).with_view(|view| view.state()),
+            BlockEntityScope::new(&mut access).with_view(|view| view.state()),
             Some(lit_api)
         );
         access.game.world.block_entities.remove(&POS);
-        assert_eq!(
-            BlockEntityTickScope::new(&mut access).with_view(|_| ()),
-            None
-        );
+        assert_eq!(BlockEntityScope::new(&mut access).with_view(|_| ()), None);
         access.game.world.block_entities.insert(POS, row(KIND, 99));
-        assert_eq!(
-            BlockEntityTickScope::new(&mut access).with_view(|_| ()),
-            None
-        );
+        assert_eq!(BlockEntityScope::new(&mut access).with_view(|_| ()), None);
     });
 }
 
@@ -172,7 +162,7 @@ fn read_only_and_noop_loans_do_not_journal_or_dirty() {
         let subject = place_subject(game, KIND);
         let result: Result<(), ()> = game.transaction(|game, _| {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert_eq!(view.data_slots(), [23]);
                     assert!(!view.set_data_slot(0, 23));
@@ -208,7 +198,7 @@ fn a_scope_transaction_aborts_subject_and_dropped_item_edits_together() {
         let count = item.with_stack(game, |stack| stack.count()).unwrap();
         game.world.modified.clear();
         let mut access = access(game, subject);
-        let mut scope = BlockEntityTickScope::new(&mut access);
+        let mut scope = BlockEntityScope::new(&mut access);
         let result: Result<(), ()> = scope.transaction(|scope, _| {
             scope
                 .with_view(|mut view| {
@@ -342,7 +332,7 @@ fn aborted_block_entity_edits_preserve_a_queued_client_update() {
                 let subject = game.block_entity(level, AT).unwrap();
                 let waiting = Compound::from([("effect".into(), Tag::Int(7))]);
                 let mut tick = access(game, subject);
-                let mut scope = BlockEntityTickScope::new(&mut tick);
+                let mut scope = BlockEntityScope::new(&mut tick);
                 scope
                     .with_view(|mut view| view.set_client_update_fields(waiting.clone()))
                     .unwrap();
@@ -434,7 +424,7 @@ fn check_edit_then_replace(commit: bool, observer: Option<ModEntry>) {
         assert!(game.inventory[0].is_none());
 
         let mut access = access(game, subject);
-        let mut scope = BlockEntityTickScope::new(&mut access);
+        let mut scope = BlockEntityScope::new(&mut access);
         let result = scope.transaction(|scope, _| {
             let (level, pos, stack) = scope
                 .with_view(|mut view| {
@@ -829,7 +819,7 @@ fn strict_bulk_replacement_aborts_the_block_handle_and_inventory_together() {
         };
         game.world.block_log = Some(Vec::new());
         let mut access = access(game, subject);
-        let mut scope = BlockEntityTickScope::new(&mut access);
+        let mut scope = BlockEntityScope::new(&mut access);
         let result: Result<(), ()> = scope.transaction(|tick, _| {
             tick.with_view(|mut view| assert_eq!(view.set_item_slot(0, None), Ok(true)))
                 .unwrap();
@@ -1046,7 +1036,7 @@ fn replacement_and_item_stack_journals_close_in_their_own_dimensions() {
                 .item_entity(game.entity(game.dropped[0].id).unwrap())
                 .unwrap();
             let mut access = access(game, subject);
-            let mut tick = BlockEntityTickScope::new(&mut access);
+            let mut tick = BlockEntityScope::new(&mut access);
             let (level, pos) = tick
                 .with_view(|mut view| {
                     assert_eq!(view.set_item_slot(0, None), Ok(true));
@@ -1373,7 +1363,7 @@ fn ticker_and_handle_setters_require_explicit_set_changed() {
             .unwrap();
         {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(view.set_data_slots(&[10, 20]));
                     assert!(view.set_data_slot(1, 21));
@@ -1445,7 +1435,7 @@ fn chunk_save_reloads_reordered_slotless_items() {
         let reordered = Tag::List(vec![item(0), item(1)]);
         let write_items = |game: &mut Game<'_>, subject: BlockEntityRef, items: Tag| {
             let mut access = access(game, subject);
-            let mut scope = BlockEntityTickScope::new(&mut access);
+            let mut scope = BlockEntityScope::new(&mut access);
             assert_eq!(
                 scope.with_view(|mut view| view.set_nbt("Items".into(), Some(items))),
                 Some(true)
@@ -1524,7 +1514,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         );
         {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(!view.set_nbt("Items".into(), Some(Tag::Int(1))));
                     assert!(view.nbt().get(&"Items".into()).is_none());
@@ -1552,7 +1542,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         // Writing the equal encoded value is a no-op and does not journal.
         let result: Result<(), ()> = game.transaction(|game, _| {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(!view.set_nbt("Items".into(), Some(expected_decoded.clone())));
                 })
@@ -1569,7 +1559,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         )])]);
         {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(view.set_nbt("Items".into(), Some(replacement.clone())));
                     assert_eq!(view.nbt().get(&"Items".into()), Some(&replacement));
@@ -1595,7 +1585,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         // Clearing "Items" removes it from both NBT and encoded output.
         {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(view.set_nbt("Items".into(), None));
                     assert!(view.nbt().get(&"Items".into()).is_none());
@@ -1616,7 +1606,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         // holders still decode canonical entries into `entity.items`.
         {
             let mut access = access(game, subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert!(view.set_nbt("Items".into(), Some(expected_decoded.clone())));
                     assert_eq!(view.nbt().get(&"Items".into()), Some(&expected_decoded));
@@ -1651,7 +1641,7 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
         let reloaded_subject = game.block_entity(level, [POS.0, POS.1, POS.2]).unwrap();
         {
             let mut access = access(game, reloaded_subject);
-            BlockEntityTickScope::new(&mut access)
+            BlockEntityScope::new(&mut access)
                 .with_view(|mut view| {
                     assert_eq!(view.nbt().get(&"Items".into()), Some(&expected_decoded));
                     assert!(!view.set_nbt("Items".into(), Some(expected_decoded.clone())));
@@ -1675,5 +1665,101 @@ fn set_nbt_items_follows_declared_slot_count_and_clears_decoded_slots() {
             ))]
         );
         assert!(container_mod.nbt.get(&"Items".into()).is_none());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn blockless_scope_returns_none_for_view_and_keeps_host_and_transaction_working() {
+    with_game(|game| {
+        let subject = place_subject(game, KIND);
+        let mut access = ResidentBlockEntityAccess::blockless(game);
+        let mut scope = BlockEntityScope::new(&mut access);
+        assert_eq!(scope.with_view(|_| 1u32), None);
+        let aborted: Result<(), ()> = scope.transaction(|scope, _| {
+            assert_eq!(scope.with_view(|_| 1u32), None);
+            assert!(subject.set_data_slot(scope.host(), 0, 50).unwrap());
+            Err(())
+        });
+        assert_eq!(aborted, Err(()));
+        assert_eq!(subject.data_slots(scope.host()).unwrap(), [23]);
+        let committed: Result<(), ()> = scope.transaction(|scope, _| {
+            assert!(subject.set_data_slot(scope.host(), 0, 55).unwrap());
+            Ok(())
+        });
+        assert_eq!(committed, Ok(()));
+        assert_eq!(subject.data_slots(scope.host()).unwrap(), [55]);
+        assert!(!access.items_changed());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn items_changed_tracks_committed_slot_writes_and_ignores_aborted_nested_transactions() {
+    with_game(|game| {
+        let subject = place_subject(game, KIND);
+        let (handle, state) = game.resident_block_entity_target(POS).unwrap();
+        assert_eq!(handle, subject);
+        game.world.block_entities.set_mod_containers(
+            [(
+                state.0,
+                Arc::new(sunrise_client::containers::ModContainer {
+                    slots: 2,
+                    ..Default::default()
+                }),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let stone = sunrise_client::items::ItemStack::new("minecraft:stone", 1)
+            .try_into_api()
+            .unwrap();
+        let mut access = ResidentBlockEntityAccess::for_handle(game, handle, state);
+        {
+            let mut scope = BlockEntityScope::new(&mut access);
+            assert_eq!(
+                scope
+                    .with_view(|mut view| view.set_item_slot(0, None))
+                    .unwrap(),
+                Ok(false)
+            );
+        }
+        assert!(!access.items_changed());
+
+        {
+            let mut scope = BlockEntityScope::new(&mut access);
+            let aborted: Result<(), ()> = scope.transaction(|scope, _| {
+                assert_eq!(
+                    scope
+                        .with_view(|mut view| view.set_item_slot(0, Some(stone.clone())))
+                        .unwrap(),
+                    Ok(true)
+                );
+                Err(())
+            });
+            assert_eq!(aborted, Err(()));
+        }
+        assert!(!access.items_changed());
+
+        {
+            let mut scope = BlockEntityScope::new(&mut access);
+            let committed: Result<(), ()> = scope.transaction(|scope, _| {
+                assert_eq!(
+                    scope
+                        .with_view(|mut view| view.set_item_slot(0, Some(stone.clone())))
+                        .unwrap(),
+                    Ok(true)
+                );
+                Ok(())
+            });
+            assert_eq!(committed, Ok(()));
+            assert_eq!(
+                scope
+                    .with_view(|view| view.item_slot(0).map(|s| s.count()))
+                    .unwrap(),
+                Some(1)
+            );
+        }
+        assert!(access.items_changed());
     });
 }
