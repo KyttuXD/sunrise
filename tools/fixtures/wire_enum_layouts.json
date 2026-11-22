@@ -702,12 +702,6 @@
       "canonical_path": "crate::world::types::SpawnReason"
     },
     {
-      "name": "SpawnerKind",
-      "path": "crate::world::custom_spawners::SpawnerKind",
-      "hash": "d2ddf2a44e7883db",
-      "canonical_path": "crate::world::custom_spawners::SpawnerKind"
-    },
-    {
       "name": "StatType",
       "path": "crate::item::types::StatType",
       "hash": "24743f4b7e1c51fd",

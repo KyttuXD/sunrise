@@ -280,19 +280,19 @@ impl Game<'_> {
             None => {}
         }
     }
-    /// `PhantomSpawner.tick`: tired players under an open night sky draw
-    /// phantoms. A custom spawner ticks only while `spawn_mobs` is on
-    /// (`ServerChunkCache.tickChunks`), and this one only spawns enemies
-    /// (`ServerLevel.isSpawningMonsters`: `spawn_monsters` too). Every
-    /// player of the level counts: the game's own and the hosted ones (a
-    /// server thread's players are all hosted).
-    pub(super) fn spawn_phantoms(&mut self) {
-        let rules = &self.ui.rules;
-        if !rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
-            || !rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MONSTERS)
-            || !rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_PHANTOMS)
+    /// `PhantomSpawner.tick` (`ServerLevel.tickCustomSpawners`): tired players
+    /// under an open night sky draw phantoms. `spawn_enemies` is the level's
+    /// `ServerLevel.isSpawningMonsters()` flag (`spawn_mobs` and `spawn_monsters`
+    /// game rules, independent of Peaceful difficulty). Every player of the
+    /// level counts: the game's own and the hosted ones (a server thread's
+    /// players are all hosted).
+    pub(super) fn tick_phantom_spawner(&mut self, spawn_enemies: bool) {
+        if !spawn_enemies
+            || !self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::SPAWN_PHANTOMS)
             || self.dim != Dim::Overworld
-            || !self.has_custom_spawner(mod_api::SpawnerKind::Phantom)
         {
             return;
         }
@@ -337,6 +337,18 @@ impl Game<'_> {
         for target in players {
             self.spawn_phantoms_near(target);
         }
+    }
+    /// Direct test entry for `PhantomSpawner.tick`, applying `ServerChunkCache.tickChunks`'s
+    /// debug-world and `spawn_mobs` / `spawn_monsters` checks.
+    #[cfg(test)]
+    pub(super) fn spawn_phantoms(&mut self) {
+        if self.world_debug {
+            return;
+        }
+        let rules = &self.ui.rules;
+        let spawn_enemies = rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
+            && rules.bool_at(sunrise_client::gamerules::vanilla::SPAWN_MONSTERS);
+        self.tick_phantom_spawner(spawn_enemies);
     }
     /// One player's turn of `PhantomSpawner.tick`.
     fn spawn_phantoms_near(&mut self, target: PhantomTarget) {

@@ -609,7 +609,8 @@ pub(super) fn emit<'a>(
             // it cannot clone the listener-owned tasks.
             let task_registration =
                 event_type == "RegisterConfigurationTasksEvent" && name == "registration";
-            if scalar || task_registration {
+            let custom_spawners = event_type == "ModifyCustomSpawnersEvent" && name == "spawners";
+            if scalar || task_registration || custom_spawners {
                 rollback.push((name.clone(), false));
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
@@ -1162,7 +1163,9 @@ pub(super) fn emit<'a>(
                 continue;
             }
             let index = snaps.len();
-            if event_type == "RegisterConfigurationTasksEvent" && field == "registration" {
+            if (event_type == "RegisterConfigurationTasksEvent" && field == "registration")
+                || (event_type == "ModifyCustomSpawnersEvent" && field == "spawners")
+            {
                 snaps.push(format!("{event}.{field}.checkpoint()"));
                 restores.push(format!("{event}.{field}.rollback({saved}.{index});"));
                 continue;

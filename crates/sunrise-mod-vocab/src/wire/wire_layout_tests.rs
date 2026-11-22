@@ -21,10 +21,6 @@ fn checked_records_have_declared_field_bytes() {
         ("gear/options.toml".to_owned(),),
     );
     fields(
-        SpawnerKey::new("example:spawn").unwrap(),
-        ("example:spawn".to_owned(),),
-    );
-    fields(
         LevelKey::try_from("example:moon".to_owned()).unwrap(),
         ("example:moon".to_owned(),),
     );
@@ -179,14 +175,6 @@ fn handle_records_have_declared_field_bytes() {
 
 #[test]
 fn payload_enum_cases_have_declared_field_bytes() {
-    fields(
-        SpawnerEntry::Builtin(SpawnerKind::Cat),
-        (0u32, SpawnerKind::Cat),
-    );
-    fields(
-        SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
-        (1u32, SpawnerKey::new("example:spawn").unwrap()),
-    );
     let pos = [2i32, -4, 6];
     fields(
         crate::client::particles::PositionSource::Block([2, -4, 6]),
@@ -271,15 +259,7 @@ fn decode<T: Wire, F: Wire>(value: T) -> F {
 }
 
 #[test]
-fn spawner_and_attribute_records_have_declared_field_bytes() {
-    let spawners = vec![
-        SpawnerEntry::Builtin(SpawnerKind::Cat),
-        SpawnerEntry::Mod(SpawnerKey::new("example:spawn").unwrap()),
-    ];
-    fields(
-        CustomSpawners::try_from(spawners.clone()).unwrap(),
-        (spawners,),
-    );
+fn attribute_records_have_declared_field_bytes() {
     let modifier = AttributeModifier::new(id("example:boost"), 1.75, AttributeOperation::AddValue);
     let entry = ItemAttributeModifier::new(
         id("minecraft:generic.attack_damage"),
@@ -346,7 +326,6 @@ fn newtype_widths_and_unit_enum_tags_match_their_encodings() {
     fields(crate::__private::mod_color_resolver(13), (13u32,));
     fields(BlockUpdateFlags(17), (17u32,));
     fields(Reduction::Armor, (1u8,));
-    fields(SpawnerKind::Patrol, (1u32,));
     fields(Direction::North, (2u32,));
     fields(EquipmentSlotGroup::Head, (7u32,));
     fields(EquipmentSlot::Head, (5u32,));
@@ -395,7 +374,7 @@ fn every_direction_and_equipment_case_has_declared_tag_type() {
 }
 
 #[test]
-fn reduction_spawner_side_dimension_and_neighbour_cases_keep_their_tags() {
+fn reduction_side_dimension_and_neighbour_cases_keep_their_tags() {
     for (value, tag) in [
         (Reduction::Invulnerability, 0u8),
         (Reduction::Armor, 1),
@@ -403,15 +382,6 @@ fn reduction_spawner_side_dimension_and_neighbour_cases_keep_their_tags() {
         (Reduction::MobEffects, 3),
         (Reduction::Absorption, 4),
         (Reduction::InnateResistance, 5),
-    ] {
-        fields(value, (tag,));
-    }
-    for (value, tag) in [
-        (SpawnerKind::Phantom, 0u32),
-        (SpawnerKind::Patrol, 1),
-        (SpawnerKind::Cat, 2),
-        (SpawnerKind::VillageSiege, 3),
-        (SpawnerKind::WanderingTrader, 4),
     ] {
         fields(value, (tag,));
     }

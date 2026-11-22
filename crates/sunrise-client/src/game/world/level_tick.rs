@@ -213,7 +213,6 @@ impl Game<'_> {
         self.load_bossbars();
         self.tick_worldborder();
         self.tick_subtitles();
-        self.spawn_phantoms();
         self.tick_advancements();
         self.tick_player_model();
         Ok(())

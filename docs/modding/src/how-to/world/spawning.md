@@ -367,23 +367,35 @@ The wither and the ender dragon override `checkDespawn` in vanilla, so the event
 
 ## Adding or removing a custom spawner
 
-The level's custom spawners (phantoms, patrols, cats, village sieges, the wandering trader) are a list a mod edits once, in `modify_custom_spawners`. A mod's own spawner is a key plus `custom_spawner_tick`, which runs every tick while mob spawning is on:
+The level's custom spawners (for the Overworld: wandering trader, patrols, cats, village sieges, and phantoms; other dimensions start empty as in vanilla `MinecraftServer#createLevels`) are a list a mod edits once per server level when it opens, in `modify_custom_spawners`. Remove a built-in with `remove(SpawnerKind::...)`, or append an owned `CustomSpawner` (a struct implementing `CustomSpawner` or a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` closure) with `add`. The level owns each registered spawner for its lifetime, ticks every entry in one ordered walk (including `Phantom` before mod-appended spawners) once per eligible server tick (outside debug worlds, with `spawn_mobs` enabled, passing `ServerLevel#isSpawningMonsters()` — `spawn_mobs` and `spawn_monsters`, independent of Peaceful difficulty — as `spawn_enemies`) inside a server transaction, and drops it when the level unloads or the world closes:
 
 ```rust,ignore
-fn modify_custom_spawners(&self, _: &dyn mod_api::Host, event: &mut mod_api::ModifyCustomSpawnersEvent<'_>) {
-    // no phantoms in this world
-    event.spawners.remove(&mod_api::SpawnerEntry::Builtin(mod_api::SpawnerKind::Phantom));
-    event.spawners.add(mod_api::SpawnerKey::new("mymod:rat_swarm").unwrap());
+struct RatSwarmSpawner {
+    cooldown: u32,
 }
 
-fn custom_spawner_tick(&self, host: &mut dyn mod_api::ServerHost, event: &mut mod_api::CustomSpawnerTickEvent<'_>) {
-    if event.key.as_str() == "mymod:rat_swarm" && event.spawn_enemies {
-        // spawn through `host`
+impl mod_api::CustomSpawner for RatSwarmSpawner {
+    fn tick(&mut self, host: &mut dyn mod_api::ServerHost, level: mod_api::LevelRef, spawn_enemies: bool) {
+        if !spawn_enemies {
+            return;
+        }
+        if self.cooldown > 0 {
+            self.cooldown -= 1;
+            return;
+        }
+        self.cooldown = 200;
+        // spawn on `level` through `host`
     }
+}
+
+fn modify_custom_spawners(&self, _: &dyn mod_api::Host, event: &mut mod_api::ModifyCustomSpawnersEvent<'_>) {
+    // no phantoms in this world
+    event.spawners.remove(mod_api::SpawnerKind::Phantom);
+    event.spawners.add(RatSwarmSpawner { cooldown: 0 });
 }
 ```
 
-Every mod is asked about every key, so a mod ignores keys it does not own. See [the custom spawner contracts](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/hooks/custom_spawners.rs).
+See [the custom spawner contracts](https://github.com/sunrise-org/sunrise/blob/main/crates/sunrise-mod-vocab/src/hooks/custom_spawners.rs).
 
 ## Spawning from a level
 

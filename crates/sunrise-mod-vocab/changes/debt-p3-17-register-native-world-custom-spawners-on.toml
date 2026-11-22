@@ -1,0 +1,42 @@
+ids = [
+    "hook:modify_custom_spawners",
+    "hook:custom_spawner_tick",
+    "hook:custom_spawner_tick.dimension",
+    "hook:custom_spawner_tick.key",
+    "hook:custom_spawner_tick.spawn_enemies",
+    "method:Hooks::custom_spawner_tick",
+    "type:CustomSpawnerTickEvent",
+    "type:CustomSpawnerTickEvent.dimension",
+    "type:CustomSpawnerTickEvent.key",
+    "type:CustomSpawnerTickEvent.spawn_enemies",
+    "trait:CustomSpawner",
+    "method:CustomSpawner::tick",
+    "type:SpawnerKind",
+    "type:CustomSpawners",
+    "handle:CustomSpawners::add",
+    "handle:CustomSpawners::remove",
+    "handle:CustomSpawners::contains",
+    "handle:CustomSpawners::entries",
+    "handle:CustomSpawners::builtins",
+    "handle:CustomSpawners::len",
+    "handle:CustomSpawners::is_empty",
+    "type:SpawnerKey",
+    "handle:SpawnerKey::new",
+    "handle:SpawnerKey::as_str",
+    "type:SpawnerEntry",
+    "type:SpawnerEntry.Builtin",
+    "type:SpawnerEntry.Mod",
+    "type:SpawnerError",
+    "type:SpawnerError.InvalidKey",
+    "type:SpawnerError.Duplicate",
+]
+why = "Server levels now own concrete `CustomSpawner` objects directly (matching vanilla `net.minecraft.world.level.CustomSpawner`, `ServerChunkCache#tickChunks`, `ServerLevel#tickCustomSpawners`, `ServerLevel#isSpawningMonsters`, `MinecraftServer#createLevels`, and NeoForge `ModifyCustomSpawnersEvent`) instead of opaque `SpawnerKey` tokens broadcast to every mod via `custom_spawner_tick`. Non-Overworld levels start with an empty custom spawner list as in vanilla, the custom-spawner pass runs in one ordered walk (including `Phantom` before appended mod spawners) only outside debug worlds while `spawn_mobs` is enabled, `spawn_enemies` follows `ServerLevel#isSpawningMonsters()` (`spawn_mobs` and `spawn_monsters`, independent of Peaceful difficulty), each registered spawner is ticked directly under its registering mod inside a server transaction and dropped when the level unloads or the world closes, ordinary Host errors do not disable the spawner, and a panic rolls back that tick, disables that spawner type for the registering mod for the session, and reports through the shared panic queue."
+migrate = """
+In `Hooks::modify_custom_spawners` (now version 2), remove `SpawnerKey`, `SpawnerEntry`, \
+`SpawnerError` and `Hooks::custom_spawner_tick`. Pass a `SpawnerKind` directly to \
+`event.spawners.remove(SpawnerKind::...)` and `event.spawners.contains(SpawnerKind::...)`, and \
+inspect remaining built-ins with `event.spawners.builtins()`. To add a custom spawner, implement \
+`CustomSpawner` (or pass a `FnMut(&mut dyn ServerHost, LevelRef, bool) + Send + 'static` closure) \
+and register an owned instance per level with `event.spawners.add(my_spawner)`. Move any \
+per-level spawner state onto that struct; the level owns it until unload or world close.
+"""

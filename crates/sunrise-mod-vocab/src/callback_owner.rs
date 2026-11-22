@@ -1,7 +1,8 @@
 //! Owner enablement, attribution and panic containment for retained resources.
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     cell::{Cell, RefCell},
+    collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
@@ -200,7 +201,25 @@ impl OwnerBinding {
     }
 }
 
+pub(crate) type TypedCallbackOwners = HashMap<(&'static str, &'static str, TypeId), CallbackOwner>;
+
 impl CallbackOwner {
+    /// Reuse session-wide quarantine for native callback implementations rebuilt on demand.
+    pub(crate) fn for_installed_type(
+        installed: &'static crate::runtime::Installed,
+        mod_id: &'static str,
+        kind: &'static str,
+        callback: TypeId,
+    ) -> Self {
+        installed
+            .typed_callback_owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry((mod_id, kind, callback))
+            .or_insert_with(|| Self::for_mod(mod_id))
+            .clone()
+    }
+
     /// Bind a dispatch-attributed registration to its installed mod slot once, at freeze time.
     pub fn new(id: &'static str) -> Option<Self> {
         let index = crate::__private::mod_index(id)?;

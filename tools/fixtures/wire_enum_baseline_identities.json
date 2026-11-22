@@ -114,7 +114,6 @@
   "crate::client::types::SoundState",
   "crate::world::types::SpawnCheck",
   "crate::world::types::SpawnReason",
-  "crate::world::custom_spawners::SpawnerKind",
   "crate::item::types::StatType",
   "crate::world::structure_template::StructureMirror",
   "crate::world::structure_template::StructureRotation",

@@ -1223,14 +1223,18 @@ impl<'a> Game<'a> {
         }
         let from = self.lan_synced_from();
         sunrise_client::spans::time("spawn_raids", || self.tick_raids());
-        sunrise_client::spans::time("spawn_natural", || self.spawn_natural());
-        // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
-        if self
-            .ui
-            .rules
-            .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
-        {
-            sunrise_client::spans::time("spawn_custom", || self.tick_custom_spawners());
+        // `ServerChunkCache.tickChunks` skips the entire chunk-spawning phase
+        // (natural spawning and custom spawners) in debug worlds.
+        if !self.world_debug {
+            sunrise_client::spans::time("spawn_natural", || self.spawn_natural());
+            // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
+            if self
+                .ui
+                .rules
+                .bool_at(sunrise_client::gamerules::vanilla::SPAWN_MOBS)
+            {
+                sunrise_client::spans::time("spawn_custom", || self.tick_custom_spawners());
+            }
         }
         self.lan_synced_since(from);
     }

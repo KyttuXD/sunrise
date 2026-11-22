@@ -252,8 +252,6 @@ fn typed_forms_with_unmetered_conversions_are_refused() {
     ordinary_only(&level);
     ordinary_only(&crate::LevelDimension::Custom(level));
     ordinary_only(&crate::Identifier::parse("test:item").unwrap());
-    ordinary_only(&crate::SpawnerKey::new("test:spawner").unwrap());
-    ordinary_only(&crate::CustomSpawners::vanilla());
     assert_eq!(
         decode_payload::<String>(&[1, 0, 0, 0, b'a']),
         Ok("a".to_owned())

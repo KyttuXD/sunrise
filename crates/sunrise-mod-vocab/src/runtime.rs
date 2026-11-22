@@ -71,7 +71,7 @@ pub(crate) struct Installed {
     pub(crate) disabled: Box<[std::sync::atomic::AtomicBool]>,
     /// One installed owner per mod for delayed tasks, independent of its other callbacks.
     pub(crate) scheduled_tasks: Box<[crate::callback_owner::CallbackOwner]>,
-    pub(crate) configuration_task_owners: std::sync::Mutex<crate::configuration_task::TaskOwners>,
+    pub(crate) typed_callback_owners: std::sync::Mutex<crate::callback_owner::TypedCallbackOwners>,
     /// Retained submission owners are installed once per subscribed mod, one per overlay.
     pub(crate) overlay_owners: std::collections::HashMap<
         &'static str,
@@ -153,7 +153,7 @@ impl Installed {
             subscribers,
             disabled,
             scheduled_tasks,
-            configuration_task_owners: Default::default(),
+            typed_callback_owners: Default::default(),
             overlay_owners,
             mod_id_owners,
             content_owners: OnceLock::new(),
