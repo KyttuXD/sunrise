@@ -123,11 +123,19 @@ fn rockets_skip_misses_deflections_and_a_closed_gate_but_keep_lifetime_expiry() 
 #[test]
 #[ignore = "daily"]
 fn rocket_impact_rechecks_subscriptions_per_impact_moment() {
-    use crate::game::native_entity_refs::tests::{bind_local_player, with_game};
+    use crate::game::native_entity_refs::tests::{bind_local_player, run_fresh_cases, with_game};
     use mod_api::{Flow, Hooks, ModEntry, ProjectileImpactEvent, ServerHost};
     use std::sync::{Arc, Mutex};
     use sunrise_client::{chunk::Chunk, motion::PlayerMotion};
     use sunrise_core::position::ChunkPos;
+
+    if run_fresh_cases(
+        "game::fireworks::impact::tests::rocket_impact_rechecks_subscriptions_per_impact_moment",
+        "SUNRISE_ROCKET_IMPACT_SUBSCRIPTION_CASE",
+        &["disable"],
+    ) {
+        return;
+    }
 
     struct DisableOnFirst(Arc<Mutex<Vec<u32>>>);
     #[mod_api::__subscriptions]

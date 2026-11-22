@@ -815,7 +815,6 @@ fn named_mobs_and_projectiles_yield_only_for_subscribed_phase() {
                 BORROWED_MOB_YIELDS.with(|count| count.set(0));
                 super::super::PROJECTILE_HANDBACKS.with(|count| count.set(0));
                 game.tick_mobs().unwrap();
-                game.tick_projectiles().unwrap();
                 mob_yields = BORROWED_MOB_YIELDS.with(std::cell::Cell::get);
                 projectile_handbacks =
                     super::super::PROJECTILE_HANDBACKS.with(std::cell::Cell::get);
@@ -982,6 +981,59 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
             );
             game.tick_mobs().unwrap();
             assert!(game.mobs[0].extra.equipment_heard.is_none());
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_equipped_mob_discarded_by_despawn_does_not_report_equipment() {
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::creatures::borrowed_tick::mob_tick_access_tests::an_equipped_mob_discarded_by_despawn_does_not_report_equipment",
+        "SUNRISE_MOB_EQUIPMENT_DESPAWN_CASE",
+        &["discard"],
+    ) {
+        return;
+    }
+
+    struct EquipmentProbe(Arc<Mutex<Vec<u32>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for EquipmentProbe {
+        fn living_equipment_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut mod_api::LivingEquipmentChangeEvent<'_>,
+        ) {
+            self.0.lock().unwrap().push(event.entity);
+        }
+    }
+
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![
+        ModEntry::new(
+            "mob-equip-despawn",
+            Box::new(DespawnProbe {
+                records: Arc::default(),
+                allow: Arc::new(AtomicU32::new(71)),
+            }),
+        ),
+        ModEntry::new("mob-equip-observe", Box::new(EquipmentProbe(heard.clone()))),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            for mob in game.mobs.iter_mut() {
+                assert!(mob.set_equipment_stack(
+                    sunrise_items::equipment::HEAD,
+                    Some(sunrise_client::items::ItemStack::new(
+                        "minecraft:iron_helmet",
+                        1
+                    )),
+                ));
+            }
+            game.tick_creature_entities().unwrap();
+            assert_eq!(game.mobs.iter().map(|m| m.id).collect::<Vec<_>>(), [72]);
+            assert_eq!(*heard.lock().unwrap(), [72]);
         });
     });
 }

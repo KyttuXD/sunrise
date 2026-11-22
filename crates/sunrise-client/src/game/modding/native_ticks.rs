@@ -635,7 +635,16 @@ mod tests {
     /// a separate opt-in poll hook, and disabling the subscribing mod drops preparation back to
     /// zero.
     #[test]
+    #[ignore = "daily"]
     fn told_follows_enabled_pre_and_post_subscriptions() {
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::native_ticks::tests::told_follows_enabled_pre_and_post_subscriptions",
+            "SUNRISE_ENTITY_TICK_SUBSCRIPTION_CASE",
+            &["disable"],
+        ) {
+            return;
+        }
+
         struct Quiet;
         #[mod_api::__subscriptions]
         impl mod_api::Hooks for Quiet {}

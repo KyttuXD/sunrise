@@ -184,9 +184,6 @@ impl Game<'_> {
         // The slot of the mob whose own Pre was just told (a type a mod named): it resumes there
         // with its checks done.
         let mut told_at: Option<usize> = None;
-        // The slot of the mob whose equipment changes were just told: it resumes there with its
-        // Pre and equipment-update steps done.
-        let mut equipment_at = None;
         // Whether a mob still in the lifted list has left the pass (`keep` false) since the list
         // was last given back: a told-alone yield then takes it out before the call.
         let mut gone_rows = false;
@@ -207,7 +204,6 @@ impl Game<'_> {
             // stop there, restore the list, tell it while the live rows are readable, and resume.
             let mut tell_pre: Option<(u32, std::sync::Arc<sunrise_client::mobs::MobType>, usize)> =
                 None;
-            let mut tell_equipment = None;
             {
                 let ticking = self.entity_ticking_area();
                 let listed = self.entity_tick_listed_area();
@@ -272,16 +268,18 @@ impl Game<'_> {
                                 // The row's mob left the list at a boundary: the
                                 // tick view must answer a removed handle with nothing.
                                 snapshot[slot].removed = true;
-                                resume = None;
+                                let equipment_finished =
+                                    matches!(resume.take(), Some(Pause::Equipment { .. }));
                                 movement = None;
                                 resume_selection = None;
                                 resume_sampled = None;
                                 cursor += 1;
-                                if let Some((at, id, kind)) = &equipment_at
-                                    && *at == slot
-                                    && round.alone_mob_post(kind)
+                                if equipment_finished && round.alone_mob_post(&snapshot[slot].kind)
                                 {
-                                    tell_post = Some((*id, std::sync::Arc::clone(kind)));
+                                    tell_post = Some((
+                                        snapshot[slot].id,
+                                        std::sync::Arc::clone(&snapshot[slot].kind),
+                                    ));
                                     break;
                                 }
                                 continue;
@@ -291,11 +289,9 @@ impl Game<'_> {
                     };
                     let m = &mut mobs[i];
                     let retried = retried_rider.take() == Some(m.id);
-                    // Its checks ran before its Pre or equipment update was told: they don't run again.
+                    // Its checks ran before its Pre or a pause in its tick: don't run them again.
                     let resuming = resume.is_some();
-                    let equipment_done =
-                        equipment_at.as_ref().is_some_and(|(at, _, _)| *at == slot);
-                    let checked = resuming || told_at == Some(slot) || equipment_done;
+                    let checked = resuming || told_at == Some(slot);
                     if blocked.contains(&m.id) || resuming && resume_entity != Some((m.id, m.join))
                     {
                         cursor += 1;
@@ -313,10 +309,6 @@ impl Game<'_> {
                         // that is still in the level keeps resolving (#795).
                         snapshot[slot].removed = true;
                         cursor += 1;
-                        if equipment_done && round.alone_mob_post(&m.kind) {
-                            tell_post = Some((m.id, std::sync::Arc::clone(&m.kind)));
-                            break;
-                        }
                         continue;
                     }
                     let (bx, bz) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
@@ -482,46 +474,12 @@ impl Game<'_> {
                     }
                     if !resuming
                         && !retried
-                        && !equipment_done
                         && m.extra.mount.is_some_and(|vehicle| {
                             self.persist.removed_vehicles.contains_key(&vehicle)
                         })
                     {
                         retry_rider = Some(m.id);
                         break;
-                    }
-                    // LivingEntity.tick -> detectEquipmentUpdates -> collectEquipmentChanges:
-                    // compare each slot against the previous stacks once this tick is running
-                    // (never for a canceled tick) and dispatch before aiStep and entity_tick_post.
-                    if !resuming
-                        && !equipment_done
-                        && self.remote.is_none()
-                        && !self.options.execution_role.is_client()
-                        && mod_api::__private::enabled_listened(
-                            mod_api::HookId::LivingEquipmentChange,
-                        )
-                    {
-                        let now = m.equipment_stacks();
-                        let changed = match m.extra.equipment_heard.as_deref() {
-                            None => !now.is_empty(),
-                            Some(heard) => *heard != now,
-                        };
-                        if changed {
-                            let heard =
-                                m.extra.equipment_heard.get_or_insert_with(Default::default);
-                            let mut changes = Vec::new();
-                            for (idx, name) in
-                                sunrise_items::equipment::SLOT_NAMES.into_iter().enumerate()
-                            {
-                                if now[idx] != heard[idx] {
-                                    let from = heard[idx].take();
-                                    changes.push((name, from, now[idx].clone()));
-                                }
-                            }
-                            **heard = now;
-                            tell_equipment = Some((m.id, std::sync::Arc::clone(&m.kind), changes));
-                            break;
-                        }
                     }
                     // getCurrentDifficultyAt(blockPosition()): the mob's own chunk,
                     // not the local player's (a server thread has no player).
@@ -571,8 +529,10 @@ impl Game<'_> {
                     // is made when nobody listens for target changes.
                     let selection = if resuming {
                         let mut selection = resume_selection.take();
-                        if matches!(resume, Some(Pause::AfterDamage(_)))
-                            && let Some(selection) = &mut selection
+                        if matches!(
+                            resume,
+                            Some(Pause::AfterDamage(_) | Pause::Equipment { .. })
+                        ) && let Some(selection) = &mut selection
                         {
                             selection.refresh_views(|player| {
                                 let (view, identity) = if player.connection == seen_guest {
@@ -690,6 +650,17 @@ impl Game<'_> {
                                 &mut level,
                                 &mut movement,
                                 &mut events,
+                            )
+                        }
+                        Some(Pause::Equipment { was_on_fire, .. }) => {
+                            sunrise_client::mobs::riders::resume_after_equipment(
+                                &mut mobs,
+                                i,
+                                &w,
+                                &mut level,
+                                was_on_fire,
+                                &mut events,
+                                &mut movement,
                             )
                         }
                         Some(Pause::Consumption { was_on_fire, .. }) => {
@@ -913,7 +884,6 @@ impl Game<'_> {
                 && removing_vehicle.is_none()
                 && !section_yield
                 && tell_pre.is_none()
-                && tell_equipment.is_none()
                 && tell_post.is_none()
             {
                 break;
@@ -928,7 +898,10 @@ impl Game<'_> {
             // can read or replace another actor's velocity. A section-only
             // or a told-alone yield must not change the normal end-of-pass
             // push ordering.
-            if pause.is_some() || stinging || retry_rider.is_some() || removing_vehicle.is_some() {
+            let settles_tick_work =
+                pause.is_some() && !matches!(pause, Some(Pause::Equipment { .. }));
+            if settles_tick_work || stinging || retry_rider.is_some() || removing_vehicle.is_some()
+            {
                 for m in &mut mobs {
                     sunrise_client::mobs::apply_mob_pushes(m, &mut pushes);
                 }
@@ -975,7 +948,11 @@ impl Game<'_> {
                     || stinging
                     || matches!(
                         pause,
-                        Some(Pause::AfterDamage(_) | Pause::FallToPassengers(_))
+                        Some(
+                            Pause::AfterDamage(_)
+                                | Pause::FallToPassengers(_)
+                                | Pause::Equipment { .. }
+                        )
                     )
             });
             if let Some(sections) = live_sections {
@@ -1034,6 +1011,18 @@ impl Game<'_> {
                         Pause::Breathing { air, .. } => {
                             air_answer = self.ask_mob_breath(air);
                         }
+                        Pause::Equipment { changes, .. } => {
+                            let kind = std::sync::Arc::clone(&self.mobs[i].kind);
+                            for change in changes {
+                                self.native_living_equipment_change(
+                                    id,
+                                    &kind.id,
+                                    change.slot,
+                                    change.from.as_ref(),
+                                    change.to.as_ref(),
+                                );
+                            }
+                        }
                         Pause::AfterDamage(_) => {
                             if sunrise_client::mobs::creaking::has_pending_hurt(&self.mobs[i]) {
                                 // The earlier emissions (e.g. drowning bubbles) precede this hurt.
@@ -1076,17 +1065,6 @@ impl Game<'_> {
                         self.mobs.remove(index);
                     }
                 }
-                if let Some((id, kind, changes)) = &tell_equipment {
-                    for (slot, from, to) in changes {
-                        self.native_living_equipment_change(
-                            *id,
-                            &kind.id,
-                            *slot,
-                            from.as_ref(),
-                            to.as_ref(),
-                        );
-                    }
-                }
                 if !stinging && let Some((id, kind)) = &tell_post {
                     self.native_tick_post_one(round, *id, &kind.id);
                 }
@@ -1113,9 +1091,6 @@ impl Game<'_> {
             }
             tell_post = None;
             section_yield = false;
-            if let Some((id, kind, _)) = tell_equipment {
-                equipment_at = Some((cursor, id, kind));
-            }
             if retry_rider.is_some() || removing_vehicle.is_some() {
                 blocked = std::borrow::Cow::Owned(self.mobs_below_off_level());
             }
