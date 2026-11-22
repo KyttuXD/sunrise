@@ -12,9 +12,11 @@ the entity only; the camera angle stays the entity's, and `camera_pose` is the w
 
 ## Client heights
 
-`ClientHost::client_surface_heights(columns, heightmap)` is `LevelReader.getHeight(type, x, z)` on a
-client level: each column's height from the chunks the server has sent this window, `None` for a
-column it holds no chunk of. A minimap or a tracker reads many columns in one call instead of
-scanning blocks. It is the client's own view, so it follows the server's block changes as they arrive."#]
+`LevelRef::visit_surface_heights(host, columns, heightmap, visit)` is
+`LevelReader.getHeight(type, x, z)` on any open level (server active or parked, or the client's
+current open level): each column's height from loaded chunks, `None` for a column whose chunk is
+not held, streamed with no column-count cap and early exit via `ControlFlow::Break(())`. A minimap
+or a tracker reads many columns in one call instead of scanning blocks; on a client it reads the
+client's own view and follows server block changes as they arrive."#]
     fn camera_read_note0();
 }

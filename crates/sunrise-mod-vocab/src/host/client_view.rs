@@ -43,10 +43,11 @@ pub trait ClientViewClientHost {
     /// on the title screen.
     fn clock(&self) -> Option<Clock>;
     /// Side: client.
-    /// The first block along the view within `distance` (at most 1024), in loaded chunks only; `None` on a miss.
+    /// The first block along the view within `distance`, in loaded chunks only;
+    /// `None` on a miss or a nonpositive or non-finite `distance`.
     fn raycast(&self, distance: f32) -> Option<Hit>;
     /// Side: client.
-    /// The first block along the view within 1024 blocks, in loaded chunks only, and its distance; `None` on a miss.
+    /// The first block along the view across loaded chunks only, and its distance; `None` on a miss.
     fn view_hit(&self) -> Option<(f32, Hit)>;
     /// Side: client.
     /// The most recently extracted world frame's camera, if one exists.
@@ -80,17 +81,6 @@ pub trait ClientViewClientHost {
     /// The entity the view follows (`Minecraft.getCameraEntity`): the entity a server attached
     /// the camera to, else the local player. None outside a client world.
     fn camera_entity(&self) -> Option<EntityRef>;
-    /// Side: client.
-    /// Each column's height by `heightmap` in the world this window shows
-    /// (`LevelReader.getHeight(type, x, z)` on a client level): one above the highest block that
-    /// counts on that map, from the blocks the server has sent, none for a column whose chunk this
-    /// client does not hold. `Err`, reading nothing, for no client world (the title screen) or more
-    /// than 65,536 columns (`MAX_COLUMNS`).
-    fn client_surface_heights(
-        &self,
-        columns: &[(i32, i32)],
-        heightmap: Heightmap,
-    ) -> Result<Vec<Option<i32>>, String>;
     /// Side: client.
     /// Points the view at `entity` (`Minecraft.setCameraEntity`), as a server's camera packet
     /// does; the local player's own ref puts it back. True when the view now follows it; false,

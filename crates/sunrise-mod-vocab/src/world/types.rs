@@ -65,13 +65,7 @@ pub struct BiomeSearch {
 }
 
 impl BiomeSearch {
-    /// Maximum potential biome samples in one synchronous search (65,536).
-    /// Work is bounded before searching, even when the origin would match immediately.
-    pub const MAX_SAMPLES: u64 = 65_536;
-
     /// The radius must be nonnegative and both sampling steps positive.
-    /// A search returns `None` if `(2 * (radius / horizontal_step) + 1)^2`
-    /// times `((dimension_height - 1) / vertical_step + 1)` exceeds [`Self::MAX_SAMPLES`].
     pub fn new(origin: [i32; 3], radius: i32, horizontal_step: i32, vertical_step: i32) -> Self {
         Self {
             origin,
@@ -1844,11 +1838,7 @@ pub struct StructureSearch {
 }
 
 impl StructureSearch {
-    /// The largest radius one synchronous search takes: `/locate`'s and an
-    /// explorer map's 100 rings.
-    pub const MAX_RADIUS: i32 = 100;
-
-    /// The radius must be from 0 to [`Self::MAX_RADIUS`].
+    /// The radius must be nonnegative.
     pub fn new(origin: [i32; 3], radius: i32) -> Self {
         Self { origin, radius }
     }

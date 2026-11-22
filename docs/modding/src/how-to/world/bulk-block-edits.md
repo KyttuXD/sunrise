@@ -20,37 +20,48 @@ Abort restores both; only the outermost commit in that level publishes the chang
 When a bulk edit and a `LevelRef::set_block` write touch the same position, they replay in
 call order. Only the ordinary write can spill contents or notify neighbors.
 
-## Read column palettes
+## Stream column heights and blocks
 
-`ColumnBlocks.palette` also contains complete `BlockState` values. States of the
-same block with different properties have distinct entries. Only distinct numeric
-states are converted to API values, not each block in the returned columns.
+`LevelRef::visit_surface_heights(host, columns, heightmap, visit)` works on both sides
+(active and parked server levels, and the client's open level). It streams each column's
+loaded height (`Option<i32>`) in input order without loading chunks or enforcing a fixed
+column-count cap, stopping early when `visit` returns `ControlFlow::Break(())`.
 
-`ColumnBlocks.water_colors` carries one `0xRRGGBB` server-side biome JSON water
-colour (`BiomeSpecialEffects.waterColor`) per column at the column's top (`0` where
-unloaded). Colormap-derived grass and foliage tints are client-side only. See
-[Read blended biome tints on the client](read-biome-data.md#read-blended-biome-tints-on-the-client)
-for `ClientHost::biome_tint(pos, resolver)` and the equivalent read inside a block tint callback.
+`LevelRef::visit_columns(host, columns, heightmap, (below, above), visit)` streams loaded
+server columns one at a time as borrowed `ColumnSlice<'a>` views (or `None` where the chunk
+is not loaded), with no column-count or total-block cap:
+
+- `slice.base` is the column's height on `heightmap`.
+- `slice.blocks` holds the complete `BlockState` values from `base - below` up to
+  `base + above - 1`, bottom first (air outside the chunk's vertical range). `below + above`
+  must lie in `1..=level_height` (`LevelHeightAccessor.getHeight`).
+- `slice.water_color` carries the `0xRRGGBB` server-side biome JSON water colour
+  (`BiomeSpecialEffects.waterColor`) at the column's top (`base - 1`). Colormap-derived
+  grass and foliage tints are client-side only. See
+  [Read blended biome tints on the client](read-biome-data.md#read-blended-biome-tints-on-the-client)
+  for `ClientHost::biome_tint(pos, resolver)` and the equivalent read inside a block tint callback.
 
 ## Query terrain before loading chunks
 
-`ServerHost::terrain_surface(dimension, columns)` reads the level's generator, not resident
-chunks. It returns one optional `TerrainColumn` per input pair `(x, z)`, in input order.
-At most `MAX_TERRAIN_COLUMNS` (4,096) columns are accepted per call. Use the hook's live server host.
+`LevelRef::visit_terrain_surface(host, columns, visit)` reads an open server level's
+generator (active or parked), not resident chunks. It streams one `Option<TerrainColumn>`
+per input pair `(x, z)` in input order with no column-count cap, and stops before sampling
+later columns when `visit` returns `ControlFlow::Break(())`.
 
 - `height` is one above the highest solid block, skipping fluids, like OceanFloor. The scan
   starts at the level top, so the Nether returns its bedrock roof, not a floor.
 - `block` is that surface's `BlockKey`; `water` is one above the highest fluid over it,
   or absent on dry land. `biome` names the biome in the world's table, including data pack biomes.
-- Void columns and worlds without their own generator return `None`. Custom generators that
+- Void columns and worlds without their own generator yield `None`. Custom generators that
   do not provide a noise surface also have no answer.
 - No chunk is created, loaded or held. Features (trees, ores, lakes and decorations) and slope
   rules are not included: even an undecorated chunk may have a different top block. A teleport
   mod can sample candidate columns, then hold only its chosen chunk and verify the decorated blocks.
-- A client, a dimension other than the level being ticked, or an over-limit request returns
-  error text before reading anything. Results depend on generator inputs, not loaded chunks or
-  query order. The game makes one noise sample per column on the server tick, and logs the
-  column count for calls exceeding the configured slow-call threshold.
+- Stale handles or closed levels return `Err(LevelReadError::Stale)` and clients or
+  unavailable hosts return `Err(LevelReadError::Unavailable)` before visiting any column.
+  Results depend on generator inputs, not loaded chunks or query order. The visitor can make
+  shared reads on the same host. The game makes one noise sample per column on the server
+  tick, and logs the visited column count when a call exceeds the configured slow-call threshold.
 
 Mods only receive `TerrainColumn`; it is non-exhaustive and constructed by the game.
 

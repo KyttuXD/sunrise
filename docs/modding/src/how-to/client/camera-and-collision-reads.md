@@ -172,9 +172,10 @@ when the client level is replaced or the client disconnects; a same-level respaw
 keeps its epoch. Unlike `view_hit` and `raycast`, this does not return a block
 behind a targeted entity.
 
-`ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view, up
-to 1024 blocks, and hit blocks in loaded chunks only: far terrain is never hit. Both
-return `None` on a miss.
+`ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view
+across loaded chunks only: far terrain is never hit. `raycast` stops at `distance`
+(returning `None` for nonpositive or non-finite values), while `view_hit` traverses the
+full loaded-chunk extent. Both return `None` on a miss.
 
 To query the displayed level independently of the committed crosshair pick, use
 [`visit_entities_in`](../world/spawning.md#visiting-entities-in-a-box) for a box, or

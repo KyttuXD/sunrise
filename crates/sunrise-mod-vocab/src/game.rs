@@ -81,9 +81,6 @@ pub struct Clock {
     /// it modulo 24000 for the hour; `/time set` can make it negative.
     pub day_time: i64,
 }
-/// Maximum number of columns in one generator surface query.
-pub const MAX_TERRAIN_COLUMNS: usize = 4096;
-
 /// The generator's undecorated surface, without slope rules or chunk allocation.
 /// Created only by the game.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,24 +97,35 @@ pub struct TerrainColumn {
     pub biome: String,
 }
 
-/// What `read_columns` read: the blocks round each column's height (`bases`, none where it isn't loaded),
-/// as indexes into `palette`, a column after another, and each column's biome JSON water colour
-/// (`water_colors`, `0xRRGGBB`, `0` where unloaded).
+/// One loaded column's heightmap base, blocks and biome water colour, borrowed for the
+/// duration of a [`LevelRef::visit_columns`] callback.
 ///
 /// Colormap-derived grass and foliage tints are client-side only: read blended tints with
 /// [`BlockAndTintGetter::block_tint`] inside block tint callbacks or `ClientHost::biome_tint`
 /// in other client hooks.
-#[derive(Clone, Debug, PartialEq, Default)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ColumnBlocks {
-    /// Distinct complete states, including separate entries for different property combinations.
-    pub palette: Vec<BlockState>,
-    pub bases: Vec<Option<i32>>,
-    pub blocks: Vec<u16>,
-    /// One `0xRRGGBB` biome water colour (`BiomeSpecialEffects.waterColor`) per column, at the
-    /// column's top block (`base - 1`); `0` where the column is not loaded.
-    pub water_colors: Vec<u32>,
+// no wire: borrowed call-scoped view of a streamed column read; never encoded over the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ColumnSlice<'a> {
+    /// One above the highest block on the requested heightmap.
+    pub base: i32,
+    /// Complete block states from `base - below` up to `base + above - 1`, bottom first
+    /// (air outside the chunk's vertical range).
+    pub blocks: &'a [BlockState],
+    /// Server-side biome JSON water colour (`BiomeSpecialEffects.waterColor`, `0xRRGGBB`) at
+    /// the column's top block (`base - 1`).
+    pub water_color: u32,
+}
+
+impl<'a> ColumnSlice<'a> {
+    /// Construct a borrowed column slice for a streamed read callback.
+    pub const fn new(base: i32, blocks: &'a [BlockState], water_color: u32) -> Self {
+        Self {
+            base,
+            blocks,
+            water_color,
+        }
+    }
 }
 /// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
 /// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level

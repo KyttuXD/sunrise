@@ -696,10 +696,33 @@ fn sea_level_takes_a_host(host: &dyn Host, level: LevelRef) -> Option<i32> {
     level.sea_level(host)
 }
 
-/// Compile-only: a client mod reads column heights of the world its window shows.
+/// Compile-only: a mod visits loaded column heights on either host, and streams column slices
+/// and generator terrain surfaces on a server host through a `LevelRef`.
 #[allow(dead_code)]
-fn client_heights_take_a_client_host(host: &dyn ClientHost) -> Result<Vec<Option<i32>>, String> {
-    host.client_surface_heights(&[(0, 0), (16, -16)], Heightmap::MotionBlocking)
+fn level_column_visits_take_typed_hosts(
+    any_host: &dyn Host,
+    server_host: &dyn ServerHost,
+    level: LevelRef,
+) -> Result<std::ops::ControlFlow<()>, LevelReadError> {
+    let _ = level.visit_surface_heights(
+        any_host,
+        &[(0, 0), (16, -16)],
+        Heightmap::MotionBlocking,
+        &mut |_, _| std::ops::ControlFlow::Continue(()),
+    )?;
+    let _ = level.visit_columns(
+        server_host,
+        &[(0, 0)],
+        Heightmap::WorldSurface,
+        (1, 1),
+        &mut |_, slice: Option<ColumnSlice<'_>>| {
+            let _ = slice.map(|s| (s.base, s.blocks.len(), s.water_color));
+            std::ops::ControlFlow::Continue(())
+        },
+    )?;
+    level.visit_terrain_surface(server_host, &[(0, 0)], &mut |_, _| {
+        std::ops::ControlFlow::Continue(())
+    })
 }
 
 /// Compile-only: a client mod moves the view onto an entity and back through the `&mut dyn ClientHost`

@@ -141,10 +141,10 @@ or the tracked players and the window's own non-spectator player on a client.
 `ServerLevel.findNearestMapStructure` without skipping known starts, the search `/locate
 structure` runs in the level's generator. `structure` is an id or `#tag`; the result names the
 structure and the position `/locate` reports. `radius` counts rings of placement cells for
-random-spread sets, from 0 to `StructureSearch::MAX_RADIUS` (100, `/locate`'s); strongholds' rings
-are all checked whatever it is. The search builds structure starts but neither loads nor generates
-chunks; a world without structures, a structure this level cannot generate, an origin past the
-world's 30,000,000-block edge and a radius out of range give `None`.
+random-spread sets (nonnegative; `/locate` uses 100); strongholds' rings are all checked whatever
+it is. The search builds structure starts but neither loads nor generates chunks; a world without
+structures, a structure this level cannot generate, an origin past the world's 30,000,000-block
+edge (`Level.isInWorldBoundsHorizontal`) and a negative radius give `None`.
 
 `ChunkRef::watchers(host)` is `ChunkMap.getPlayers(pos, false)`: the players the chunk was sent to
 and is inside the view of, from their `chunk_watch` until they move away from it. Fake players

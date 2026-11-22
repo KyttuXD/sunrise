@@ -51,6 +51,58 @@ pub trait LevelChunksBackend {
     /// Every loaded chunk of an open server level as handles, ordered by chunk x then z. None for
     /// a stale handle or on a client. Loads nothing.
     fn level_loaded_chunks(&self, level: LevelRef) -> Option<Vec<ChunkRef>>;
+    /// Side: both.
+    /// Visit each column's height by `heightmap` (`LevelReader.getHeight(type, x, z)`) in
+    /// input order: one above the highest block that counts on that map, or `None` for a
+    /// column whose chunk is not loaded. Never loads or generates chunks.
+    ///
+    /// Works on active and parked server levels and on the client's current open level.
+    /// No column-count cap applies. The visitor can make shared reads on the same host.
+    /// Return `ControlFlow::Continue(())` to keep visiting or `ControlFlow::Break(())` to
+    /// stop before sampling later columns. Returns `Ok(ControlFlow::Break(()))` if stopped
+    /// or `Ok(ControlFlow::Continue(()))` after every input column (including an empty slice).
+    /// Returns `Err(LevelReadError::Stale)` for a stale handle or closed level, and
+    /// `Err(LevelReadError::Unavailable)` when world reads are unavailable (such as outside
+    /// an open world or on a foreign client dimension). Refusals do not call `visit`.
+    fn level_visit_surface_heights(
+        &self,
+        level: LevelRef,
+        columns: &[(i32, i32)],
+        heightmap: Heightmap,
+        visit: &mut dyn FnMut((i32, i32), Option<i32>) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
+    /// Side: server.
+    /// Visit each column's height on `heightmap`, server-side biome JSON water colour
+    /// (`BiomeSpecialEffects.waterColor`, `0xRRGGBB`), and the complete [`BlockState`] values
+    /// from `below` blocks under to `above` blocks from that height (bottom first; air outside
+    /// the chunk's vertical range). Unloaded columns yield `None` without loading chunks.
+    ///
+    /// Colormap-derived grass and foliage tints are client-side only: read blended tints on
+    /// the client with [`BlockAndTintGetter::block_tint`] in block tint callbacks or
+    /// `ClientHost::biome_tint` in other client hooks.
+    ///
+    /// Works on active and parked server levels. `range` is `(below, above)`; `below + above`
+    /// must be `1..=level_height` (the dimension's build height, `LevelHeightAccessor.getHeight`).
+    /// No column-count or total-block cap applies: columns stream one at a time, and returning
+    /// `ControlFlow::Break(())` stops before sampling later columns. The visitor can make
+    /// shared reads on the same host.
+    ///
+    /// Returns `Ok(ControlFlow::Break(()))` if stopped or `Ok(ControlFlow::Continue(()))` after
+    /// all input columns. Returns `Err(LevelReadError::Stale)` for a stale handle or closed
+    /// level, and `Err(LevelReadError::Unavailable)` on a client, outside server world access,
+    /// when `range` is empty or exceeds the level's build height, or when block-state
+    /// conversion is unavailable. Refusals do not call `visit`.
+    fn level_visit_columns(
+        &self,
+        level: LevelRef,
+        columns: &[(i32, i32)],
+        heightmap: Heightmap,
+        range: (u32, u32),
+        visit: &mut dyn for<'a> FnMut(
+            (i32, i32),
+            Option<ColumnSlice<'a>>,
+        ) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
 }
 /// The handles' writes of the `level_chunks` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

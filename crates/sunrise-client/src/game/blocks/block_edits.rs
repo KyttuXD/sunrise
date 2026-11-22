@@ -7,12 +7,11 @@ use super::{
     transactions::{StrictBlockStep, StrictBlockSteps, take_replay_row},
 };
 use mod_api::BlockEdit;
-use mod_api::ColumnBlocks;
 use mod_api::Heightmap;
 use std::sync::Arc;
 use sunrise_client::{
     block_edit::{BulkPublication, Run},
-    chunk::ColumnLayout,
+    chunk::Chunk,
     containers::BlockEntity,
     fast_hash::{FxHashMap, FxHashSet},
     world::World,
@@ -169,58 +168,18 @@ impl Game<'_> {
         }
     }
 
-    /// Each column's height on `h` as `edit_height` reads it, none where its chunk is not loaded.
-    pub(super) fn loaded_column_heights(
-        &self,
-        columns: &[(i32, i32)],
-        h: Heightmap,
-    ) -> Vec<Option<i32>> {
-        loaded_heights(&self.world, columns, |x, z| self.edit_height(h, x, z))
-    }
-
-    /// Each column's height on `h` (none where its chunk is not loaded) and its blocks from `below` under it to
-    /// `above` - 1 over it, bottom first (air outside the column and where it is not loaded), as indices into the
-    /// full states seen, with each column's biome JSON water colour at the column's top (`0xRRGGBB`, `0` where it is
-    /// not loaded). `Err`, reading nothing, when `below + above` is 0 or more than the level's height, or the read
-    /// would be more than `MAX_READ` blocks.
-    pub(super) fn read_loaded_block_columns(
-        &self,
-        columns: &[(i32, i32)],
-        h: Heightmap,
-        below: u32,
-        above: u32,
-    ) -> Result<ColumnBlocks, String> {
-        read_size(columns.len(), below, above, self.world.layout().height())?;
-        let bases = self.loaded_column_heights(columns, h);
-        let (palette, blocks) = column_blocks(&self.world, columns, &bases, below, above)
-            .ok_or("the read is too big")?;
-        let biomes = world_biomes!(self);
-        let mut water_colors = Vec::with_capacity(columns.len());
-        for (&(x, z), base) in columns.iter().zip(&bases) {
-            let water = base
-                .and_then(|b| {
-                    self.world
-                        .chunks
-                        .get(&(x >> 4, z >> 4))
-                        .map(|c| biomes.get(c.biome(x, b - 1, z)).water)
-                })
-                .unwrap_or(0);
-            water_colors.push(water);
-        }
-        Ok(ColumnBlocks {
-            palette: super::api_values::block_edit::column_palette(palette)?,
-            bases,
-            blocks,
-            water_colors,
-        })
-    }
-
     /// One above the highest block of column (x, z) that counts on heightmap `h`, or the bottom of the column (also
     /// where it is not loaded).
     fn edit_height(&self, h: Heightmap, x: i32, z: i32) -> i32 {
+        self.world_column_height(&self.world, h, x, z)
+    }
+
+    /// One above the highest block of column (x, z) in `world` that counts on heightmap `h`, or
+    /// the bottom of the column (also where it is not loaded).
+    pub(super) fn world_column_height(&self, world: &World, h: Heightmap, x: i32, z: i32) -> i32 {
         let properties = &self.pack.assets.properties;
         column_height(
-            &self.world,
+            world,
             h,
             (x, z),
             |s| self.res.facts().is_air(s),
@@ -229,26 +188,13 @@ impl Game<'_> {
     }
 }
 
-/// The most blocks one `read_columns` reads (2 MiB of indices): it runs on the
-/// server tick, so a mod reads a big area in pieces.
-pub(super) const MAX_READ: usize = 1 << 20;
-/// The most columns one `surface_heights` reads.
-pub(super) const MAX_COLUMNS: usize = 1 << 16;
-
-/// The blocks a column read of `columns` columns, `below` + `above` each,
-/// reads, or why it can't: a span of 0 or more than `height` (the level's),
-/// or the whole more than `MAX_READ`.
-fn read_size(columns: usize, below: u32, above: u32, height: i32) -> Result<usize, String> {
-    let per = below
+/// The vertical span `below + above` for one column read, bounded by the level's build height
+/// (`LevelHeightAccessor.getHeight`).
+pub(super) fn column_span(below: u32, above: u32, height: i32) -> Option<usize> {
+    below
         .checked_add(above)
         .filter(|&per| per > 0 && i64::from(per) <= i64::from(height))
-        .ok_or_else(|| format!("below + above must be 1 to {height}, the level's height"))?;
-    columns
-        .checked_mul(per as usize)
-        .filter(|&n| n <= MAX_READ)
-        .ok_or_else(|| {
-            format!("the read is more than {MAX_READ} blocks: read fewer columns a call")
-        })
+        .map(|per| per as usize)
 }
 
 /// One above the highest block of column `(x, z)` on heightmap `h`, or the
@@ -283,84 +229,29 @@ fn column_height(
     y
 }
 
-/// `height(x, z)` of each column, none where its chunk is not loaded. (A
-/// chunk is looked up once for a run of columns in it.)
-fn loaded_heights(
-    world: &World,
-    columns: &[(i32, i32)],
-    height: impl Fn(i32, i32) -> i32,
-) -> Vec<Option<i32>> {
-    let mut last: Option<((i32, i32), bool)> = None;
-    columns
-        .iter()
-        .map(|&(x, z)| {
-            let key = (x >> 4, z >> 4);
-            let loaded = match last {
-                Some((k, l)) if k == key => l,
-                _ => {
-                    let l = world.chunks.get(&key).is_some();
-                    last = Some((key, l));
-                    l
-                }
-            };
-            loaded.then(|| height(x, z))
-        })
-        .collect()
-}
-
-/// The blocks of each column from `below` under its base to `above` - 1 over
-/// it, bottom first, as indices into full numeric states: air outside the
-/// column's chunk's own height and where there is no base. None, reading
-/// nothing, past `read_size`'s bound.
-fn column_blocks(
-    world: &World,
-    columns: &[(i32, i32)],
-    bases: &[Option<i32>],
+/// The blocks of one loaded column from `below` under `base` to `above - 1` over it,
+/// bottom first, using `air` outside the chunk's vertical range.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fill_column_blocks(
+    air: BlockStateId,
+    chunk: &Chunk,
+    x: i32,
+    z: i32,
+    base: i32,
     below: u32,
     above: u32,
-) -> Option<(Vec<BlockStateId>, Vec<u16>)> {
-    let total = read_size(
-        columns.len(),
-        below,
-        above,
-        ColumnLayout::HIGHEST_Y + 1 - ColumnLayout::LOWEST_Y,
-    )
-    .ok()?;
-    let per = (below + above) as usize;
-    let mut blocks = Vec::with_capacity(total);
-    let mut palette: Vec<BlockStateId> = Vec::new();
-    // A full state's palette index, worked out once per distinct state.
-    let mut seen: FxHashMap<u32, u16> = FxHashMap::default();
-    let mut index = |s: BlockStateId| -> Option<u16> {
-        if let Some(&index) = seen.get(&s.0) {
-            return Some(index);
-        }
-        let index = u16::try_from(palette.len()).ok()?;
-        palette.push(s);
-        seen.insert(s.0, index);
-        Some(index)
-    };
-    for (&(x, z), base) in columns.iter().zip(bases) {
-        let chunk = world.chunks.get(&(x >> 4, z >> 4));
-        match (base, chunk) {
-            (Some(b), Some(chunk)) => {
-                let (bottom, top) = (chunk.min_y(), chunk.max_y());
-                let y0 = i64::from(*b) - i64::from(below);
-                for y in y0..y0 + per as i64 {
-                    let s = match i32::try_from(y) {
-                        Ok(y) if (bottom..top).contains(&y) => chunk.block(x & 15, y, z & 15),
-                        _ => world.air,
-                    };
-                    blocks.push(index(s)?);
-                }
-            }
-            _ => {
-                let air = index(world.air)?;
-                blocks.extend(std::iter::repeat_n(air, per));
-            }
-        }
+    out: &mut Vec<BlockStateId>,
+) {
+    let (bottom, top) = (chunk.min_y(), chunk.max_y());
+    let per = i64::from(below) + i64::from(above);
+    let y0 = i64::from(base) - i64::from(below);
+    for y in y0..y0 + per {
+        let state = match i32::try_from(y) {
+            Ok(y) if (bottom..top).contains(&y) => chunk.block(x & 15, y, z & 15),
+            _ => air,
+        };
+        out.push(state);
     }
-    Some((palette, blocks))
 }
 
 /// `edit`'s runs as `World::edit_runs` takes them: each palette entry `block`
@@ -878,26 +769,13 @@ mod tests {
     }
 
     #[test]
-    fn columns_not_loaded_have_no_height() {
+    fn column_blocks_read_air_past_the_column() {
         let w = columns_world();
-        let heights = loaded_heights(&w, &[(1, 1), (100, 100), (2, 2), (-1, 0)], |x, z| {
-            height(&w, Heightmap::OceanFloor, x, z)
-        });
-        assert_eq!(heights, [Some(65), None, Some(63), None]);
-    }
-
-    #[test]
-    fn column_blocks_read_air_past_the_column_and_where_not_loaded() {
-        let w = columns_world();
-        let (palette, blocks) = column_blocks(
-            &w,
-            &[(1, 1), (3, 3), (100, 100)],
-            &[Some(65), Some(319), None],
-            2,
-            3,
-        )
-        .unwrap();
-        let read: Vec<u32> = blocks.iter().map(|&i| palette[i as usize].0).collect();
+        let chunk = w.chunks.get(&(0, 0)).unwrap();
+        let mut out = Vec::new();
+        fill_column_blocks(w.air, chunk, 1, 1, 65, 2, 3, &mut out);
+        fill_column_blocks(w.air, chunk, 3, 3, 319, 2, 3, &mut out);
+        let read: Vec<u32> = out.iter().map(|s| s.0).collect();
         // (`names` calls state 2 a chest: here it stands for leaves)
         let (leaves, stone, air) = (2, 1, 0);
         assert_eq!(
@@ -905,38 +783,16 @@ mod tests {
             [
                 leaves, leaves, air, air, air, // (1, 1) from 63
                 air, air, stone, air, air, // (3, 3) from 317: stone at 319, nothing over 319
-                air, air, air, air, air, // not loaded
             ]
         );
-        // Distinct states appear once each.
-        assert_eq!(palette.len(), 3);
     }
 
     #[test]
-    fn column_palette_preserves_distinct_property_states() {
-        let mut w = world();
-        w.set(1, 5, 1, BlockStateId(2)).unwrap();
-        w.set(1, 6, 1, BlockStateId(4)).unwrap();
-        w.set(1, 7, 1, BlockStateId(2)).unwrap();
-        let (palette, blocks) = column_blocks(&w, &[(1, 1)], &[Some(5)], 0, 3).unwrap();
-        assert_eq!(palette, [BlockStateId(2), BlockStateId(4)]);
-        assert_eq!(blocks, [0, 1, 0]);
-    }
-
-    #[test]
-    fn a_read_is_bounded() {
-        assert_eq!(read_size(10, 200, 184, 384), Ok(3840));
-        assert!(
-            read_size(1, 200, 185, 384).is_err(),
-            "more than the level's height"
-        );
-        assert!(read_size(1, 0, 0, 384).is_err(), "an empty span");
-        assert!(read_size(1, u32::MAX, 1, 4064).is_err());
-        assert!(read_size(1 << 14, 100, 0, 384).is_err(), "over MAX_READ");
-        assert!(read_size(usize::MAX, 2, 0, 384).is_err());
-        assert_eq!(read_size(1 << 12, 256, 0, 384), Ok(MAX_READ));
-        let w = columns_world();
-        assert!(column_blocks(&w, &[(1, 1)], &[Some(0)], u32::MAX, 2).is_none());
+    fn column_span_matches_level_height_only() {
+        assert_eq!(column_span(200, 184, 384), Some(384));
+        assert_eq!(column_span(200, 185, 384), None);
+        assert_eq!(column_span(0, 0, 384), None);
+        assert_eq!(column_span(u32::MAX, 1, 4064), None);
     }
 
     #[test]

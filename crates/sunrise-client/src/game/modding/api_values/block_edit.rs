@@ -1,5 +1,5 @@
 //! Cold, all-or-nothing preparation of typed bulk edit values.
-use super::{TryIntoApi, TryIntoEngine, block_metadata_table};
+use super::{TryIntoEngine, block_metadata_table};
 use mod_api::BlockMetadata;
 use sunrise_command::args::BlockInput;
 use sunrise_world::registry::BlockStateId;
@@ -68,18 +68,10 @@ fn compile_filter(predicate: &mod_api::StatePredicate) -> Result<BlockInput, Str
     })
 }
 
-/// Convert only the distinct numeric palette entries, preserving complete property states.
-pub(in crate::game) fn column_palette(
-    palette: Vec<BlockStateId>,
-) -> Result<Vec<mod_api::BlockState>, String> {
-    palette
-        .try_into_api()
-        .map_err(|error| format!("column palette: {error:?}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::api_values::TryIntoApi;
     use mod_api::{StateConstraint, StatePredicate, StatePredicateRecord, StatePredicateTarget};
     use std::collections::{HashMap, HashSet};
     use sunrise_world::registry::BlockRegistry;
@@ -185,26 +177,6 @@ mod tests {
         assert!(
             prepare(&edit).is_err(),
             "late bad palette state must refuse the whole prepared edit"
-        );
-        let palette = column_palette(vec![BlockStateId(1), BlockStateId(2)]).unwrap();
-        assert_eq!(
-            palette
-                .iter()
-                .map(|state| state.ordinal())
-                .collect::<Vec<_>>(),
-            [0, 1]
-        );
-        assert_eq!(
-            palette[0]
-                .property(block_metadata_table().unwrap(), "left")
-                .unwrap(),
-            Some("false")
-        );
-        assert_eq!(
-            palette[1]
-                .property(block_metadata_table().unwrap(), "right")
-                .unwrap(),
-            Some("true")
         );
     }
 }
