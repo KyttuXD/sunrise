@@ -666,11 +666,6 @@ impl Game<'_> {
     }
 }
 
-/// `Level.setBlock`'s flags, for the `native_set_block_property` helpers:
-/// `flags::UPDATE_CLIENTS` as a vanilla crop grows, `flags::UPDATE_ALL` as a
-/// furnace sets its `lit`.
-pub(super) use sunrise_world::level::flags;
-
 /// A mod's camera (`native_camera_pose`): each value that isn't finite keeps vanilla's from `view`.
 fn posed_camera(
     view: (glam::DVec3, f32, f32),
@@ -3520,12 +3515,11 @@ pub(super) fn with_property(
     key: &str,
     value: &str,
 ) -> Option<BlockStateId> {
-    let mut s = registry.state(state)?.clone();
-    match s.properties.get(key) {
-        Some(v) if v == value => return Some(state),
-        Some(_) => {}
-        None => return None,
+    let current = registry.state(state)?;
+    if current.properties.get(key)? == value {
+        return Some(state);
     }
+    let mut s = current.clone();
     s.properties.insert(key.into(), value.into());
     registry.resolve(&s).ok()
 }
@@ -3533,7 +3527,7 @@ pub(super) fn with_property(
 /// The state a mod's property write changes `state` to; none when the block
 /// has no such property or value, or already has it: `LevelChunk.setBlockState`
 /// returns null for the same state, so `Level.setBlock` returns false.
-fn property_change(
+pub(super) fn property_change(
     registry: &BlockRegistry,
     state: BlockStateId,
     key: &str,

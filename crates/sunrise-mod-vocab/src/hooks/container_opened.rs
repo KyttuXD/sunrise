@@ -14,7 +14,7 @@ pub trait Hooks {
     /// nothing opens: the open menu stays as it was and the click is spent.
     /// The player's state is swapped in for the call, so `host.players().acting_player()`,
     /// `PlayerRef::tell` and the item helpers reach them. Not heard: a menu a mod opens
-    /// (`native_open_menu`), the inventory screen, and the editors (sign,
+    /// (`PlayerRef::open_chest_menu`, `PlayerRef::open_mod_menu`), the inventory screen, and the editors (sign,
     /// book, command block). Server-side, for every player of the world.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_container_opened",

@@ -244,7 +244,7 @@ pub(super) struct Parked {
     knots: sunrise_client::join_seq::JoinList<super::leads::Knot>,
     projectiles: sunrise_client::join_seq::JoinList<sunrise_client::projectiles::Projectile, false>,
     dropped: sunrise_client::join_seq::JoinList<ItemEntity>,
-    orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
+    pub(super) orbs: sunrise_client::join_seq::JoinList<ExperienceOrb>,
     persist: persist::EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
@@ -292,7 +292,13 @@ impl Game<'_> {
             sunrise_client::join_seq::residency::Kind::Player
                 | sunrise_client::join_seq::residency::Kind::Hook
         ) {
-            return self.locate_specialized_resident_owner(at);
+            return self
+                .locate_specialized_resident_owner(at)
+                .map(|mut source| {
+                    source.value.1 &=
+                        self.resident_source_target_visible(at.owner.dimension, source.value.0);
+                    source
+                });
         }
         if at.owner.dimension == self.dim.key() {
             // An open transaction's removal reads as gone already.

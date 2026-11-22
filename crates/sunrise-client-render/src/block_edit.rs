@@ -177,11 +177,13 @@ impl World {
                         changed[s] = true;
                         any += 1;
                         let pos = (r.x, yy, r.z);
-                        if (has_groups
-                            && chunk
-                                .connection_groups
-                                .contains_key(&((s as u32) << 12 | at as u32)))
-                            || (!journaled_groups.is_empty() && journaled_groups.contains(&pos))
+                        if !STAGED
+                            && ((has_groups
+                                && chunk
+                                    .connection_groups
+                                    .contains_key(&((s as u32) << 12 | at as u32)))
+                                || (!journaled_groups.is_empty()
+                                    && journaled_groups.contains(&pos)))
                         {
                             grouped_changes.push((pos, old, r.state));
                         }

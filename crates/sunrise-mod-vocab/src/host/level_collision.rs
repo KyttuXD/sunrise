@@ -7,6 +7,19 @@ use crate::*;
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelCollisionBackend {
     /// Side: both.
+    /// Visit the block's empty-context collision shape (`BlockState.getCollisionShape`,
+    /// `VoxelShape.forAllBoxes`). Each box is block-local
+    /// `[min_x, min_y, min_z, max_x, max_y, max_z]`. Returning `Break(())` stops the
+    /// walk and is returned to the caller. No chunk is loaded and an unloaded block
+    /// or unavailable shape yields no boxes. Works in resident server levels and
+    /// the client's current and viewed levels.
+    fn level_visit_block_collision(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        visit: &mut dyn FnMut([f64; 6]) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
+    /// Side: both.
     /// `BlockGetter.getBlockFloorHeight` with the normal collision shapes and an empty
     /// entity context. The result is relative to the block: negative infinity means no floor.
     /// None for a stale level, an unloaded column or a position outside build height.

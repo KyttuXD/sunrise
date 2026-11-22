@@ -255,8 +255,8 @@ impl BlockEntityPart for Part {
             );
             if s.remove_and_reopen {
                 assert_eq!(
-                    host.open_menu(
-                        12,
+                    host.player(12).unwrap().open_chest_menu(
+                        host,
                         1,
                         mod_api::Text::literal("reopened by menu_quick_move"),
                         Vec::new(),
@@ -322,11 +322,12 @@ impl mod_api::MenuPart for Part {
             return Flow::Continue;
         };
         assert_eq!(event.menu, DEPOT_MENU);
-        assert!(
-            host.menu(event.uuid, event.window).is_none(),
+        let player = host.player(event.uuid).unwrap();
+        assert_eq!(
+            player.menu(host, event.window),
+            Ok(None),
             "not a native window"
         );
-        let player = host.player(event.uuid).unwrap();
         assert!(player.container_menu(host).is_some());
         if s.write_other_block || s.write_clicked_block {
             let level = host.level("minecraft:overworld").unwrap();
@@ -425,11 +426,11 @@ impl mod_api::MenuPart for Part {
             panic!("menu button failed after editing the entity and cursor");
         }
         if script.replace_menu {
-            event
-                .subject
-                .host()
-                .open_menu(
-                    event.context.player,
+            let host = event.subject.host();
+            host.player(event.context.player)
+                .unwrap()
+                .open_chest_menu(
+                    host,
                     1,
                     mod_api::Text::literal("opened by menu_button"),
                     Vec::new(),
@@ -475,15 +476,17 @@ impl mod_api::MenuPart for ClickPart {
         let s = SCRIPT.with(|s| s.borrow().clone());
         if s.replace_other {
             assert!(
-                host.open_menu(
-                    13,
-                    1,
-                    mod_api::Text::literal("Other player's display"),
-                    vec![],
-                    mod_api::MenuReplace::InPlace
-                )
-                .unwrap()
-                .is_some()
+                host.player(13)
+                    .unwrap()
+                    .open_chest_menu(
+                        host,
+                        1,
+                        mod_api::Text::literal("Other player's display"),
+                        vec![],
+                        mod_api::MenuReplace::InPlace
+                    )
+                    .unwrap()
+                    .is_some()
             );
         }
         if s.write_dirt && s.panic {
@@ -502,8 +505,9 @@ impl mod_api::MenuPart for ClickPart {
             let item =
                 mod_api::ItemStack::new(mod_api::__private::item_key("minecraft:dirt").unwrap(), 1)
                     .unwrap();
-            host.menu_set_items(event.uuid, event.window, vec![Some(item)])
-                .unwrap();
+            let player = host.player(event.uuid).unwrap();
+            let menu = player.menu(host, event.window).unwrap().unwrap();
+            menu.set_items(host, vec![Some(item)]).unwrap();
         }
         if s.panic {
             panic!("a listener failed");

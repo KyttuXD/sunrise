@@ -1793,19 +1793,25 @@ pub(super) mod tests {
             // Stale or closed menu handles refuse with NotHeld before calling the editor.
             let window = {
                 let host: &mut dyn ServerHost = game;
-                host.open_menu(
-                    123,
-                    1,
-                    mod_api::Text::literal("box"),
-                    Vec::new(),
-                    MenuReplace::CloseFirst,
-                )
-                .unwrap()
-                .unwrap()
+                host.player(123)
+                    .unwrap()
+                    .open_chest_menu(
+                        host,
+                        1,
+                        mod_api::Text::literal("box"),
+                        Vec::new(),
+                        MenuReplace::CloseFirst,
+                    )
+                    .unwrap()
+                    .unwrap()
             };
             let open_menu = {
                 let host: &mut dyn ServerHost = game;
-                host.menu(123, window).unwrap()
+                host.player(123)
+                    .unwrap()
+                    .menu(host, window)
+                    .unwrap()
+                    .unwrap()
             };
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 2));
@@ -1818,7 +1824,7 @@ pub(super) mod tests {
             );
             {
                 let host: &mut dyn ServerHost = game;
-                host.close_menu(123);
+                assert!(open_menu.close_container(host));
             }
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 2));
@@ -2012,15 +2018,17 @@ pub(super) mod tests {
             // Open a container menu, populate and snapshot its cursor, then edit while acting.
             let window = {
                 let host: &mut dyn ServerHost = game;
-                host.open_menu(
-                    123,
-                    1,
-                    mod_api::Text::literal("box"),
-                    Vec::new(),
-                    MenuReplace::CloseFirst,
-                )
-                .unwrap()
-                .unwrap()
+                host.player(123)
+                    .unwrap()
+                    .open_chest_menu(
+                        host,
+                        1,
+                        mod_api::Text::literal("box"),
+                        Vec::new(),
+                        MenuReplace::CloseFirst,
+                    )
+                    .unwrap()
+                    .unwrap()
             };
             game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.carried = Some(ItemStack::new("minecraft:paper", 4));
@@ -2036,7 +2044,11 @@ pub(super) mod tests {
 
             let open_menu = {
                 let host: &mut dyn ServerHost = game;
-                host.menu(123, window).unwrap()
+                host.player(123)
+                    .unwrap()
+                    .menu(host, window)
+                    .unwrap()
+                    .unwrap()
             };
             let acting_name = Tag::String("synced acting cursor".into());
             let mut acting_expected = ItemStack::new("minecraft:paper", 4);
@@ -3461,10 +3473,11 @@ pub(super) mod tests {
                         vec![Some((ItemResource::of(&map), 1))],
                     )
                     .unwrap();
+                let player = game.player(12).unwrap();
                 let host: &mut dyn ServerHost = game;
-                let window = host
-                    .open_menu(
-                        12,
+                let window = player
+                    .open_chest_menu(
+                        host,
                         3,
                         mod_api::Text::literal("map fixture"),
                         Vec::new(),
@@ -3472,7 +3485,7 @@ pub(super) mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                let menu = host.menu(12, window).unwrap();
+                let menu = player.menu(host, window).unwrap().unwrap();
                 game.player_back_mod_menu_slots(
                     menu.fields().player,
                     window,

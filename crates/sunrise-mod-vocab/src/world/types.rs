@@ -1849,7 +1849,7 @@ pub trait LevelWriteHost: LevelTicksHost + LevelRandomHost {
     fn remove_block(&mut self, _pos: [i32; 3], _moved: bool) -> bool {
         unimplemented!("LevelWriteHost::remove_block")
     }
-    /// Change a block property through `native_set_block_property`.
+    /// Change a block property through `Level.setBlock` with vanilla update flags, preserving its block entity.
     fn set_block_property(
         &mut self,
         _pos: [i32; 3],
@@ -1964,4 +1964,37 @@ pub struct ObjectiveRef {
 pub struct TeamRef {
     pub(crate) epoch: WorldEpoch,
     pub(crate) id: u64,
+}
+
+/// Why a bulk block edit through [`LevelRef::edit_blocks`] was refused before changing any block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum BlockEditError {
+    /// The level is gone or its handle belongs to an earlier lifetime.
+    Stale,
+    /// The operation is unavailable on this side, phase or host.
+    Unavailable,
+    /// A palette entry is not a valid block state in the owning registry.
+    InvalidState(BlockStateError),
+    /// A filter predicate failed typed validation or its block or tag is unavailable.
+    InvalidPredicate,
+    /// A run names a palette entry past the end of `BlockEdit::palette`.
+    PaletteOutOfRange,
+    /// A run names a filter past the end of `BlockEdit::filters`.
+    FilterOutOfRange,
+}
+
+impl crate::NoBackend for BlockEditError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
+impl From<BlockStateError> for BlockEditError {
+    fn from(error: BlockStateError) -> Self {
+        match error {
+            BlockStateError::Unavailable => Self::Unavailable,
+            error => Self::InvalidState(error),
+        }
+    }
 }

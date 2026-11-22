@@ -56,6 +56,8 @@ enum Removal {
         killed: bool,
     },
     Other(EntityRef),
+    /// A full Entity.kill, including its death and removal effects, not just discard.
+    Kill(EntityRef),
 }
 
 /// What mods are told of entities joining and leaving, held while a transaction is open.
@@ -257,11 +259,11 @@ impl Game<'_> {
     /// [`Self::removal_pending`] of the entity in `dimension`, parked or not: the transactions
     /// stay with the game when a level is swapped out.
     pub(in crate::game) fn removal_pending_in(&self, dimension: Dim, target: &Target) -> bool {
-        let id = super::super::native_entities::target_id(*target);
+        let id = self.resident_target_id(*target);
         let open = self.transactions.iter().any(|level| {
             level.dimension == Some(dimension)
                 && (level.lifetimes.removals.iter())
-                    .any(|removal| matches!(removal, Removal::Other(e) if Some(e.id()) == id))
+                    .any(|removal| matches!(removal, Removal::Other(e) | Removal::Kill(e) if Some(e.id()) == id))
         });
         // A commit's removals wait for its joins to be told: its entities read as gone until then.
         open || (self.transactions.committing.iter()).any(|commit| {
@@ -293,6 +295,15 @@ impl Game<'_> {
         }
         true
     }
+    /// Mark an admitted kill invisible now, leaving its effects to the root commit.
+    pub(in crate::game) fn journal_kill(&mut self, entity: EntityRef) -> bool {
+        let Some(level) = open_in(&mut self.transactions, self.dim) else {
+            return false;
+        };
+        level.lifetimes.removals.push(Removal::Kill(entity));
+        true
+    }
+
     /// What `journal` left for the root commit: the joins it held, then its removals, in order,
     /// then the leaves it held. An entity added and removed in it is never announced, so it never
     /// leaves. What the listeners ask for meanwhile waits in the commit's queue and is told after
@@ -308,7 +319,7 @@ impl Game<'_> {
         let removed: Vec<u32> = (journal.removals.iter())
             .map(|removal| match removal {
                 Removal::Mob { id, .. } => *id,
-                Removal::Other(entity) => entity.id(),
+                Removal::Other(entity) | Removal::Kill(entity) => entity.id(),
             })
             .collect();
         let dimension = self.dim;
@@ -413,7 +424,7 @@ impl Game<'_> {
                     }
                     self.finish_mob_removal(id);
                 }
-                Removal::Other(entity) => {
+                Removal::Other(entity) | Removal::Kill(entity) => {
                     // The commit lists the entity as removed until now, so the handle resolves
                     // only while it is marked as being removed. `remove_target_now` records the
                     // removal (`persist.removals`) before any callback runs: what a callback
@@ -422,7 +433,11 @@ impl Game<'_> {
                     // this one set is put back as it was.
                     let outer = self.set_removing(Some(entity.id()));
                     if let Some(target) = self.native_entity_target(entity) {
-                        self.remove_target_now(entity, target);
+                        if matches!(removal, Removal::Kill(_)) {
+                            self.kill_target_in_level(target);
+                        } else {
+                            self.remove_target_now(entity, target);
+                        }
                     }
                     self.set_removing(outer);
                 }

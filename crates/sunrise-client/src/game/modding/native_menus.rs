@@ -116,41 +116,55 @@ impl Game<'_> {
         Some(g.conn)
     }
     /// Opens a chest menu of `rows` rows (1 to 6) titled `title` for the
-    /// player, showing `items` (by slot, padded with empty ones), in place of
-    /// the menu they had open: its window id, a new one each time. The old
-    /// menu closes as a close does, its cursor stack going back to the
+    /// connected player, showing `items` (by slot, padded with empty ones), in
+    /// place of the menu they had open: its window id, a new one each time.
+    /// The old menu closes as a close does, its cursor stack going back to the
     /// inventory, and `replace` says whether the client is first sent a close.
-    pub(super) fn open_menu(
+    pub(super) fn player_open_chest_menu(
         &mut self,
-        uuid: u128,
+        player: mod_api::PlayerRef,
         rows: u8,
         title: Text,
         mut items: Vec<Option<ItemStack>>,
         replace: MenuReplace,
-    ) -> Option<i32> {
-        let conn = self.native_conn(uuid)?;
-        if self.menu_click_in_progress(conn) {
-            return None;
+    ) -> Result<Option<i32>, mod_api::OpenMenuError> {
+        use mod_api::OpenMenuError;
+
+        if !self.is_logical_server() {
+            return Err(OpenMenuError::PlayerUnavailable);
         }
-        let rows = rows.clamp(1, 6);
+        let title = component_nbt(&title.component());
+        sunrise_protocol::buf::check_network_nbt(&title)
+            .map_err(|_| OpenMenuError::TitleNotEncodable)?;
+        let guest = self
+            .online_player_record(player)
+            .filter(|g| !g.disconnect_pending)
+            .ok_or(OpenMenuError::PlayerUnavailable)?;
+        let conn = guest.conn;
+        if self.menu_click_in_progress(conn) {
+            return Err(OpenMenuError::ClickInProgress);
+        }
+        if !(1..=6).contains(&rows) {
+            return Ok(None);
+        }
         let menu = format!("minecraft:generic_9x{rows}");
         self.lan
-            .as_ref()?
-            .hub
-            .registry_id("minecraft:menu", &menu)?;
+            .as_ref()
+            .and_then(|host| host.hub.registry_id("minecraft:menu", &menu))
+            .ok_or(OpenMenuError::PlayerUnavailable)?;
         items.resize(usize::from(rows) * 9, None);
-        self.request_native_menu_open(
+        Ok(self.request_native_menu_open(
             conn,
             NativeMenuOpen {
                 menu,
-                title: component_nbt(&title.component()),
+                title,
                 items,
                 replace,
                 pos: None,
                 extra: None,
                 content: None,
             },
-        )
+        ))
     }
 
     /// Outside a transaction, installs the menu and returns its live vanilla protocol window
@@ -400,9 +414,9 @@ impl Game<'_> {
         .map(Some)
         .ok_or(OpenMenuError::PlayerUnavailable)
     }
-    /// The native menu the player has open as window `window`, for its slots;
-    /// None for another window, a menu the game opened, or a player not here.
-    pub(super) fn menu(&self, uuid: u128, window: i32) -> Option<MenuRef> {
+    /// The native menu the guest of `uuid` has open as window `window`, for internal
+    /// server callers that already have a guest UUID.
+    pub(super) fn native_menu_ref(&self, uuid: u128, window: i32) -> Option<MenuRef> {
         let conn = self.native_conn(uuid)?;
         self.lan
             .as_ref()?
@@ -416,21 +430,55 @@ impl Game<'_> {
         self.player_container_menu(self.player(uuid)?)
             .filter(|menu| menu.fields().window == window)
     }
-    /// Replaces what the player's open native menu `window` shows, without reopening it
+    /// The native menu `player` has open as window `window`, for its slots;
+    /// `Ok(None)` for another window, a menu the game opened, or a stale/unplaced player.
+    pub(super) fn player_menu(
+        &self,
+        player: mod_api::PlayerRef,
+        window: i32,
+    ) -> Result<Option<MenuRef>, mod_api::LevelReadError> {
+        if !self.is_logical_server() || self.native_lifecycle.epoch().is_none() {
+            return Err(mod_api::LevelReadError::Unavailable);
+        }
+        let Some(guest) = self.online_player_record(player) else {
+            return Ok(None);
+        };
+        if !guest
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.window == window && m.slots == Slots::Native)
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .player_container_menu(player)
+            .filter(|menu| menu.fields().window == window))
+    }
+    /// Replaces what the open native menu `menu` shows, without reopening it
     /// (`AbstractContainerMenu.sendAllDataToRemote`): the whole contents in one packet.
     pub(super) fn menu_set_items(
         &mut self,
-        uuid: u128,
-        window: i32,
+        menu: MenuRef,
         items: Vec<Option<ItemStack>>,
     ) -> Result<(), mod_api::MenuItemsRefusal> {
         use mod_api::MenuItemsRefusal;
-        if self.remote.is_some() {
+        if !self.is_logical_server() {
             return Err(MenuItemsRefusal::Client);
         }
-        let conn = self.native_conn(uuid).ok_or(MenuItemsRefusal::NoPlayer)?;
+        if self.native_lifecycle.epoch().is_none() {
+            return Err(MenuItemsRefusal::Unavailable);
+        }
+        let player = menu.fields().player;
+        let window = menu.fields().window;
+        if self.online_player_record(player).is_none() {
+            return Err(MenuItemsRefusal::NoPlayer);
+        }
+        let conn = self
+            .native_menu_guest(menu)
+            .ok_or(MenuItemsRefusal::NotOpen)?
+            .conn;
         let transactional = !self.transactions.is_empty();
-        if transactional && let Some(player) = self.player(uuid) {
+        if transactional {
             self.journal_menus(player);
         }
         let host = self.lan.as_mut().ok_or(MenuItemsRefusal::NoPlayer)?;
@@ -440,19 +488,6 @@ impl Game<'_> {
             self.reply_menu_click(conn, super::lan_menus::ClickReply::Resend(window));
         }
         Ok(())
-    }
-    /// Closes the player's native menu (a `native_menu_closed` follows). In a transaction,
-    /// stages the close for its current window until the outermost commit.
-    pub(super) fn close_menu(&mut self, uuid: u128) {
-        if let Some(conn) = self.native_conn(uuid)
-            && let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn))
-            && let Some(open) = guest
-                .menu
-                .as_ref()
-                .filter(|m| m.slots == sunrise_client::lan::menu::Slots::Native)
-        {
-            self.request_menu_close(conn, open.window, guest.menu_generation);
-        }
     }
 }
 
@@ -730,16 +765,18 @@ mod tests {
     }
 
     fn open(game: &mut Game<'_>, rows: u8, title: &str, replace: MenuReplace) -> i32 {
+        let player = game.player(123).unwrap();
         let host: &mut dyn ServerHost = game;
-        host.open_menu(
-            123,
-            rows,
-            mod_api::Text::literal(title),
-            Vec::new(),
-            replace,
-        )
-        .unwrap()
-        .unwrap()
+        player
+            .open_chest_menu(
+                host,
+                rows,
+                mod_api::Text::literal(title),
+                Vec::new(),
+                replace,
+            )
+            .unwrap()
+            .unwrap()
     }
 
     #[test]
@@ -1114,7 +1151,8 @@ mod tests {
                         (true, "minecraft:generic_9x2".into()),
                     ]
                 );
-                game.close_menu(123);
+                let menu = game.native_menu_ref(123, 2).unwrap();
+                assert!(menu.close_container(game));
                 assert_eq!(
                     *events.lock().unwrap(),
                     vec![
@@ -1147,10 +1185,10 @@ mod tests {
             let rx = watched_guest(game);
             let window = open(game, 1, "shop", MenuReplace::CloseFirst);
             assert_eq!(window, 1);
+            let player = game.player(123).unwrap();
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, 2), None, "another window");
-            assert_eq!(host.menu(124, 1), None, "another player");
-            let menu = host.menu(123, 1).unwrap();
+            assert_eq!(player.menu(host, 2), Ok(None), "another window");
+            let menu = player.menu(host, 1).unwrap().unwrap();
             assert_eq!(menu.container_id(host), Some(1));
             sent(&rx);
 
@@ -1177,19 +1215,20 @@ mod tests {
             assert!(sent(&rx).is_empty(), "sent once");
 
             // Closed, the menu answers nothing.
-            game.close_menu(123);
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, 1), None);
+            assert!(menu.close_container(host));
+            assert_eq!(player.menu(host, 1), Ok(None));
         });
     }
 
-    /// `menu_set_items` sends the whole contents of the open menu in one packet for its window,
+    /// `MenuRef::set_items` sends the whole contents of the open menu in one packet for its window,
     /// padded to its slots and cut at them, and the screen, the title and the cursor stay.
     #[test]
     #[ignore = "daily"]
     fn a_menus_items_are_replaced_in_one_packet_without_reopening() {
         with_game(|game| {
             let rx = watched_guest(game);
+            let player = game.player(123).unwrap();
             let window = open(game, 1, "shop", MenuReplace::CloseFirst);
             let stone = ItemStack::new("minecraft:stone", 3);
             let cursor = ItemStack::new("minecraft:dirt", 2);
@@ -1202,11 +1241,12 @@ mod tests {
             sent(&rx);
             let api = |stack: &ItemStack| stack.clone().try_into_api().unwrap();
             let host: &mut dyn ServerHost = game;
+            let menu = player.menu(host, window).unwrap().unwrap();
             // Two stacks, then enough empty slots to be cut at the menu's nine.
             let mut items = vec![None, Some(api(&stone))];
             items.resize(12, None);
             items[11] = Some(api(&stone));
-            assert_eq!(host.menu_set_items(123, window, items), Ok(()));
+            assert_eq!(menu.set_items(host, items), Ok(()));
             let guest = &game.lan.as_ref().unwrap().hub.guests[0];
             assert_eq!(guest.native_menu.len(), 9, "cut at the menu's slots");
             assert_eq!(guest.native_menu[1], Some(stone.clone()));
@@ -1229,7 +1269,10 @@ mod tests {
             );
             assert!(content.carried.is_some(), "the cursor is sent with it");
             let host: &mut dyn ServerHost = game;
-            assert!(host.menu(123, window).is_some(), "still the open menu");
+            assert!(
+                player.menu(host, window).unwrap().is_some(),
+                "still the open menu"
+            );
         });
     }
 
@@ -1509,39 +1552,52 @@ mod tests {
         });
     }
 
-    /// Each refusal has its own name and sends and changes nothing: another window or none
-    /// open, no such player, a stack the game refuses, and a client.
+    /// Each refusal has its own name and sends and changes nothing: stale/closed handle or
+    /// another window, stale player, a stack the game refuses, and a client.
     #[test]
     #[ignore = "daily"]
     fn each_menu_items_refusal_has_its_own_name_and_sends_nothing() {
         use mod_api::{MenuItemsRefusal, StackWriteError};
         with_game(|game| {
             let rx = watched_guest(game);
+            let player = game.player(123).unwrap();
             let api = |stack: ItemStack| stack.try_into_api().unwrap();
             let one = vec![Some(api(ItemStack::new("minecraft:stone", 1)))];
+            let unopened = mod_api::__private::game::menu_ref(player, 1, 0);
             let host: &mut dyn ServerHost = game;
             assert_eq!(
-                host.menu_set_items(123, 1, one.clone()),
+                unopened.set_items(host, one.clone()),
                 Err(MenuItemsRefusal::NotOpen),
                 "no menu open"
             );
             let window = open(game, 1, "shop", MenuReplace::CloseFirst);
+            let menu = player.menu(game, window).unwrap().unwrap();
+            let other_window =
+                mod_api::__private::game::menu_ref(player, window + 1, menu.fields().generation);
+            let stale_player = mod_api::__private::game::player_ref(
+                mod_api::EntityRef::new(
+                    mod_api::WorldEpoch::new(player.entity().epoch().get().wrapping_add(1)),
+                    player.entity().id(),
+                ),
+                player.uuid(),
+            );
+            let stale_player_menu = mod_api::__private::game::menu_ref(stale_player, window, 0);
             sent(&rx);
             let before = game.lan.as_ref().unwrap().hub.guests[0].native_menu.clone();
             let host: &mut dyn ServerHost = game;
             assert_eq!(
-                host.menu_set_items(123, window + 1, one.clone()),
+                other_window.set_items(host, one.clone()),
                 Err(MenuItemsRefusal::NotOpen),
                 "another window"
             );
             assert_eq!(
-                host.menu_set_items(999, window, one.clone()),
+                stale_player_menu.set_items(host, one.clone()),
                 Err(MenuItemsRefusal::NoPlayer)
             );
             let mut too_many = api(ItemStack::new("minecraft:stone", 1));
             too_many.set_count(65).unwrap();
             assert_eq!(
-                host.menu_set_items(123, window, vec![Some(too_many)]),
+                menu.set_items(host, vec![Some(too_many)]),
                 Err(MenuItemsRefusal::Stack(StackWriteError::CountExceeded {
                     maximum: 64
                 }))
@@ -1556,10 +1612,7 @@ mod tests {
             let (client, _server) = sunrise_protocol::connection::Pipe::pair();
             game.connect_local(client, "MenuItemsRefusalTest").unwrap();
             let host: &mut dyn ServerHost = game;
-            assert_eq!(
-                host.menu_set_items(123, window, one),
-                Err(MenuItemsRefusal::Client)
-            );
+            assert_eq!(menu.set_items(host, one), Err(MenuItemsRefusal::Client));
         });
     }
 
@@ -1649,9 +1702,13 @@ mod tests {
                 game.lan.as_ref().unwrap().hub.native_menu_events,
                 Vec::new()
             );
+            let player = game.player(123).unwrap();
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, 1), None);
-            assert!(host.menu(123, 2).is_some(), "the new menu stays open");
+            assert_eq!(player.menu(host, 1), Ok(None));
+            assert!(
+                player.menu(host, 2).unwrap().is_some(),
+                "the new menu stays open"
+            );
 
             // The default sends the close first.
             sent(&rx);
@@ -2131,13 +2188,10 @@ mod tests {
                             )
                             .unwrap()
                             .unwrap();
+                        let menu = player.menu(game, window).unwrap().unwrap();
                         let host: &mut dyn ServerHost = game;
-                        host.menu_set_items(
-                            123,
-                            window,
-                            vec![Some(stored.clone().try_into_api().unwrap())],
-                        )
-                        .unwrap();
+                        menu.set_items(host, vec![Some(stored.clone().try_into_api().unwrap())])
+                            .unwrap();
                         sent(&rx);
 
                         // With no click listener the menu keeps its stack, but the client
@@ -2327,7 +2381,7 @@ mod tests {
                             .unwrap();
                         })
                         .unwrap();
-                        let old_menu = game.menu(123, old).unwrap();
+                        let old_menu = game.native_menu_ref(123, old).unwrap();
                         assert_eq!(
                             game.menu_kind(old_menu),
                             Some(Some("minecraft:generic_9x3".into()))
@@ -2536,7 +2590,7 @@ mod tests {
                                 assert_eq!(menu.set_data_slot(host, 0, 900), Ok(true));
                                 let staged = show(host, vec![5, 6]).unwrap().unwrap();
                                 assert!(staged < 0);
-                                assert!(host.menu(123, staged).is_none());
+                                assert!(player.menu(host, staged).unwrap().is_none());
                                 Ok(())
                             });
                         assert_eq!(replaced, Ok(()));
@@ -3030,7 +3084,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn aborted_staged_menu_opens_never_wrap_onto_or_access_the_live_window() {
-        use mod_api::{MenuItemsRefusal, MenuSlotBackRefusal, PlayerContainerOpenEvent};
+        use mod_api::{MenuSlotBackRefusal, PlayerContainerOpenEvent};
         use std::sync::Mutex;
 
         struct Opened(Arc<Mutex<Vec<Option<i32>>>>);
@@ -3083,8 +3137,11 @@ mod tests {
                                 .update(0, |g| g.next_window = start_counter);
                             let live = open(game, 1, "live", MenuReplace::CloseFirst);
                             assert_eq!(live, start_counter % 100 + 1);
-                            (game as &mut dyn ServerHost)
-                                .menu_set_items(123, live, vec![Some(stone.clone())])
+                            player
+                                .menu(game, live)
+                                .unwrap()
+                                .unwrap()
+                                .set_items(game, vec![Some(stone.clone())])
                                 .unwrap();
                             opened.lock().unwrap().clear();
                             sent(&rx);
@@ -3093,15 +3150,16 @@ mod tests {
                                 let aborted: Result<(), ()> = (game as &mut dyn ServerHost)
                                     .transaction(|host, _| {
                                         let staged = if step % 2 == 0 {
-                                            host.open_menu(
-                                                123,
-                                                1,
-                                                mod_api::Text::literal("aborted"),
-                                                vec![Some(dirt.clone())],
-                                                MenuReplace::InPlace,
-                                            )
-                                            .unwrap()
-                                            .unwrap()
+                                            player
+                                                .open_chest_menu(
+                                                    host,
+                                                    1,
+                                                    mod_api::Text::literal("aborted"),
+                                                    vec![Some(dirt.clone())],
+                                                    MenuReplace::InPlace,
+                                                )
+                                                .unwrap()
+                                                .unwrap()
                                         } else {
                                             let mut req = ModMenuOpen::new(
                                                 key,
@@ -3112,20 +3170,12 @@ mod tests {
                                         };
                                         assert!(staged < 0);
                                         assert_ne!(staged, live);
-                                        assert!(host.menu(123, staged).is_none());
-                                        assert_eq!(
-                                            host.menu_set_items(
-                                                123,
-                                                staged,
-                                                vec![Some(dirt.clone())],
-                                            ),
-                                            Err(MenuItemsRefusal::NotOpen)
-                                        );
+                                        assert!(player.menu(host, staged).unwrap().is_none());
                                         assert_eq!(
                                             player.back_mod_menu_slots(host, staged, Vec::new()),
                                             Err(MenuSlotBackRefusal::NoPlayerOrWindow)
                                         );
-                                        assert!(host.menu(123, live).is_some());
+                                        assert!(player.menu(host, live).unwrap().is_some());
                                         Err(())
                                     });
                                 assert_eq!(aborted, Err(()));
@@ -3136,7 +3186,7 @@ mod tests {
                                 live
                             );
                             assert_eq!(
-                                game.menu(123, live).unwrap().slot(game, 0),
+                                game.native_menu_ref(123, live).unwrap().slot(game, 0),
                                 Some(Some(stone.clone()))
                             );
                             assert!(opened.lock().unwrap().is_empty());
@@ -3144,9 +3194,9 @@ mod tests {
 
                             let committed: Result<i32, ()> = (game as &mut dyn ServerHost)
                                 .transaction(|host, _| {
-                                    let staged = host
-                                        .open_menu(
-                                            123,
+                                    let staged = player
+                                        .open_chest_menu(
+                                            host,
                                             1,
                                             mod_api::Text::literal("replacement"),
                                             vec![Some(dirt.clone())],
@@ -3155,11 +3205,7 @@ mod tests {
                                         .unwrap()
                                         .unwrap();
                                     assert!(staged < 0);
-                                    assert!(host.menu(123, staged).is_none());
-                                    assert_eq!(
-                                        host.menu_set_items(123, staged, vec![Some(dirt.clone())]),
-                                        Err(MenuItemsRefusal::NotOpen)
-                                    );
+                                    assert!(player.menu(host, staged).unwrap().is_none());
                                     Ok(staged)
                                 });
                             let staged = committed.unwrap();
@@ -3170,10 +3216,10 @@ mod tests {
                                 player.container_menu(game).unwrap().container_id(game),
                                 Some(next)
                             );
-                            assert!(game.menu(123, live).is_none());
-                            assert!(game.menu(123, staged).is_none());
+                            assert!(game.native_menu_ref(123, live).is_none());
+                            assert!(game.native_menu_ref(123, staged).is_none());
                             assert_eq!(
-                                game.menu(123, next).unwrap().slot(game, 0),
+                                game.native_menu_ref(123, next).unwrap().slot(game, 0),
                                 Some(Some(dirt.clone()))
                             );
                             let packets = sent(&rx);
@@ -3199,7 +3245,7 @@ mod tests {
                             );
                             assert!(sent(&rx).is_empty());
                             assert_eq!(
-                                game.menu(123, next).unwrap().slot(game, 0),
+                                game.native_menu_ref(123, next).unwrap().slot(game, 0),
                                 Some(Some(dirt.clone()))
                             );
                         }

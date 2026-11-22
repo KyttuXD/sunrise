@@ -250,20 +250,6 @@ pub struct ModMismatch {
     /// Its version now; `None` when the mod is no longer loaded.
     pub current_version: Option<String>,
 }
-/// An experience orb as a server mod reads it (`experience_orbs`).
-/// Read by mods only.
-#[derive(Clone, Debug)]
-// exhaustive: the game builds it with a literal; mods only read it
-#[derive(sunrise_mod_api_macros::Wire)]
-pub struct ExperienceOrb {
-    /// The entity's ID, as `entity_join_level` names it.
-    pub id: u32,
-    pub position: [f64; 3],
-    /// `ExperienceOrb.value`: the signed points value saved by vanilla.
-    pub value: i32,
-    /// `ExperienceOrb.count`: orbs merged into this one, each worth `value`.
-    pub count: u32,
-}
 /// What a mod's falling block does when it lands and when it hits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

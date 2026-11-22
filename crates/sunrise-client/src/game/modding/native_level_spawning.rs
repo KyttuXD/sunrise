@@ -486,17 +486,17 @@ mod tests {
             );
             // An owner the shot has no collision identity for refuses.
             game.options.dedicated = Some(Vec::new());
-            let dimension = game.dim.id();
             let stand = game
-                .summon(
-                    dimension,
+                .level_summon(
+                    level,
                     "minecraft:armor_stand",
                     [9.5, 64.0, 8.5],
                     Default::default(),
                 )
+                .unwrap()
                 .unwrap();
-            spawn.owner = game.entity(stand);
-            assert!(spawn.owner.is_some());
+            assert_eq!(game.entity(stand.id()), Some(stand));
+            spawn.owner = Some(stand);
             let projectiles = game.creatures.projectiles.len();
             assert_eq!(
                 game.level_spawn_entity(level, "minecraft:snowball", [8.5, 65.5, 8.5], &spawn),

@@ -1,6 +1,6 @@
 //! Cold, all-or-nothing preparation of typed bulk edit values.
 use super::{TryIntoEngine, block_metadata_table};
-use mod_api::{BlockMetadata, StateConstraint, StatePredicate};
+use mod_api::{BlockEditError, BlockMetadata, BlockStateError, StateConstraint, StatePredicate};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -13,26 +13,22 @@ pub(in crate::game) struct PreparedBlockEdit<'a> {
 }
 
 /// Resolve every palette state and compile every filter before a world mutation is possible.
-pub(in crate::game) fn prepare(edit: &mod_api::BlockEdit) -> Result<PreparedBlockEdit<'_>, String> {
+pub(in crate::game) fn prepare(
+    edit: &mod_api::BlockEdit,
+) -> Result<PreparedBlockEdit<'_>, BlockEditError> {
     let palette = edit
         .palette
         .iter()
-        .enumerate()
-        .map(|(index, state)| {
-            let state: BlockStateId = state
-                .try_into_engine(&())
-                .map_err(|error| format!("palette entry {index}: {error:?}"))?;
+        .map(|state| {
+            let state: BlockStateId = state.try_into_engine(&())?;
             Ok(state.0)
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, BlockEditError>>()?;
     let filters = edit
         .filters
         .iter()
-        .enumerate()
-        .map(|(index, predicate)| {
-            compile_filter(predicate).map_err(|error| format!("filter {index}: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(compile_filter)
+        .collect::<Result<Vec<_>, BlockEditError>>()?;
     Ok(PreparedBlockEdit { palette, filters })
 }
 
@@ -63,20 +59,21 @@ impl CompiledBlockFilter<'_> {
     }
 }
 
-fn compile_filter(predicate: &StatePredicate) -> Result<CompiledBlockFilter<'_>, String> {
+fn compile_filter(predicate: &StatePredicate) -> Result<CompiledBlockFilter<'_>, BlockEditError> {
     let (id, tag) = if let Some(key) = predicate.block_key() {
-        let metadata =
-            block_metadata_table().map_err(|error| format!("block metadata: {error:?}"))?;
-        let name = metadata
+        let name = block_metadata_table()?
             .name(key)
-            .map_err(|error| format!("block: {error:?}"))?;
+            .map_err(|error| match error {
+                BlockStateError::Unavailable => BlockEditError::Unavailable,
+                _ => BlockEditError::InvalidPredicate,
+            })?;
         (Cow::Borrowed(name), false)
     } else {
         // Only the tag's name is retained here; membership is read when applying the edit.
         let name = predicate
             .tag_key()
             .and_then(|key| mod_api::__private::with_tag_name(key, |name| name.map(str::to_owned)))
-            .ok_or("block tag is unavailable")?;
+            .ok_or(BlockEditError::InvalidPredicate)?;
         (Cow::Owned(name), true)
     };
     Ok(CompiledBlockFilter {
@@ -161,7 +158,7 @@ mod tests {
                 u16::MAX,
             ));
         assert!(
-            prepare(&edit).is_err(),
+            matches!(prepare(&edit), Err(BlockEditError::InvalidState(_))),
             "late bad palette state must refuse the whole prepared edit"
         );
     }

@@ -50,7 +50,6 @@ pub(super) struct Backings {
     main_keys: Vec<Option<MainKey>>,
     native: Option<Vec<Option<NativeMenuSlot>>>,
     native_menu: Option<(u32, u128, i32)>,
-
     clear: BTreeSet<MainKey>,
     pub source_keys: Vec<Vec<Option<Key>>>,
 }
@@ -116,7 +115,6 @@ impl Backings {
             main_keys: Vec::with_capacity(before.size),
             native,
             native_menu,
-
             clear: BTreeSet::new(),
             source_keys: Vec::new(),
         };
@@ -278,18 +276,16 @@ impl Backings {
         let (Some(native), Some((conn, uuid, window))) = (&self.native, self.native_menu) else {
             return self.native.is_none() && self.native_menu.is_none();
         };
-        if game.menu(uuid, window).is_none()
-            || native.iter().enumerate().any(|(slot, before)| {
-                game.native_menu_place(conn, window, slot) != before.as_ref().map(|slot| slot.place)
-            })
-        {
+        let Some(menu) = game.native_menu_ref(uuid, window) else {
+            return false;
+        };
+        if native.iter().enumerate().any(|(slot, before)| {
+            game.native_menu_place(conn, window, slot) != before.as_ref().map(|slot| slot.place)
+        }) {
             return false;
         }
         // Live handler values are checked through the same menu slot place recipe placement
         // publishes, not the guest's cached native-menu mirror.
-        let Some(menu) = game.menu(uuid, window) else {
-            return false;
-        };
         let player = menu.fields().player;
         let host: &mut dyn ServerHost = game;
         native

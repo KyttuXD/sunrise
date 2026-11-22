@@ -14,21 +14,6 @@ impl Game<'_> {
         }
         fs::read(self.options.resources.join(path)).ok()
     }
-    pub(in crate::game) fn native_block_collision_in(
-        &self,
-        world: &sunrise_client::world::World,
-        pos: [i32; 3],
-    ) -> Vec<[f64; 6]> {
-        self.block_collision_shape_in(world, pos)
-            .boxes()
-            .iter()
-            .map(|bounds| {
-                let min = bounds.min_position();
-                let max = bounds.max_position();
-                [min.x, min.y, min.z, max.x, max.y, max.z]
-            })
-            .collect()
-    }
     /// The window's width and height in physical pixels, independent of GUI
     /// scale; none on a server or when no window exists.
     pub(in crate::game) fn native_physical_window_size(&self) -> Option<[u32; 2]> {

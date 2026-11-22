@@ -116,9 +116,11 @@ with no subscriber skips the tick entirely; pending load notices still come firs
 
 To tell clients about something that happened once, such as a burst of particles, queue
 fields instead of writing them to the saved `nbt`. In `block_entity_tick`, queue
-fields with `tick.with_view(|mut view| view.set_client_update_fields(fields))`, then
-request a sync through `tick.host().block_entity_sync(pos)`. A later call replaces
-the batch; an empty compound clears it.
+fields and take the holder's handle in the same loan:
+`tick.with_view(|mut view| { view.set_client_update_fields(fields); view.handle() })`.
+If it returns `Some(holder)`, call `holder.sync(tick.host())` after the loan ends
+and handle its `LevelWriteError`. The handle works while the holder is out for its own tick.
+A later call to `set_client_update_fields` replaces the batch; an empty compound clears it.
 
 The next block change that reaches a viewer puts the fields over what
 `block_entity_update_tag` gives, or sends them alone without one, in one packet for every
@@ -343,7 +345,7 @@ tells of it synchronously. Version 2 names the type string `menu_type` (also on
 as `PlayerRef::container_menu` does. It is `None` for crafting tables, merchants, workstations,
 lecterns and mount inventories. `replace` is the Java `MenuProvider`'s choice
 (`shouldTriggerClientSideContainerClosingOnOpen`), as for
-[`open_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
+[`PlayerRef::open_chest_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
 `MenuReplace::CloseFirst`, vanilla's default, first sends the client a close for the old
 window, which centres the mouse again; `MenuReplace::InPlace` sends none, so the client keeps
 its screen and its mouse where they are until the new screen replaces it, as when one

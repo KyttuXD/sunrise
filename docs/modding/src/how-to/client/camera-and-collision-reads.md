@@ -49,7 +49,15 @@ has no such rule: Sunrise adds it.
 
 ## Camera snapshots and perspective
 
-The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, angles, final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame. `block_collision(pos)` returns block-local `[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context; unloaded blocks and collision errors give no boxes.
+The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or none before one exists. Its position, interpolated eye height, partial tick, angles, final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame.
+
+Resolve a level with `host.level(dimension)` and use
+`level.visit_block_collision(host, pos, &mut visit)`. The visitor receives block-local
+`[min_x, min_y, min_z, max_x, max_y, max_z]` boxes with an empty collision context.
+Return `ControlFlow::Break(())` to stop at a box, or `ControlFlow::Continue(())` to keep
+going. The same value is returned in `Ok`; unloaded positions and shape query failures
+visit no boxes. The current and viewed client levels are read separately; an invalid handle
+or unavailable phase returns a `LevelReadError`.
 
 `ClientHost::project(at)` places a world point on this frame's screen, as vanilla's
 `GameRenderer.projectPointToScreen`: normalised device x and y (-1 to 1, x right, y up) and a
@@ -143,7 +151,7 @@ A server can open other levels for a client to view besides the one the player i
 as Immersive Portals' `ClientWorldLoader` keeps a `ClientLevel` per dimension). On a client,
 `host.level("minecraft:the_nether")` also returns a handle for each such level while the server keeps it
 open. Its block reads read the viewed level's own world, never the player's: `block_state`, `block`,
-`block_property`, `clip`, `collision_boxes`, `has_collisions`, and the fluid reads built on
+`block_property`, `clip`, `collision_boxes`, `has_collisions`, `visit_block_collision`, and the fluid reads built on
 `block_state` (`fluid_shape`, `fluid_height`, `fluid_height_for_camera`, `fluid_can_be_replaced_with`).
 So a mod can aim a ray or collide a box through a portal. They never write and never load a column: a
 column the client doesn't hold is `None`, for a collision box as soon as its walk reaches one. `clip`

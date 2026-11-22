@@ -62,6 +62,16 @@ pub struct BlockEntityLease {
     generation: u64,
 }
 
+/// Opaque snapshot of an in-flight `take` lease at one position, captured by a
+/// transaction journal before a tentative removal and restored only on abort.
+#[derive(Clone, Copy)]
+pub struct TakenLeaseSnapshot {
+    token: u64,
+    generation: u64,
+    is_mod: bool,
+    shows_box: bool,
+}
+
 pub type Pos = (i32, i32, i32);
 
 /// What a block state's block entity does each tick (`BlockState.getTicker`).
@@ -950,6 +960,36 @@ impl BlockEntities {
         lease.token = next_token();
         self.out.insert(*pos, lease.token);
         true
+    }
+    /// Snapshot the active in-flight lease at `pos`, if an owner holds it via `take`.
+    pub fn taken_lease_snapshot(&self, pos: &Pos) -> Option<TakenLeaseSnapshot> {
+        let token = *self.out.get(pos)?;
+        let generation = *self.generations.get(pos)?;
+        let is_mod = self
+            .mods
+            .get(&chunk_of(*pos))
+            .is_some_and(|set| set.contains(pos));
+        let shows_box = self.boxes.contains(pos);
+        Some(TakenLeaseSnapshot {
+            token,
+            generation,
+            is_mod,
+            shows_box,
+        })
+    }
+    /// Restore an in-flight lease whose tentative removal was aborted, so the
+    /// original owner's `put` succeeds with its original identity and attachments.
+    pub fn restore_taken_lease(&mut self, pos: Pos, snapshot: TakenLeaseSnapshot) {
+        assert!(!self.map.contains_key(&pos));
+        self.replaced.remove(&pos);
+        self.generations.insert(pos, snapshot.generation);
+        self.out.insert(pos, snapshot.token);
+        if snapshot.is_mod {
+            self.mods.entry(chunk_of(pos)).or_default().insert(pos);
+        }
+        if snapshot.shows_box {
+            self.boxes.insert(pos);
+        }
     }
     /// Return the taken instance in its slot; false if its lease was retired.
     pub fn put(&mut self, lease: BlockEntityLease, entity: BlockEntity) -> bool {

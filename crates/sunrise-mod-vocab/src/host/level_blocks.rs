@@ -108,6 +108,45 @@ pub trait LevelBlocksBackend {
 #[sunrise_mod_api_macros::host_area]
 pub trait LevelBlocksBackendMut {
     /// Side: server.
+    /// Set property `key` to `value` on the block at `pos` through `Level.setBlock`,
+    /// using the supplied update flags. Preserves the block entity. Returns `Ok(false)`
+    /// for a missing property or value, an unchanged state or a refused position.
+    /// A parked level cannot be written while a Host transaction is open.
+    fn level_set_block_property(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        key: &str,
+        value: &str,
+        flags: BlockUpdateFlags,
+    ) -> Result<bool, LevelWriteError>;
+    /// Side: server.
+    /// Drop one item as `DefaultDispenseItemBehavior.execute` does. Use the
+    /// returned remainder in the dispenser's answer; the caller plays the answer's
+    /// event and smoke. A missing or mismatched dispenser returns `InvalidDispenser`.
+    /// A parked level cannot be used while a Host transaction is open.
+    fn level_dispense_default(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+    ) -> Result<Option<ItemStack>, LevelWriteError>;
+    /// Side: server.
+    /// `DefaultDispenseItemBehavior.consumeWithRemainder`: one item of `stack` is used.
+    /// If it was the last, the slot gets `remainder`; otherwise the remainder goes
+    /// into the dispenser or out its front with a click and smoke. Returns the chosen
+    /// slot's resulting stack. A missing or mismatched dispenser returns `InvalidDispenser`.
+    /// A parked level cannot be used while a Host transaction is open.
+    fn level_dispense_with_remainder(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+        remainder: ItemStack,
+    ) -> Result<Option<ItemStack>, LevelWriteError>;
+    /// Side: server.
     /// Set a block (`Level.setBlock`). Stale/unavailable levels and invalid states return
     /// typed errors without mutation. Ok(false) means vanilla refused an unchanged,
     /// unloaded or out-of-height write. Notification follows the supplied update flags.

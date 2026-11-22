@@ -123,4 +123,28 @@ pub trait LevelSpawningBackendMut {
     /// ([`SpawnFlags`]), from the next spawn pass on. Kept and refused as
     /// `set_spawn_limits`.
     fn level_set_spawn_flags(&mut self, level: LevelRef, flags: SpawnFlags) -> bool;
+    /// Side: server.
+    /// Spawns an entity of `kind` (`minecraft:item_display`) at `pos` in the
+    /// server level `level` names from `nbt` (its compound, as `/summon
+    /// <kind> <pos> <nbt>` takes it — vanilla `SummonCommand.createEntity` /
+    /// `ServerLevel.tryAddFreshEntityWithPassengers`, passengers included): its
+    /// [`EntityRef`]. Routes parked dimensions by handle; returns
+    /// `Err(LevelWriteError::InTransaction)` when summoning into a parked
+    /// dimension while a Host transaction is open, `Err(LevelWriteError::Stale)`
+    /// for a stale or closed level handle, and `Err(LevelWriteError::Unavailable)`
+    /// on a client or outside the world phase. Returns `Ok(None)` for a position
+    /// outside `/summon`'s bounds, an unloaded chunk, a kind Sunrise cannot load or
+    /// admit in Peaceful, exhausted entity ids, or an entity a mod kept out
+    /// (`entity_join_level`). If a UUID of the summon tree is already present in
+    /// the level, no member of the tree is added and the result is `Ok(None)`.
+    /// Inside a transaction its join waits for the root commit, so a mod keeping
+    /// it out is not known at the call: the handle is returned and reads stale
+    /// from the commit on.
+    fn level_summon(
+        &mut self,
+        level: LevelRef,
+        kind: &str,
+        pos: [f64; 3],
+        nbt: Compound,
+    ) -> Result<Option<EntityRef>, LevelWriteError>;
 }

@@ -104,6 +104,28 @@ pub trait LevelEntitiesBackend {
         visit: &mut dyn FnMut(PlayerRef) -> core::ops::ControlFlow<()>,
     ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
     /// Side: server.
+    /// Visit experience orbs in `level` whose bounding boxes intersect `min`..`max`
+    /// (`Level.getEntities(EntityTypeTest.forClass(ExperienceOrb.class), box, ...)`),
+    /// in the level's order, without building a list. Face-only contact does not
+    /// intersect, and inverted bounds are swapped on each axis as in vanilla's
+    /// `AABB`. Orbs with `count == 0`, held-out orbs, and orbs pending removal are
+    /// skipped. Works on both active and parked server levels.
+    ///
+    /// The visitor can make shared reads on the same host (including
+    /// [`ExperienceOrbRef::value`], [`ExperienceOrbRef::count`], and
+    /// [`ExperienceOrbRef::age`]). Return `ControlFlow::Continue(())` to keep
+    /// visiting or `ControlFlow::Break(())` to stop early. Returns
+    /// `Err(LevelReadError::Stale)` for a stale level and
+    /// `Err(LevelReadError::Unavailable)` on a client, outside world access, or for
+    /// non-finite bounds, without calling the visitor.
+    fn level_visit_experience_orbs(
+        &self,
+        level: LevelRef,
+        min: [f64; 3],
+        max: [f64; 3],
+        visit: &mut dyn FnMut(ExperienceOrbRef) -> core::ops::ControlFlow<()>,
+    ) -> Result<core::ops::ControlFlow<()>, LevelReadError>;
+    /// Side: server.
     /// Every entity the segment from `from` to `to` passes through, nearest first: the test
     /// `ProjectileUtil.getEntityHitResult` makes on each candidate, each entity's box
     /// inflated by `margin` on every side (`AABB.inflate`: positive grows, negative shrinks)

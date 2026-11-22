@@ -2029,11 +2029,13 @@ mod nested_vehicle_discard_tests {
                             0 => {
                                 assert!(game.hurt_boat(0, 5.0, false));
                             }
-                            1 => game.kill_target_in_level(if cart {
-                                super::super::commands::Target::Cart(71)
-                            } else {
-                                super::super::commands::Target::Boat(71)
-                            }),
+                            1 => {
+                                assert!(game.kill_target_in_level(if cart {
+                                    super::super::commands::Target::Cart(71)
+                                } else {
+                                    super::super::commands::Target::Boat(71)
+                                }));
+                            }
                             _ => {
                                 assert!(game.entity(71).unwrap().discard(game));
                             }
@@ -2484,11 +2486,19 @@ mod nested_vehicle_discard_tests {
                     let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
                     game.mobs.push(Mob::new(74, kind, Vec3::ZERO, 0.0));
                     match mode {
-                        0 => game.kill_target_in_level(super::super::commands::Target::Boat(71)),
+                        0 => {
+                            assert!(
+                                game.kill_target_in_level(super::super::commands::Target::Boat(71))
+                            );
+                        }
                         1 => {
                             assert!(game.hurt_boat(0, 5.0, false));
                         }
-                        2 => game.kill_target_in_level(super::super::commands::Target::Cart(71)),
+                        2 => {
+                            assert!(
+                                game.kill_target_in_level(super::super::commands::Target::Cart(71))
+                            );
+                        }
                         3 => game.hurt_cart(
                             0,
                             5.0,

@@ -448,15 +448,16 @@ fn journal_level_host_retains_neighbour_updates_from_earlier_writes() {
                 ));
             }
             let inner = nested.then(|| game.transaction_open());
-            {
-                let mut host = JournalLevelWrite::new(game, level).unwrap();
-                assert!(host.set_block_property(
+            assert_eq!(
+                level.set_block_property(
+                    game,
                     AT,
                     "facing",
                     "west",
-                    (BlockUpdateFlags::CLIENTS | BlockUpdateFlags::KNOWN_SHAPE).bits()
-                ));
-            }
+                    BlockUpdateFlags::CLIENTS | BlockUpdateFlags::KNOWN_SHAPE,
+                ),
+                Ok(true)
+            );
             if let Some(inner) = inner {
                 game.transaction_close(&inner, true);
             }

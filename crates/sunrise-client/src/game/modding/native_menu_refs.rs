@@ -59,8 +59,8 @@ impl Game<'_> {
 
     /// `ServerPlayer.closeContainer` of a guest's menu: queue the client's close before
     /// running normal server teardown. Refuses clients, stale menus, a guest with a pending
-    /// disconnect or an active turn, and the inventory menu (window 0). In a transaction,
-    /// true accepts a close at outermost commit.
+    /// disconnect, and the inventory menu (window 0). In the player's own turn, teardown
+    /// uses their active inventory and cursor. In a transaction, true accepts a close at commit.
     pub(super) fn menu_close_container(&mut self, menu: MenuRef) -> bool {
         let window = menu.fields().window;
         if !self.is_logical_server() || window == 0 {
@@ -69,7 +69,7 @@ impl Game<'_> {
         let Some(guest) = self.native_menu_guest(menu) else {
             return false;
         };
-        if guest.disconnect_pending || self.lan_acting == Some(guest.conn) {
+        if guest.disconnect_pending {
             return false;
         }
         self.request_menu_close(guest.conn, window, guest.menu_generation);

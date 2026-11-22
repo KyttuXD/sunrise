@@ -258,45 +258,85 @@ pub fn try_place_fluid(
 /// was picked up; the fluid's sound and game event go out as the transfer commits, before the
 /// dispenser's click and smoke. A single container is replaced in place; from a larger stack
 /// the slot keeps the rest and the changed container goes into the dispenser, else out of its
-/// front with a second click ([`dispense_with_remainder`](crate::prelude::ItemsServerHost::dispense_with_remainder)).
-/// Where neither moves anything, nothing is changed and one container is dispensed as it is
-/// ([`dispense_default`](crate::prelude::ItemsServerHost::dispense_default)). None, for vanilla
-/// to decide, only where the dispenser's level isn't open.
+/// Where neither moves anything, one container is dispensed as it is
+/// ([`LevelRef::dispense_default`]). A refusal aborts the transfer and answers with
+/// the original stack and failure event; it never falls through to another behavior.
 pub fn dispense_container(
     host: &mut dyn ServerHost,
     event: &DispenseItemEvent<'_>,
 ) -> Option<Dispensed> {
-    let level = host.level(event.dimension)?;
-    let [x, y, z] = event.pos;
-    let [dx, dy, dz] = event.facing.normal();
-    let front = [x + dx, y + dy, z + dz];
-    let side = Some(event.facing.opposite());
+    enum Aborted {
+        NoTransfer,
+        Refused(crate::LevelWriteError),
+    }
+
     let stack = event.stack.clone();
-    let moved = host.transaction(|host, tx| {
-        let copy = host
-            .scratch_slots(tx, stack.clone())
-            .ok()
-            .flatten()
-            .ok_or(())?;
-        // The container's handler sees one container at a time, whatever the stack.
-        let one = ItemPlace::OneByOne(Box::new(copy.clone()));
-        let item = one.capability(host, &ITEM_FLUIDS).ok_or(())?;
-        let transferred = try_pickup_fluid(host, &item, None, level, front, side).is_some()
-            || try_place_fluid(host, &item, None, level, front, false).is_some();
-        match transferred {
-            true => host.scratch_take_slots(tx, &copy).ok_or(()),
-            false => Err(()),
+    let execute = |host: &mut dyn ServerHost| {
+        use crate::LevelWriteError;
+        let level = host
+            .level(event.dimension)
+            .ok_or(LevelWriteError::Unavailable)?;
+        let source = host
+            .block_entity(level, event.pos)
+            .filter(|source| {
+                source.kind(host).and_then(|kind| kind.id(host)) == Some("minecraft:dispenser")
+            })
+            .ok_or(LevelWriteError::InvalidDispenser)?;
+        let [x, y, z] = event.pos;
+        let [dx, dy, dz] = event.facing.normal();
+        let front = [x.wrapping_add(dx), y.wrapping_add(dy), z.wrapping_add(dz)];
+        let side = Some(event.facing.opposite());
+        let moved = host.transaction(|host, tx| {
+            let copy = host
+                .scratch_slots(tx, stack.clone())
+                .ok()
+                .flatten()
+                .ok_or(Aborted::Refused(LevelWriteError::Unavailable))?;
+            // The container's handler sees one container at a time, whatever the stack.
+            let one = ItemPlace::OneByOne(Box::new(copy.clone()));
+            let item = one
+                .capability(host, &ITEM_FLUIDS)
+                .ok_or(Aborted::NoTransfer)?;
+            let transferred = try_pickup_fluid(host, &item, None, level, front, side).is_some()
+                || try_place_fluid(host, &item, None, level, front, false).is_some();
+            if !transferred {
+                return Err(Aborted::NoTransfer);
+            }
+            let (first, overflow) = host
+                .scratch_take_slots(tx, &copy)
+                .ok_or(Aborted::Refused(LevelWriteError::Unavailable))?;
+            // Capability code can replace the source while transferring. Require the same
+            // live holder even when the result only replaces the selected slot.
+            if host.block_entity(level, event.pos) != Some(source) {
+                return Err(Aborted::Refused(LevelWriteError::InvalidDispenser));
+            }
+            match overflow {
+                Some(changed) => level
+                    .dispense_with_remainder(host, event.pos, event.facing, stack.clone(), changed)
+                    .map_err(Aborted::Refused),
+                None => Ok(first),
+            }
+        });
+        match moved {
+            Ok(left) => Ok(left),
+            Err(Aborted::NoTransfer) => {
+                level.dispense_default(host, event.pos, event.facing, stack.clone())
+            }
+            Err(Aborted::Refused(error)) => Err(error),
         }
-    });
-    let left = match moved {
-        // The changed container went into the first slot: a single one, replaced in place.
-        Ok((first, None)) => Ok(first),
-        Ok((_, Some(changed))) => {
-            host.dispense_with_remainder(event.dimension, event.pos, event.facing, stack, changed)
-        }
-        Err(()) => host.dispense_default(event.dimension, event.pos, event.facing, stack),
     };
-    Some((left.ok()?, 1000))
+    Some(match execute(host) {
+        Ok(left) => (left, 1000),
+        Err(error) => {
+            let owner = crate::content::crash::current_native_mod().unwrap_or("?");
+            log::warn!(
+                "mod {owner}: dispense_container at {} {:?}: {error:?}",
+                event.dimension,
+                event.pos
+            );
+            (Some(stack), 1001)
+        }
+    })
 }
 
 /// `FluidUtil.getFirstStackContained`: what the fluid container at `place` holds at its first

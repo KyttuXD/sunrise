@@ -62,6 +62,10 @@ impl Hooks for Containers {
     }
 }
 
+thread_local! {
+    static REPLACE_SOURCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// An empty glass bottle a bucket of water turns into a potion: a mod's handler that acts on
 /// every container its place shows, as one written for a single container may.
 struct Jug(ItemPlace);
@@ -92,6 +96,16 @@ impl ResourceHandler<FluidResource> for Jug {
         let potion = mod_api::__private::item_key("minecraft:potion").unwrap();
         let potion = ItemResource::of(&mod_api::ItemStack::new(potion, 1).unwrap());
         let all = self.0.amount(host);
+        if REPLACE_SOURCE.replace(false) {
+            let level = host.level("minecraft:overworld").unwrap();
+            let air = host
+                .block_state_default(host.block_key("minecraft:air").unwrap())
+                .unwrap();
+            assert_eq!(
+                level.set_block(host, DISPENSER, air, BlockUpdateFlags::NONE),
+                Ok(true)
+            );
+        }
         match self.0.exchange(host, tx, &potion, all) == all {
             true => 1000,
             false => 0,
@@ -163,6 +177,125 @@ fn item(stack: &Option<ItemStack>) -> Option<(String, u32)> {
     stack
         .as_ref()
         .map(|stack| (stack.item.to_string(), stack.count))
+}
+
+#[test]
+#[ignore = "daily"]
+fn dispenser_writes_follow_the_parked_level_handle() {
+    use crate::game::{Dim, native_entity_refs::tests::run_fresh_cases};
+
+    if run_fresh_cases(
+        "game::dispense_container_tests::dispenser_writes_follow_the_parked_level_handle",
+        "SUNRISE_DISPENSE_ROUTE_CHILD",
+        &["parked"],
+    ) {
+        return;
+    }
+    with_dispenser(|game, level| {
+        let key = game
+            .item_key(&Identifier::parse("minecraft:bucket").unwrap())
+            .unwrap();
+        let filled = game
+            .item_key(&Identifier::parse("minecraft:water_bucket").unwrap())
+            .unwrap();
+        let stack = mod_api::ItemStack::new(key, 2).unwrap();
+        let remainder = mod_api::ItemStack::of(filled);
+        game.enter_command_level(Dim::Nether).unwrap();
+        assert_eq!(
+            level.dispense_default(game, [32, 64, 32], Direction::East, stack.clone()),
+            Err(LevelWriteError::InvalidDispenser)
+        );
+        assert_eq!(
+            level.dispense_with_remainder(
+                game,
+                [32, 64, 32],
+                Direction::East,
+                stack.clone(),
+                remainder.clone()
+            ),
+            Err(LevelWriteError::InvalidDispenser)
+        );
+        let chest_at = [8, 64, 8];
+        let chest = state(game, "minecraft:chest");
+        assert_eq!(
+            game.level_set_block(level, chest_at, chest, BlockUpdateFlags::NONE),
+            Ok(true)
+        );
+        assert_eq!(
+            level.dispense_with_remainder(
+                game,
+                chest_at,
+                Direction::East,
+                stack.clone(),
+                remainder.clone()
+            ),
+            Err(LevelWriteError::InvalidDispenser)
+        );
+        assert_eq!(
+            level.dispense_default(game, chest_at, Direction::East, stack.clone()),
+            Err(LevelWriteError::InvalidDispenser)
+        );
+        let left = level
+            .dispense_default(game, DISPENSER, Direction::East, stack.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!((left.item(), left.count()), (key, 1));
+        let left = level
+            .dispense_with_remainder(game, DISPENSER, Direction::East, stack, remainder)
+            .unwrap()
+            .unwrap();
+        assert_eq!((left.item(), left.count()), (key, 1));
+        assert_eq!(game.dim, Dim::Nether);
+        assert!(game.dropped.is_empty());
+
+        game.enter_command_level(Dim::Overworld).unwrap();
+        assert_eq!(game.dropped.len(), 1);
+        assert_eq!(&*game.dropped[0].stack.item, "minecraft:bucket");
+        let dispenser = game
+            .world
+            .block_entities
+            .get(&(DISPENSER[0], DISPENSER[1], DISPENSER[2]))
+            .unwrap();
+        assert_eq!(
+            item(&dispenser.slots()[0]),
+            Some(("minecraft:water_bucket".into(), 1))
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_replaced_dispenser_aborts_the_fluid_transfer_without_a_second_dispense() {
+    with_dispenser(|game, level| {
+        use sunrise_core::position::BlockPos;
+
+        set_front(game, "minecraft:water");
+        let dispenser = game.block_entity(level, DISPENSER).unwrap();
+        let [x, y, z] = DISPENSER;
+        let pos = (x, y, z);
+        let stack = ItemStack::new("minecraft:glass_bottle", 2);
+        game.world.block_entities.get_mut(&pos).unwrap().slots_mut()[0] = Some(stack.clone());
+
+        REPLACE_SOURCE.set(true);
+        dispense_fixture::start_recording();
+        game.dispense_from(BlockPos::new(x, y, z), game.world.block(x, y, z))
+            .unwrap();
+        let lines = dispense_fixture::stop_recording();
+        assert_eq!(game.block_entity(level, DISPENSER), Some(dispenser));
+        assert_eq!(front(game), state(game, "minecraft:water"));
+        let slots = game.world.block_entities.get(&pos).unwrap().slots();
+        assert_eq!(slots[0], Some(stack));
+        assert!(slots[1..].iter().all(Option::is_none));
+        assert!(game.dropped.is_empty());
+        assert!(
+            lines.iter().any(|line| line.starts_with("L 1001 ")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.starts_with("L 1000 ")),
+            "{lines:?}"
+        );
+    });
 }
 
 #[test]

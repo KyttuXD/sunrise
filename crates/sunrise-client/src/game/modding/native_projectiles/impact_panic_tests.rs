@@ -46,14 +46,15 @@ impl Hooks for PanicAfterAdmission {
             // Hook dispatch now contains the panic. The callback's own transaction
             // still has to abort its tentative spawn before dispatch resumes.
             let _: Result<(), ()> = host.transaction(|host, _| {
-                let spawned = host.summon(
-                    event.dimension,
+                let level = host.level(event.dimension).unwrap();
+                let spawned = level.summon(
+                    host,
                     "minecraft:snowball",
                     [9.5, 70.0, 0.5],
                     Default::default(),
                 );
                 assert!(
-                    spawned.is_some(),
+                    spawned.unwrap().is_some(),
                     "the tentative spawn must exist to roll back"
                 );
                 self.panicked.store(true, Ordering::SeqCst);

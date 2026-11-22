@@ -660,3 +660,17 @@ impl<'a> From<ContainerLootFilled<'a>> for super::ContainerLootFilled<'a> {
         }
     }
 }
+
+// exhaustive: the game builds it with a literal; mods only read it
+// no wire: borrowed game-to-hook adapter; call-scoped observation view.
+pub struct StructureTemplateBlockView<'a> {
+    pub pos: [i32; 3],
+    pub state: BlockState,
+    pub nbt: Option<&'a Compound>,
+}
+impl<'a> From<StructureTemplateBlockView<'a>> for super::StructureTemplateBlockView<'a> {
+    fn from(v: StructureTemplateBlockView<'a>) -> Self {
+        let StructureTemplateBlockView { pos, state, nbt } = v;
+        Self { pos, state, nbt }
+    }
+}

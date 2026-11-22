@@ -28,7 +28,7 @@ pub enum RecipeBookLayout {
         result: u16,
     },
     /// The menu's placement is answered by the mod: the `recipe_book_place` hook of its
-    /// `MenuPart`, with `ServerHost::place_recipe_in_grid` as vanilla's placer. The roles are the
+    /// `MenuPart`, with `MenuRef::place_recipe_in_grid` as vanilla's placer. The roles are the
     /// mod's own, so none is declared or checked here, and the game maps no display to a slot.
     Mod,
 }

@@ -113,7 +113,7 @@ impl Game<'_> {
             return Err(MenuSlotBackRefusal::UnsupportedMenu);
         }
         let menu = self
-            .menu(uuid, window)
+            .native_menu_ref(uuid, window)
             .ok_or(MenuSlotBackRefusal::NoPlayerOrWindow)?;
         if places.len() > size {
             return Err(MenuSlotBackRefusal::TooManyPlaces);
@@ -184,7 +184,7 @@ impl Game<'_> {
             return Ok(());
         }
         if count > 0 {
-            self.refresh_menu_places(conn, uuid, menu);
+            self.refresh_menu_places(conn, menu);
         }
         if before > count
             && let Some(lan) = self.lan.as_mut()
@@ -257,7 +257,7 @@ impl Game<'_> {
     /// container sync sends; closes the menu, as a gone block entity's, once a place stops
     /// resolving or a held place's stack is no longer the bound one. False when it closed or was
     /// not open.
-    fn refresh_menu_places(&mut self, conn: u32, uuid: u128, menu: MenuRef) -> bool {
+    fn refresh_menu_places(&mut self, conn: u32, menu: MenuRef) -> bool {
         let Some((window, count, _)) = self.menu_places_of(conn) else {
             return false;
         };
@@ -291,7 +291,11 @@ impl Game<'_> {
         }
         if !open {
             self.forget_menu_places(conn);
-            self.close_menu(uuid);
+            if let Some(guest) = self.lan.as_ref().and_then(|host| host.hub.guest(conn))
+                && let Some(open) = guest.menu.as_ref().filter(|m| m.slots == Slots::Native)
+            {
+                self.request_menu_close(conn, open.window, guest.menu_generation);
+            }
         }
         open
     }
@@ -362,9 +366,9 @@ impl Game<'_> {
             return;
         };
         backed.noticed = false;
-        match self.menu(uuid, window) {
+        match self.native_menu_ref(uuid, window) {
             Some(menu) => {
-                self.refresh_menu_places(conn, uuid, menu);
+                self.refresh_menu_places(conn, menu);
             }
             None => self.forget_menu_places(conn),
         }
@@ -407,7 +411,7 @@ impl Game<'_> {
         if backed_window != window {
             return None;
         }
-        let menu = self.menu(uuid, window)?;
+        let menu = self.native_menu_ref(uuid, window)?;
         if !self.held_places_bound(conn, menu.fields().player) {
             self.reply_menu_click(conn, ClickReply::Close(window));
             return Some(true);
@@ -482,8 +486,8 @@ impl Game<'_> {
         menu: MenuRef,
         window: i32,
     ) {
-        if self.menu(uuid, window) == Some(menu)
-            && (self.menu_places_of(conn).is_none() || self.refresh_menu_places(conn, uuid, menu))
+        if self.native_menu_ref(uuid, window) == Some(menu)
+            && (self.menu_places_of(conn).is_none() || self.refresh_menu_places(conn, menu))
         {
             self.reply_menu_click(conn, super::lan_menus::ClickReply::Resend(window));
         }
@@ -656,16 +660,18 @@ mod tests {
 
     /// A 27-slot mod chest menu opened for guest 1: its window.
     fn open_pack(game: &mut Game<'_>) -> i32 {
+        let player = game.player(123).unwrap();
         let host: &mut dyn ServerHost = game;
-        host.open_menu(
-            123,
-            3,
-            mod_api::Text::literal("pack"),
-            Vec::new(),
-            MenuReplace::CloseFirst,
-        )
-        .unwrap()
-        .unwrap()
+        player
+            .open_chest_menu(
+                host,
+                3,
+                mod_api::Text::literal("pack"),
+                Vec::new(),
+                MenuReplace::CloseFirst,
+            )
+            .unwrap()
+            .unwrap()
     }
 
     /// [`backpack_guest`] with the menu open: its window.
@@ -689,13 +695,13 @@ mod tests {
     fn a_shift_click_into_a_held_backpack_writes_through_its_handler() {
         with_game(|game| {
             let window = backpack_menu(game);
+            let player = game.player(123).unwrap();
             let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
+            let menu = player.menu(host, window).unwrap().unwrap();
             // Unbacked, the menu is the mod's own, as before.
             assert_eq!(menu.slot_backing(host, 0), Some(MenuSlotBacking::Native(0)));
             assert_eq!(game.place_menu_click(123, window, 27, 0, 1), None);
 
-            let player = menu.fields().player;
             let places: Vec<_> = (0..27)
                 .map(|slot| MenuSlotPlace::HeldItem {
                     hand: Hand::Main,
@@ -746,7 +752,7 @@ mod tests {
             assert_eq!(taken, Ok(1));
             game.run_native_menu_events();
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, window), None);
+            assert_eq!(player.menu(host, window), Ok(None));
         });
     }
 
@@ -787,9 +793,9 @@ mod tests {
     fn un_backing_or_shortening_empties_the_mirrored_slots_and_keeps_the_items_once() {
         with_game(|game| {
             let window = backpack_menu(game);
+            let player = game.player(123).unwrap();
             let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
-            let player = menu.fields().player;
+            let menu = player.menu(host, window).unwrap().unwrap();
             let places = held_places(Hand::Main, 0..27);
             assert_eq!(
                 game.player_back_mod_menu_slots(player, window, places),
@@ -827,9 +833,7 @@ mod tests {
     fn a_backing_names_why_it_refuses() {
         with_game(|game| {
             let window = backpack_menu(game);
-            let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
-            let player = menu.fields().player;
+            let player = game.player(123).unwrap();
             let back = |game: &mut Game<'_>, places| {
                 game.player_back_mod_menu_slots(player, window, places)
             };
@@ -846,7 +850,7 @@ mod tests {
             );
             assert_eq!(back(game, held_places(Hand::Main, 0..1)), Ok(()));
             let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
+            let menu = player.menu(host, window).unwrap().unwrap();
             assert!(matches!(
                 menu.slot_backing(host, 0),
                 Some(MenuSlotBacking::Place(_))
@@ -885,9 +889,7 @@ mod tests {
     fn a_write_into_the_box_is_mirrored_at_its_notice() {
         with_game(|game| {
             let window = backpack_menu(game);
-            let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
-            let player = menu.fields().player;
+            let player = game.player(123).unwrap();
             let places = held_places(Hand::Main, 0..27);
             assert_eq!(
                 game.player_back_mod_menu_slots(player, window, places),
@@ -977,8 +979,9 @@ mod tests {
             assert_eq!(shown(game), None, "mirrored after the turn, not inside it");
             game.run_native_menu_events();
             assert_eq!(shown(game), Some(5));
+            let player = game.player(123).unwrap();
             let host: &mut dyn ServerHost = game;
-            assert!(host.menu(123, window).is_some());
+            assert!(player.menu(host, window).unwrap().is_some());
 
             // The box bound is the one the player held in that turn: another box selected, the
             // next click closes the menu and moves nothing.
@@ -988,7 +991,7 @@ mod tests {
             });
             assert_eq!(game.place_menu_click(123, window, 27, 0, 1), Some(true));
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, window), None);
+            assert_eq!(player.menu(host, window), Ok(None));
             let carried = ItemPlace::PlayerSlot {
                 player: 123,
                 slot: 9,
@@ -1057,9 +1060,7 @@ mod tests {
             if hand == Hand::Off {
                 edit_guest(game, |g| g.offhand = g.inventory[0].take());
             }
-            let host: &mut dyn ServerHost = game;
-            let menu = host.menu(123, window).unwrap();
-            let player = menu.fields().player;
+            let player = game.player(123).unwrap();
             let places = held_places(hand, 0..27);
             assert_eq!(
                 game.player_back_mod_menu_slots(player, window, places),
@@ -1068,7 +1069,7 @@ mod tests {
             edit_guest(game, replace);
             assert_eq!(game.place_menu_click(123, window, 27, 0, 1), Some(true));
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.menu(123, window), None);
+            assert_eq!(player.menu(host, window), Ok(None));
             let carried = ItemPlace::PlayerSlot {
                 player: 123,
                 slot: 9,
@@ -1224,7 +1225,10 @@ mod tests {
             .unwrap();
         // The handle and the backing stay usable.
         let host: &mut dyn ServerHost = game;
-        let menu = host.menu(123, window).expect("the menu's handle");
+        let menu = player
+            .menu(host, window)
+            .unwrap()
+            .expect("the menu's handle");
         assert_eq!(
             game.player_back_mod_menu_slots(player, window, held_places(Hand::Main, 0..9)),
             Ok(())

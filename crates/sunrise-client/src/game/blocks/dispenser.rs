@@ -6,7 +6,7 @@
 use super::api_values::TryIntoApi;
 use super::level_sounds::LevelSound;
 use super::{Game, item_abilities::ability};
-use mod_api::SoundSource;
+use mod_api::{LevelRef, LevelWriteError, SoundSource};
 use sunrise_client::{
     Result,
     collisions::SceneCollisions,
@@ -124,6 +124,10 @@ impl Game<'_> {
     /// The dispenser level events: 1000 click, 1001 fail, 1002 launch, 1004
     /// firework shoot, 1018 blaze shoot and 2000 smoke shot out of the front.
     pub(super) fn dispenser_event(&mut self, id: i32, pos: Pos, data: i32) {
+        if !self.transactions.is_empty() {
+            self.after_commit(super::transactions::After::DispenseEvent(id, pos, data));
+            return;
+        }
         super::dispense_fixture::record(|| format!("L {id} {},{},{} {data}", pos.0, pos.1, pos.2));
         let c = Self::center(pos);
         match id {
@@ -257,46 +261,63 @@ impl Game<'_> {
         self.spawn_dispensed(pos, facing, one, 6);
         (stack.count > 0).then_some(stack)
     }
-    /// Drop one item as DefaultDispenseItemBehavior does. For a dispenser hook:
-    /// return this remainder in its answer with `CLICK`; the caller plays the
-    /// answer's event and smoke once. A client, another dimension or an unloaded
-    /// chunk keeps the input stack unchanged.
-    pub(super) fn dispense_default(
-        &mut self,
-        dimension: &str,
-        pos: [i32; 3],
-        facing: Direction,
-        stack: ItemStack,
-    ) -> Option<ItemStack> {
-        if !(self.serving.is_some() || self.options.dedicated.is_some())
-            || dimension != self.dim.id()
-            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
+    /// Sunrise represents a DispenserBlockEntity as the dispenser state and a slot holder.
+    pub(super) fn dispenser_source(&self, pos: Pos) -> Option<u64> {
+        if !self.world.loaded(pos.0, pos.2)
+            || self.dispenser_block_name(pos).as_ref() != "minecraft:dispenser"
+            || !matches!(self.world.block_entities.get(&pos), Some(holder @ BlockEntity::Chest(_)) if holder.fits("minecraft:dispenser"))
         {
-            return Some(stack);
-        }
-        if stack.count == 0 {
             return None;
         }
-        self.default_execute((pos[0], pos[1], pos[2]), facing, stack)
+        self.world.block_entities.generation(&pos)
     }
-    /// `dispense_with_remainder`: `consume_with_remainder` for a mod's dispense answer, in the
-    /// level in place; `stack` unchanged off it, as `dispense_default` keeps it.
-    pub(super) fn dispense_with_remainder(
+
+    pub(super) fn level_dispense_default(
         &mut self,
-        dimension: &str,
-        pos: [i32; 3],
+        level: LevelRef,
+        [x, y, z]: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+    ) -> std::result::Result<Option<ItemStack>, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            Some(LevelWriteError::InTransaction),
+            |game| {
+                let pos = (x, y, z);
+                game.dispenser_source(pos)
+                    .ok_or(LevelWriteError::InvalidDispenser)?;
+                Ok((stack.count != 0)
+                    .then(|| game.default_execute(pos, facing, stack))
+                    .flatten())
+            },
+        )
+    }
+
+    pub(super) fn level_dispense_with_remainder(
+        &mut self,
+        level: LevelRef,
+        [x, y, z]: [i32; 3],
         facing: Direction,
         stack: ItemStack,
         remainder: ItemStack,
-    ) -> Option<ItemStack> {
-        if !(self.serving.is_some() || self.options.dedicated.is_some())
-            || dimension != self.dim.id()
-            || !self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4))
-            || stack.count == 0
-        {
-            return Some(stack).filter(|stack| stack.count > 0);
-        }
-        self.consume_with_remainder((pos[0], pos[1], pos[2]), facing, stack, remainder)
+    ) -> std::result::Result<Option<ItemStack>, LevelWriteError> {
+        self.with_server_level_mut(
+            level,
+            LevelWriteError::Unavailable,
+            LevelWriteError::Stale,
+            Some(LevelWriteError::InTransaction),
+            |game| {
+                let pos = (x, y, z);
+                game.dispenser_source(pos)
+                    .ok_or(LevelWriteError::InvalidDispenser)?;
+                if stack.count == 0 {
+                    return Ok(None);
+                }
+                Ok(game.consume_with_remainder(pos, facing, stack, remainder))
+            },
+        )
     }
     /// `new DefaultDispenseItemBehavior().dispense(..)` including its events.
     pub(super) fn dispense_default_in_level(
@@ -324,41 +345,59 @@ impl Game<'_> {
             return Some(remainder);
         }
         let mut rest = remainder;
-        if let Some(entity) = self.world.block_entities.get_mut(&pos) {
-            let max = self
-                .res
-                .items()
-                .get(&rest.item)
-                .map_or(64, |i| i.max_stack)
-                .max(1);
-            for slot in 0..entity.slots().len() {
-                let existing = &entity.slots()[slot];
-                if existing
-                    .as_ref()
-                    .is_some_and(|item| !item.same_item_same_components(&rest))
-                {
-                    continue;
+        let max = self
+            .res
+            .items()
+            .get(&rest.item)
+            .map_or(64, |i| i.max_stack)
+            .max(1);
+        let slots = self
+            .world
+            .block_entities
+            .get(&pos)
+            .map_or(0, |entity| entity.slots().len());
+        let mut inserted = false;
+        for slot in 0..slots {
+            let existing = &self.world.block_entities.get(&pos).unwrap().slots()[slot];
+            let capacity = match existing {
+                None => max,
+                Some(item) if item.same_item_same_components(&rest) => {
+                    max.saturating_sub(item.count)
                 }
-                let cell = entity.slot_mut(slot).unwrap();
-                match cell {
-                    None => {
-                        let n = rest.count.min(max);
-                        *cell = Some(ItemStack {
-                            count: n,
-                            ..rest.clone()
-                        });
-                        rest.count -= n;
-                    }
-                    Some(e) => {
-                        let n = rest.count.min(max.saturating_sub(e.count));
-                        e.count += n;
-                        rest.count -= n;
-                    }
-                }
-                if rest.count == 0 {
-                    break;
-                }
+                Some(_) => 0,
+            };
+            let n = rest.count.min(capacity);
+            if n == 0 {
+                continue;
             }
+            if !self.transactions.is_empty() {
+                self.journal_block_entity_slot(pos, slot);
+            }
+            let cell = self
+                .world
+                .block_entities
+                .get_mut(&pos)
+                .unwrap()
+                .slot_mut(slot)
+                .unwrap();
+            match cell {
+                None => {
+                    *cell = Some(ItemStack {
+                        count: n,
+                        ..rest.clone()
+                    })
+                }
+                Some(item) => item.count += n,
+            }
+            rest.count -= n;
+            inserted = true;
+            if rest.count == 0 {
+                break;
+            }
+        }
+        if inserted {
+            self.journal_chunk_save((pos.0 >> 4, pos.2 >> 4));
+            self.after_commit(super::transactions::After::Changed(pos));
         }
         if rest.count > 0 {
             self.spawn_dispensed(pos, facing, rest, 6);
@@ -375,16 +414,38 @@ impl Game<'_> {
 
     // ---- the registry ----
 
-    /// `DispenserBlock.getDispenseMethod(..).dispense(source, stack)`: what the
-    /// slot holds afterwards.
+    #[cfg(test)]
     pub(super) fn dispense_item(
         &mut self,
         pos: Pos,
         facing: Direction,
         stack: ItemStack,
     ) -> Result<Option<ItemStack>> {
+        self.dispense_item_from(pos, facing, stack, None)
+            .map(|(left, _)| left)
+    }
+
+    /// `DispenserBlock.getDispenseMethod(..).dispense(source, stack)`: the slot's resulting
+    /// stack and whether the source path has already applied it. A native answer joins the
+    /// same transaction as its writes, rather than returning an uncommitted slot update.
+    pub(super) fn dispense_item_from(
+        &mut self,
+        pos: Pos,
+        facing: Direction,
+        stack: ItemStack,
+        source: Option<(usize, u64)>,
+    ) -> Result<(Option<ItemStack>, bool)> {
         let mut answer = None;
+        let mut tx = None;
         let block_reply_state = if self.serving.is_some() || self.options.dedicated.is_some() {
+            if source.is_some()
+                && (mod_api::__private::listened(mod_api::HookId::DispenseItem)
+                    || mod_api::__private::listened(mod_api::HookId::DispenseMethod)
+                    || mod_api::__private::has_scoped_hook(mod_api::HookId::DispenseItem)
+                    || mod_api::__private::has_scoped_hook(mod_api::HookId::DispenseMethod))
+            {
+                tx = Some(self.transaction_open());
+            }
             // The block the dispenser faces has the first say (`dispense_method`), then the
             // item's own part (`dispense_item`); the first answer wins.
             let front = self.block_at(offset(pos, facing));
@@ -399,7 +460,10 @@ impl Game<'_> {
                 &mut inert,
             );
             if inert {
-                return Ok(Some(stack));
+                if let Some(tx) = tx {
+                    self.transaction_close(&tx, false);
+                }
+                return Ok((Some(stack), source.is_some()));
             }
             if answer.is_some() {
                 Some(front)
@@ -417,6 +481,36 @@ impl Game<'_> {
             None
         };
         if let Some((left, event)) = mod_dispensed(answer, self.items()) {
+            if let Some((slot, generation)) = source {
+                if self.dispenser_source(pos) != Some(generation) {
+                    if let Some(tx) = tx {
+                        self.transaction_close(&tx, false);
+                    }
+                    log::warn!(
+                        "dispenser at {pos:?}: the source holder changed during its native behavior"
+                    );
+                    return Ok((Some(stack), true));
+                }
+                self.journal_block_entity_slot(pos, slot);
+                let cell = self
+                    .world
+                    .block_entities
+                    .get_mut(&pos)
+                    .and_then(|holder| holder.slot_mut(slot));
+                let Some(cell) = cell else {
+                    if let Some(tx) = tx {
+                        self.transaction_close(&tx, false);
+                    }
+                    log::warn!("dispenser at {pos:?}: the selected slot no longer exists");
+                    return Ok((Some(stack), true));
+                };
+                *cell = left.clone();
+                self.journal_chunk_save((pos.0 >> 4, pos.2 >> 4));
+                self.after_commit(super::transactions::After::Changed(pos));
+            }
+            if let Some(tx) = tx {
+                self.transaction_close(&tx, true);
+            }
             if event == FAIL {
                 self.native_block_failed_dispense(
                     self.dim.id(),
@@ -430,7 +524,10 @@ impl Game<'_> {
                 self.dispenser_event(event, pos, 0);
                 self.dispenser_event(2000, pos, data_value(facing));
             }
-            return Ok(left);
+            return Ok((left, source.is_some()));
+        }
+        if let Some(tx) = tx {
+            self.transaction_close(&tx, true);
         }
         // A rejected block reply may have short-circuited dispatch before the disabled owner.
         // In that case keep the owner's inert fallback, not vanilla's dispenser behaviour.
@@ -440,7 +537,7 @@ impl Game<'_> {
                 mod_api::__private::block_hook_inert(mod_api::HookId::DispenseMethod, state)
             })
         {
-            return Ok(Some(stack));
+            return Ok((Some(stack), source.is_some()));
         }
         let item = stack.item.to_string();
         // A stack able to `shears_harvest` is dispensed as shears are, whatever its item.
@@ -501,7 +598,7 @@ impl Game<'_> {
         }
         self.dispenser_event(event, pos, 0);
         self.dispenser_event(2000, pos, data_value(facing));
-        Ok(left)
+        Ok((left, false))
     }
     /// `DispenserBlock.getDefaultDispenseMethod`: equipment, spawn eggs, or a drop.
     fn dispense_default_method(

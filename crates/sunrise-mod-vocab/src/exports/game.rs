@@ -3,8 +3,8 @@
 pub mod game;
 pub use crate::game::{
     BlockEdit, BlockRun, Clock, ColumnSlice, Config, ConfigFile, ConfigKind, CubeFace, DataMapType,
-    ExperienceOrb, Falling, Heightmap, Hit, MapDecoration, MapInfo, MobRender, ModMismatch,
-    ModMismatchResolution, PhantomSpawnResult, PlayerRender, Shake, SleepProblem,
+    Falling, Heightmap, Hit, MapDecoration, MapInfo, MobRender, ModMismatch, ModMismatchResolution,
+    PhantomSpawnResult, PlayerRender, Shake, SleepProblem,
 };
 pub use crate::game::{NbtUpgradeError, TerrainColumn};
 mod __private {

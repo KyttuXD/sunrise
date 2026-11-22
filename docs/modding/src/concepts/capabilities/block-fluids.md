@@ -132,6 +132,12 @@ stack. It always tries
 and places with `try_place_fluid` (unvalidated, as a bucket) only where nothing was picked up.
 A single container is replaced in its slot. From a larger stack the slot keeps the rest and the
 changed container goes into the dispenser's other slots, else out of its front with a second
-click (`host.dispense_with_remainder`). The fluid's sound and game event come before the
-dispenser's click and smoke. Where neither moves anything, nothing changes and one unchanged
-container is dispensed as `DefaultDispenseItemBehavior` does.
+click (`level.dispense_with_remainder(host, pos, facing, stack, remainder)`). The fluid's
+sound and game event come before the dispenser's click and smoke. Where neither moves anything,
+`level.dispense_default(host, pos, facing, stack)` drops one unchanged container as
+`DefaultDispenseItemBehavior` does. Both methods return the stack left in the dispenser's
+slot or a typed `LevelWriteError`; resolve the dispenser's level with
+`host.level(event.dimension)`. A missing or mismatched holder yields
+`InvalidDispenser`. The fluid transfer and writes to the source and its remainder commit
+together. A refusal leaves the original slot unchanged and plays the dispenser's failure
+event instead of running another behavior.

@@ -335,7 +335,7 @@ fn aborted_block_entity_edits_preserve_a_queued_client_update() {
                 scope
                     .with_view(|mut view| view.set_client_update_fields(waiting.clone()))
                     .unwrap();
-                scope.host().block_entity_sync(AT);
+                assert_eq!(subject.sync(scope.host()), Ok(()));
 
                 let result: Result<(), ()> = scope.transaction(|scope, _| {
                     if replace {
@@ -376,7 +376,7 @@ fn aborted_block_entity_edits_preserve_a_queued_client_update() {
                 );
 
                 // A later sync of the restored entity must not replay either batch.
-                game.block_entity_sync(AT);
+                assert_eq!(subject.sync(game), Ok(()));
                 game.lan
                     .as_mut()
                     .unwrap()
@@ -823,8 +823,8 @@ fn strict_bulk_replacement_aborts_the_block_handle_and_inventory_together() {
             tick.with_view(|mut view| assert_eq!(view.set_item_slot(0, None), Ok(true)))
                 .unwrap();
             let host = tick.host();
-            assert_eq!(host.edit_blocks("minecraft:overworld", &edit), Ok(1));
             let level = host.level("minecraft:overworld").unwrap();
+            assert_eq!(level.edit_blocks(host, &edit), Ok(1));
             assert_ne!(host.block_entity(level, AT), Some(subject));
             assert!(host.block_entity(level, AT).is_some());
             Err(())
@@ -873,11 +873,11 @@ fn strict_bulk_commit_publishes_whole_chunks_without_drops() {
             }],
         };
         game.world.block_log = Some(Vec::new());
+        let level = game.level("minecraft:overworld").unwrap();
         let seal = game.transaction_open();
-        assert_eq!(game.edit_blocks("minecraft:overworld", &edit), Ok(1));
+        assert_eq!(level.edit_blocks(game, &edit), Ok(1));
         assert!(game.world.bulk_log.is_empty());
         game.transaction_close(&seal, true);
-        let level = game.level("minecraft:overworld").unwrap();
         assert_eq!(game.world.block(POS.0, POS.1, POS.2), chest);
         let resident = game.block_entity(level, AT).unwrap();
         assert_ne!(resident, subject);
@@ -942,7 +942,7 @@ fn ordinary_replacement_between_strict_edits_uses_its_own_resident_row() {
 
         let seal = game.transaction_open();
         if strict_first {
-            assert_eq!(game.edit_blocks("minecraft:overworld", &edit), Ok(1));
+            assert_eq!(level.edit_blocks(game, &edit), Ok(1));
             game.world.block_entities.get_mut(&POS).unwrap().slots_mut()[0] =
                 Some(chest_stack.clone());
         }
@@ -950,7 +950,7 @@ fn ordinary_replacement_between_strict_edits_uses_its_own_resident_row() {
             game.level_set_block(level, AT, glass, BlockUpdateFlags::KNOWN_SHAPE),
             Ok(true)
         );
-        assert_eq!(game.edit_blocks("minecraft:overworld", &edit), Ok(1));
+        assert_eq!(level.edit_blocks(game, &edit), Ok(1));
         let last_chest = game.block_entity(level, AT).unwrap();
         assert_ne!(last_chest, subject);
         game.transaction_close(&seal, true);

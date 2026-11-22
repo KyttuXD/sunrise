@@ -168,6 +168,7 @@ impl OpenTransactions {
             level.block_entities.entry(pos).or_insert_with(|| Kept {
                 entity: Some(BlockEntity::Mod(Box::new(loan.entity.clone()))),
                 client_update_fields: loan.entity.snapshot_client_update_fields(),
+                taken: None,
                 generation: Some(loan.identity.generation),
                 attachments: loan.attachments.cloned(),
                 hopper,
@@ -302,6 +303,8 @@ pub(super) struct StrictBlockStep {
     pub(super) to: BlockStateId,
     // Before the first replacement on this cell; swapped for the new row at commit.
     pub(super) row: Option<Option<RemovedRow>>,
+    /// A strict replacement ends the old block's connection-group lifetime.
+    pub(super) clear_connection_group: bool,
 }
 
 pub(super) type StrictBlockSteps = indexmap::IndexMap<Pos, StrictBlockStep>;
@@ -429,10 +432,11 @@ pub(super) struct Level {
     /// Each entity's, player's, chunk's and the level's attachment map before this transaction
     /// first reached it (a block entity's is kept with it).
     attachments: HashMap<Holder, KeptAttachments>,
-    /// Held once this transaction reaches an attachment map, until it closes: the save
-    /// admission gate (`passes_settled`) refuses a save while a map may hold tentative
-    /// values, which only the root commit makes saveable.
+    /// Held while an attachment map or saved pot holds tentative storage. The save
+    /// admission gate (`passes_settled`) refuses a save until the transaction settles.
     save_gate: Option<sunrise_client::join_seq::visibility::PassLease>,
+    /// Strict edits hold the save gate with their owning level's journal, not its caller's.
+    bulk_save_gate: Option<sunrise_client::join_seq::visibility::PassLease>,
     /// Each chunk's unsaved mark and save queue entry before this transaction first reached an
     /// attachment map in it: an abort puts them back, so a chunk only a tentative write marked
     /// is clean again.
@@ -484,6 +488,7 @@ struct Kept {
     entity: Option<BlockEntity>,
     /// The pre-write batch, stored apart from the entity clone's fresh identity.
     client_update_fields: Option<sunrise_core::nbt::Compound>,
+    taken: Option<sunrise_client::block_entities::TakenLeaseSnapshot>,
     generation: Option<u64>,
     /// None where it had no map: an abort removes one a write made.
     attachments: Option<Attachments>,
@@ -504,6 +509,7 @@ impl Kept {
         let entity = world.block_entities.get(&pos);
         Self {
             entity: entity.cloned(),
+            taken: world.block_entities.taken_lease_snapshot(&pos),
             client_update_fields: match entity {
                 Some(BlockEntity::Mod(entity)) => entity.snapshot_client_update_fields(),
                 _ => None,
@@ -601,6 +607,7 @@ pub(super) enum After {
     /// and the submitting identity for publication errors.
     Packet(sunrise_client::net::PreparedPacket, Option<&'static str>),
     Composter(super::composter::Effects),
+    DispenseEvent(i32, Pos, i32),
     /// A mod's world pickup or placement of fluid, its block already set: what is left of it
     /// (`Game::commit_fluid_write`).
     FluidWrite(Box<super::world_fluids::WrittenFluid>),
@@ -698,6 +705,8 @@ impl After {
             self,
             Self::Block(_)
                 | Self::BulkBlocks(..)
+                | Self::ConnectionGroup(..)
+                | Self::DispenseEvent(..)
                 | Self::Changed(_)
                 | Self::ChangedWithoutHook(_)
                 | Self::QuickMoveChanged(_)
@@ -766,6 +775,8 @@ impl Level {
     }
 
     pub(super) fn keep_bulk_block(&mut self, pos: Pos, state: u32) {
+        self.bulk_save_gate
+            .get_or_insert_with(sunrise_client::join_seq::visibility::PassLease::enter);
         self.blocks
             .entry(pos)
             .and_modify(|kept| kept.strict = true)
@@ -776,7 +787,17 @@ impl Level {
             });
     }
 
+    pub(super) fn keep_bulk_group(&mut self, pos: Pos, group: u64) {
+        self.connection_groups
+            .entry((self.dimension.unwrap(), pos))
+            .or_insert(Some(group));
+    }
+
     fn merge_level_writes(&mut self, child: &mut Self) {
+        self.bulk_save_gate = self.bulk_save_gate.take().or(child.bulk_save_gate.take());
+        for (pos, was) in std::mem::take(&mut child.connection_groups) {
+            self.connection_groups.entry(pos).or_insert(was);
+        }
         // Slots before whole entities: a slot the outer transaction already kept the
         // whole entity of is older there, but one kept whole only by this child is not,
         // so the child's slot entries go up beside its capture.
@@ -1082,6 +1103,8 @@ impl Game<'_> {
                     item_entities: std::mem::take(&mut level.item_entities),
                     general_entities: std::mem::take(&mut level.general_entities),
                     chunk_marks: std::mem::take(&mut level.chunk_marks),
+                    connection_groups: std::mem::take(&mut level.connection_groups),
+                    bulk_save_gate: level.bulk_save_gate.take(),
                     after: level
                         .after
                         .extract_if(.., |after| after.level_owned())
@@ -1108,9 +1131,6 @@ impl Game<'_> {
             (true, Some(outer)) => {
                 outer.actions.merge(level.actions);
                 outer.trades.merge(level.trades);
-                for (pos, was) in level.connection_groups {
-                    outer.connection_groups.entry(pos).or_insert(was);
-                }
                 if let Some(before) = level.level_random {
                     if outer.dimension == level.dimension {
                         outer.keep_level_random(None, || before);
@@ -1875,6 +1895,7 @@ impl Game<'_> {
         }));
         true
     }
+
     /// Hide a replaced block entity from staged reads, without dropping its
     /// contents until the real write. Fluid pickup/pour instead rolls its own
     /// drops against the old entity before journalling the removal.
@@ -2033,6 +2054,7 @@ impl Game<'_> {
             After::Payload(payload) => payload.publish(),
             After::Packet(packet, owner) => self.publish_mod_packet(packet, owner),
             After::Composter(effects) => self.commit_composter_effects(effects),
+            After::DispenseEvent(id, pos, data) => self.dispenser_event(id, pos, data),
             After::FluidWrite(written) => self.commit_fluid_write(*written),
             After::FluidEffects(effects) => self.commit_fluid_effects(*effects),
             After::LevelWrite(write) => self.commit_level_write(*write),
@@ -2375,6 +2397,10 @@ impl Game<'_> {
                                 }
                             }
                         }
+                        if step.clear_connection_group {
+                            explicit_group_since_block.remove(&pos);
+                            self.world.invalidate_replaced_group(pos);
+                        }
                     }
                     self.publish_bulk_edit(publication, tracked, removed);
                 }
@@ -2564,6 +2590,11 @@ impl Game<'_> {
                     if replaced || level.removed_block_entities.contains_key(&pos) =>
                 {
                     self.restore_removed_block_entity(pos, entity, kept.generation.unwrap());
+                }
+                (None, None) if replaced && let Some(taken) = kept.taken => {
+                    let entities = &mut self.world.block_entities;
+                    entities.restore_taken_lease(pos, taken);
+                    entities.reattach_retired(pos, kept.generation.unwrap());
                 }
                 _ => {}
             }
@@ -3836,18 +3867,16 @@ mod tests {
             ("minecraft:donkey", chested),
         ];
         // An aborted write leaves a chested donkey's item list as long as it was.
+        let level = game.level("minecraft:overworld").unwrap();
         let id = game
-            .summon(
-                "minecraft:overworld",
-                "minecraft:donkey",
-                [8.5, 70.0, 8.5],
-                {
-                    let mut chested = sunrise_core::nbt::Compound::new();
-                    chested.insert("ChestedHorse".into(), sunrise_core::nbt::Tag::Byte(1));
-                    chested
-                },
-            )
-            .unwrap();
+            .level_summon(level, "minecraft:donkey", [8.5, 70.0, 8.5], {
+                let mut chested = sunrise_core::nbt::Compound::new();
+                chested.insert("ChestedHorse".into(), sunrise_core::nbt::Tag::Byte(1));
+                chested
+            })
+            .unwrap()
+            .unwrap()
+            .id();
         let len = |game: &Game<'_>| {
             game.mobs
                 .iter()
@@ -3895,8 +3924,10 @@ mod tests {
 
         for (kind, nbt) in vehicles {
             let id = game
-                .summon("minecraft:overworld", kind, [8.5, 70.0, 8.5], nbt)
-                .unwrap_or_else(|| panic!("{kind} not summoned"));
+                .level_summon(level, kind, [8.5, 70.0, 8.5], nbt)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{kind} not summoned"))
+                .id();
             let place = |slot| mod_api::ItemPlace::EntitySlot { entity: id, slot };
             let host: &mut dyn ServerHost = &mut game;
             let went =

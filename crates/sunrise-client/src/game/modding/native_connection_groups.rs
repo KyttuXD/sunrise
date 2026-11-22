@@ -658,10 +658,8 @@ mod tests {
             assert!(game.world.block_log.as_ref().unwrap().is_empty());
             assert!(game.world.connection_group_log.as_ref().unwrap().is_empty());
 
-            // Bulk `ServerHost::edit_blocks` inside `HostTransaction::transaction`: permanent
-            // replacement reconciles the open transaction's restore baseline and drops earlier
-            // deferred group writes so neither commit nor abort resurrects a group on the new
-            // block; writes after the bulk replacement still commit/abort against `None`.
+            // Strict replacements clear the tentative group at the call. On commit they replay
+            // in order with explicit group writes; on abort, both block and group come back.
             let single_replace = |pos: [i32; 3], to: mod_api::BlockState| BlockEdit {
                 palette: vec![to],
                 filters: Vec::new(),
@@ -693,7 +691,7 @@ mod tests {
                         level.set_connection_group(host, [8, 64, 8], Some(2)),
                         Ok(true)
                     );
-                    assert_eq!(host.edit_blocks("minecraft:overworld", &edit_commit), Ok(1));
+                    assert_eq!(level.edit_blocks(host, &edit_commit), Ok(1));
                     assert_eq!(level.connection_group(host, [8, 64, 8]), Ok(None));
                     Ok(())
                 });
@@ -719,13 +717,13 @@ mod tests {
                         level.set_connection_group(host, [9, 64, 9], Some(2)),
                         Ok(true)
                     );
-                    assert_eq!(host.edit_blocks("minecraft:overworld", &edit_abort), Ok(1));
+                    assert_eq!(level.edit_blocks(host, &edit_abort), Ok(1));
                     Err(())
                 });
                 assert_eq!(res, Err(()));
             }
-            assert_eq!(level.block_state(game, [9, 64, 9]), Some(glass));
-            assert_eq!(level.connection_group(game, [9, 64, 9]), Ok(None));
+            assert_eq!(level.block_state(game, [9, 64, 9]), Some(stone));
+            assert_eq!(level.connection_group(game, [9, 64, 9]), Ok(Some(1)));
 
             // Abort after tentative set_connection_group(None) + bulk replace.
             assert_eq!(
@@ -744,19 +742,15 @@ mod tests {
                         level.set_connection_group(host, [10, 64, 10], None),
                         Ok(true)
                     );
-                    assert_eq!(
-                        host.edit_blocks("minecraft:overworld", &edit_tentative_none),
-                        Ok(1)
-                    );
+                    assert_eq!(level.edit_blocks(host, &edit_tentative_none), Ok(1));
                     Err(())
                 });
                 assert_eq!(res, Err(()));
             }
-            assert_eq!(level.block_state(game, [10, 64, 10]), Some(glass));
-            assert_eq!(level.connection_group(game, [10, 64, 10]), Ok(None));
+            assert_eq!(level.block_state(game, [10, 64, 10]), Some(stone));
+            assert_eq!(level.connection_group(game, [10, 64, 10]), Ok(Some(1)));
 
-            // Writing a fresh group AFTER bulk replace in the same transaction commits or aborts
-            // cleanly against the reconciled `None` baseline.
+            // A fresh group AFTER bulk replacement survives commit, but not abort.
             assert_eq!(
                 level.set_block(game, [11, 64, 11], stone, BlockUpdateFlags::NONE),
                 Ok(true)
@@ -773,10 +767,7 @@ mod tests {
                         level.set_connection_group(host, [11, 64, 11], Some(2)),
                         Ok(true)
                     );
-                    assert_eq!(
-                        host.edit_blocks("minecraft:overworld", &edit_after_commit),
-                        Ok(1)
-                    );
+                    assert_eq!(level.edit_blocks(host, &edit_after_commit), Ok(1));
                     assert_eq!(
                         level.set_connection_group(host, [11, 64, 11], Some(3)),
                         Ok(true)
@@ -804,10 +795,7 @@ mod tests {
                         level.set_connection_group(host, [12, 64, 12], Some(2)),
                         Ok(true)
                     );
-                    assert_eq!(
-                        host.edit_blocks("minecraft:overworld", &edit_after_abort),
-                        Ok(1)
-                    );
+                    assert_eq!(level.edit_blocks(host, &edit_after_abort), Ok(1));
                     assert_eq!(
                         level.set_connection_group(host, [12, 64, 12], Some(3)),
                         Ok(true)
@@ -816,11 +804,10 @@ mod tests {
                 });
                 assert_eq!(res, Err(()));
             }
-            assert_eq!(level.block_state(game, [12, 64, 12]), Some(glass));
-            assert_eq!(level.connection_group(game, [12, 64, 12]), Ok(None));
+            assert_eq!(level.block_state(game, [12, 64, 12]), Some(stone));
+            assert_eq!(level.connection_group(game, [12, 64, 12]), Ok(Some(1)));
 
-            // A nested bulk round-trip still replaces the block twice. At edit time the
-            // inner transaction has hidden the group, but neither abort may revive it.
+            // A nested bulk round-trip cannot erase an enclosing frame's rollback baseline.
             let pos = [13, 64, 13];
             assert_eq!(
                 level.set_block(game, pos, stone, BlockUpdateFlags::NONE),
@@ -838,12 +825,12 @@ mod tests {
             let inner = game.transaction_open();
             assert_eq!(level.set_connection_group(game, pos, None), Ok(true));
             let host: &mut dyn ServerHost = game;
-            assert_eq!(host.edit_blocks("minecraft:overworld", &round_trip), Ok(2));
+            assert_eq!(level.edit_blocks(host, &round_trip), Ok(2));
             game.transaction_close(&inner, false);
             assert_eq!(level.connection_group(game, pos), Ok(None));
             game.transaction_close(&outer, false);
             assert_eq!(level.block_state(game, pos), Some(stone));
-            assert_eq!(level.connection_group(game, pos), Ok(None));
+            assert_eq!(level.connection_group(game, pos), Ok(Some(1)));
 
             // Aborting the first ever tentative write must not opt the column into group sync.
             let untouched = [17, 64, 1];
@@ -876,10 +863,7 @@ mod tests {
             let nether = game.level("minecraft:the_nether").unwrap();
             assert_eq!(nether.set_connection_group(game, pos, Some(20)), Ok(true));
             let host: &mut dyn ServerHost = game;
-            assert_eq!(
-                host.edit_blocks("minecraft:the_nether", &single_replace(pos, glass)),
-                Ok(1)
-            );
+            assert_eq!(nether.edit_blocks(host, &single_replace(pos, glass)), Ok(1));
             assert_eq!(nether.connection_group(game, pos), Ok(None));
             assert_eq!(nether.set_connection_group(game, pos, Some(21)), Ok(true));
             assert_eq!(game.enter_command_level(Dim::Overworld), Some(Dim::Nether));

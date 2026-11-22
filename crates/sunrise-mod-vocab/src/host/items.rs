@@ -102,18 +102,6 @@ pub trait ItemsHost {
 #[sunrise_mod_api_macros::host_area]
 pub trait ItemsServerHost {
     /// Side: server.
-    /// Drop one item as DefaultDispenseItemBehavior does. For a dispenser hook:
-    /// return this remainder in its answer with `CLICK`; the caller plays the
-    /// answer's event and smoke once. A client, another dimension or an unloaded
-    /// chunk keeps the input stack unchanged.
-    fn dispense_default(
-        &mut self,
-        dimension: &str,
-        pos: [i32; 3],
-        facing: Direction,
-        stack: ItemStack,
-    ) -> Result<Option<ItemStack>, StackWriteError>;
-    /// Side: server.
     /// Holds `stack` outside the world, in the open transaction `tx` (`ItemAccess.forStack`):
     /// the [`ItemPlace::Scratch`] to run item capabilities against. It lives until the
     /// outermost transaction closes, and an abort of the one that made it drops it. None
@@ -146,30 +134,10 @@ pub trait ItemsServerHost {
         tx: &Transaction,
         place: &ItemPlace,
     ) -> Option<(Option<ItemStack>, Option<ItemStack>)>;
-    /// Side: server.
-    /// `DefaultDispenseItemBehavior.consumeWithRemainder`: one of `stack` is used and
-    /// `remainder` replaces it, a single `stack` by becoming it, else into the dispenser at
-    /// `pos` (`DispenserBlockEntity.insertItem`) or, where it doesn't fit, out of its front with
-    /// the click and smoke. What the slot holds then. A client, another dimension or an unloaded
-    /// chunk keeps `stack` unchanged.
-    fn dispense_with_remainder(
-        &mut self,
-        dimension: &str,
-        pos: [i32; 3],
-        facing: Direction,
-        stack: ItemStack,
-        remainder: ItemStack,
-    ) -> Result<Option<ItemStack>, StackWriteError>;
 }
 /// The client host's methods of the `items` area, implemented by the game and reached through [`crate::ClientHost`].
 #[sunrise_mod_api_macros::host_area]
 pub trait ItemsClientHost {
-    /// Side: client.
-    /// Creative mode only: gives the player `count` of `item`
-    /// (`minecraft:diamond`) as taking it from the creative inventory does
-    /// (`ServerboundSetCreativeModeSlot`): the selected slot first, then the
-    /// hotbar, then the inventory. The count is cut to one stack.
-    fn give(&mut self, item: ItemKey, count: u32) -> Result<(), String>;
     /// Side: client.
     /// The creative search tab's final display order, for ranking stacks in inventory sorters.
     /// This requests the same catalog as the creative screen (using the player's permission and

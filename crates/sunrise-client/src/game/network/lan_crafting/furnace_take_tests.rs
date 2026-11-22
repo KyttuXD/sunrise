@@ -53,11 +53,15 @@ impl mod_api::Hooks for FurnaceProbe {
     fn item_smelted(&self, host: mod_api::HostSide<'_>, event: &mut mod_api::ItemSmeltedEvent<'_>) {
         let (is_client, xp_seen, player_name, item, projected) = match host {
             mod_api::HostSide::Server(host) => {
-                let xp_seen: i64 = host
-                    .experience_orbs("minecraft:overworld", [0.0, 60.0, 0.0], [10.0, 70.0, 10.0])
-                    .iter()
-                    .map(|orb| i64::from(orb.value) * i64::from(orb.count))
-                    .sum();
+                let mut xp_seen = 0;
+                let level = host.level("minecraft:overworld").unwrap();
+                let _ = level
+                    .visit_experience_orbs(host, [0.0, 60.0, 0.0], [10.0, 70.0, 10.0], &mut |orb| {
+                        xp_seen += i64::from(orb.value(host).unwrap())
+                            * i64::from(orb.count(host).unwrap());
+                        core::ops::ControlFlow::Continue(())
+                    })
+                    .unwrap();
                 let projected = event.stack.project().map(|stack| {
                     (
                         host.item_key_id(stack.item()).map(str::to_owned),

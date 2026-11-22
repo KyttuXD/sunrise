@@ -8,13 +8,15 @@ pub trait Hooks {
 
 `window_resize` notifies client mods after a window resize or applying a changed GUI scale, fullscreen, or Unicode font setting. Its `width` and `height` are physical pixels, and `gui_width` and `gui_height` are scaled GUI pixels. It fires only when physical or scaled dimensions change.
 
-### Structure template snapshots
+### Structure template reads
 
-`ServerHost::structure_template(id, at, rotation, mirror)` reads a template without placing it.
-It searches the world's saved templates before data packs and returns the rotated size and blocks
-in vanilla placement order, with each transformed state and its saved block-entity data. It uses
-the palette selected at `at`; processors and entities are not included. Invalid or missing names
-return `None`. A builder can retain this snapshot and place its blocks over time."#]
+`LevelRef::visit_structure_template(host, id, at, rotation, mirror, visit)` reads a template
+without placing it. It searches the world's saved templates before data packs, lends each
+transformed block as a `StructureTemplateBlockView<'_>` in vanilla placement order with its
+transformed state and borrowed block-entity data (stopping early on `ControlFlow::Break(())`),
+and returns the rotated size `[i32; 3]`. It uses the palette selected at `at`; processors and
+entities are not included. Refusals return a typed `StructureTemplateError`. A builder can read
+the template and place its blocks over time."#]
     #[hook(
         receiver = "read",
         dispatch = "api_carrier",
