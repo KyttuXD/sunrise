@@ -14,6 +14,7 @@
 //! once per build.
 
 use mod_api::ScreenView;
+use sunrise_client::hud::HudBatch;
 use sunrise_client::inventory_effects::{EffectsLayout, EffectsSpace};
 use sunrise_client::window::GuiSize;
 
@@ -300,16 +301,8 @@ impl ScreenBuild {
 pub(super) struct ScreenState {
     pub(super) observed: Option<ObservedScreen>,
     pub(super) build: ScreenBuildState,
-    /// What the open screen draws outside its panel this frame
-    /// (`ScreenView::regions`), and the screen they are of: filled by
-    /// `build_screen` while a screen hook listens, into the same vector.
-    pub(super) regions: (Option<Screen>, Vec<mod_api::ScreenRegion>),
-    /// The frame `pending_regions` was made in: one collection a frame
-    /// however often the build runs.
-    pub(super) regions_frame: Option<u64>,
-    /// This frame's layout regions, published into `regions` once the screen
-    /// draws (`publish_screen_regions`).
-    pub(super) pending_regions: (Option<Screen>, Vec<mod_api::ScreenRegion>),
+    /// The last draw's regions and the screen they are of (`ScreenView::regions`).
+    regions: (Option<Screen>, Vec<mod_api::ScreenRegion>),
     /// The box the recipe book's tab (and category arrow) sprites made as this
     /// frame painted them (`recipe_book_screen::sprite_bounds`); None when the
     /// book drew none.
@@ -615,28 +608,6 @@ impl Game<'_> {
         self.screen_state
             .build
             .sync(self.screen, shown, identity, gui, layout);
-        self.refresh_screen_regions(framebuffer);
-    }
-
-    /// `ScreenView::regions` for this frame's build: made only while a screen
-    /// hook listens, into the vector the last frame used.
-    fn refresh_screen_regions(&mut self, framebuffer: [u32; 2]) {
-        if self.screen_state.regions_frame == Some(self.frames) {
-            return;
-        }
-        self.screen_state.regions_frame = Some(self.frames);
-        let (_, mut regions) = std::mem::take(&mut self.screen_state.pending_regions);
-        regions.clear();
-        let screen =
-            (self.screen_hooks_open() && self.screen_view_listened()).then_some(self.screen);
-        if screen.is_some() && matches!(self.screen, Screen::Inventory | Screen::Creative) {
-            let batch =
-                sunrise_client::hud::HudBatch::new(framebuffer, self.settings.gui_scale_inputs());
-            if let Some(layout) = self.built_container(&batch) {
-                self.collect_screen_regions(layout, batch.width, &mut regions);
-            }
-        }
-        self.screen_state.pending_regions = (screen, regions);
     }
 
     /// What the open container screen draws outside its panel, from the
@@ -644,8 +615,9 @@ impl Game<'_> {
     /// panel beside the window (not one a narrow window draws over it) and
     /// each creative tab of the page shown, then the effects beside the
     /// window. The book's tabs join them as painted (`publish_screen_regions`).
-    pub(super) fn collect_screen_regions(
+    fn collect_screen_regions(
         &self,
+        screen: Screen,
         layout: &ContainerLayout,
         width: f32,
         out: &mut Vec<mod_api::ScreenRegion>,
@@ -656,8 +628,8 @@ impl Game<'_> {
                 out.push(ScreenRegion::new(ScreenRegionKind::RecipeBook, book));
             }
         }
-        if self.screen == Screen::Creative {
-            // `CreativeModeInventoryScreen.getTabX` / `getTabY`: 26 x 32 each.
+        if screen == Screen::Creative {
+            // `CreativeModeInventoryScreen.extractTabButton`: 26 x 32 each.
             let (ox, oy) = (layout.image[0], layout.image[1]);
             let creative = &self.creative_screen;
             for tab in creative.tabs.iter().filter(|t| creative.on_page(t)) {
@@ -678,15 +650,21 @@ impl Game<'_> {
     /// painted, or nothing when `screen_render_pre` cancelled the drawing.
     /// Called once the screen has drawn, before `screen_render_post`; the
     /// input hooks then read it until the next draw.
-    pub(super) fn publish_screen_regions(&mut self, drawn: bool) {
+    pub(super) fn publish_screen_regions(&mut self, batch: &HudBatch, drawn: Option<Screen>) {
         use mod_api::{ScreenRegion, ScreenRegionKind};
         let (_, mut regions) = std::mem::take(&mut self.screen_state.regions);
-        let pending = std::mem::take(&mut self.screen_state.pending_regions);
         regions.clear();
-        let shown = drawn && pending.0 == Some(self.screen);
-        if shown {
-            regions.extend(pending.1.iter().copied());
-            if let Some(tabs) = self.screen_state.drawn_book_tabs.get() {
+        let tabs = self.screen_state.drawn_book_tabs.take();
+        let shown = drawn.filter(|screen| {
+            matches!(screen, Screen::Inventory | Screen::Creative) && self.screen_view_listened()
+        });
+        if let Some(screen) = shown
+            && let Some(layout) = self.built_container(batch)
+        {
+            self.collect_screen_regions(screen, layout, batch.width, &mut regions);
+            if screen == Screen::Inventory
+                && let Some(tabs) = tabs
+            {
                 let at = regions
                     .iter()
                     .position(|r| r.kind == ScreenRegionKind::RecipeBook)
@@ -697,12 +675,11 @@ impl Game<'_> {
                 );
             }
         }
-        self.screen_state.pending_regions = pending;
-        self.screen_state.regions = (shown.then_some(self.screen), regions);
+        self.screen_state.regions = (shown, regions);
     }
 
-    /// This frame's regions of `screen` (`ScreenView::regions`): empty for
-    /// another screen, and while no screen hook listens.
+    /// The last published draw's regions of `screen` (`ScreenView::regions`).
+    /// Empty for another screen and when no screen hook listens.
     pub(super) fn screen_regions(&self, screen: Screen) -> &[mod_api::ScreenRegion] {
         match &self.screen_state.regions {
             (Some(of), regions) if *of == screen => regions,
