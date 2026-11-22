@@ -17,8 +17,7 @@ pub enum TicketOwner {
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(sunrise_mod_api_macros::Wire)]
 pub struct ModTicket {
-    /// The controller that holds it: its slot in the installed controller table
-    /// (`mod_api::TicketController::slot`).
+    /// The controller that holds it: an internal store slot, not a `TicketController` handle.
     pub controller: u32,
     pub owner: TicketOwner,
     pub chunk: (i32, i32),

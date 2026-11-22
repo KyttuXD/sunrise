@@ -55,6 +55,9 @@
 extern crate self as mod_api;
 
 pub use mod_vocab::*;
+// Ticket-store operations stay at the engine/authoring boundary, not in the mod facade.
+#[allow(hidden_glob_reexports)]
+pub(crate) use mod_vocab::__ticket_controller_runtime;
 /// Platform-owned crash attribution with shared vocabulary types.
 #[doc(hidden)]
 pub mod content {

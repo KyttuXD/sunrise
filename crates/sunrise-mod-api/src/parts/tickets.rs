@@ -1,5 +1,6 @@
 //! Concrete authoring extracted verbatim from the vocabulary layer.
 use super::*;
+use crate::__ticket_controller_runtime::{issue_controller, refused_controller};
 
 /// The ticket controllers `mods` register, for a test's mods.
 #[cfg(any(test, feature = "testing"))]
@@ -26,7 +27,7 @@ pub mod tests {
         let ids: Vec<_> = r
             .controllers
             .iter()
-            .map(|c| (&*c.id, c.validator.is_some()))
+            .map(|c| (c.id, c.validator.is_some()))
             .collect();
         assert_eq!(ids, [("first:quarry", true), ("first:drill", false)]);
         // Another mod's namespace, and no name at all.
@@ -49,9 +50,7 @@ pub mod tests {
         registrar.register_ticket_controller("quarry", Some(Arc::new(noop_validator)));
         install_registrar(registrar, &crate::parts::tests::rule_schema()).unwrap();
         let controllers = mod_vocab::__private::parts_installation::testing_controllers();
-        assert_eq!(controllers.len(), 1);
-        assert_eq!(&*controllers[0].id, "first:quarry");
-        assert!(controllers[0].validator.is_some());
+        assert_eq!(controllers, [("first:quarry", true)]);
     }
 
     #[test]
@@ -68,7 +67,7 @@ pub mod tests {
             "first registered ticket controller first:quarry twice"
         );
         assert_eq!(r.controllers.len(), 2);
-        assert_eq!(&*r.controllers[1].id, "second:quarry");
+        assert_eq!(r.controllers[1].id, "second:quarry");
         assert!(r.controllers[0].validator.is_some());
         assert!(r.controllers[1].validator.is_none());
     }
@@ -105,26 +104,15 @@ pub(crate) fn register(
         Ok(id) => id,
         Err(reason) => {
             refused.push(reason);
-            return mod_vocab::__private::parts_installation::ticket_controller(u32::MAX);
+            return refused_controller();
         }
     };
-    let refusal = {
-        table
-            .iter()
-            .any(|info| *info.id == *id)
-            .then(|| format!("{mod_id} registered ticket controller {id} twice"))
-    };
-    if let Some(refusal) = refusal {
-        refused.push(refusal);
-        return mod_vocab::__private::parts_installation::ticket_controller(u32::MAX);
+    if table.iter().any(|info| info.id == id.as_str()) {
+        refused.push(format!("{mod_id} registered ticket controller {id} twice"));
+        return refused_controller();
     }
-    table.push(ControllerInfo {
-        id: id.into(),
-        validator: validator.map(|callback| {
-            mod_vocab::__private::parts_installation::registered_ticket_validator(
-                mod_id, mod_index, callback,
-            )
-        }),
-    });
-    mod_vocab::__private::parts_installation::ticket_controller((table.len() - 1) as u32)
+    let row = issue_controller(table.len() as u32, id.into(), mod_id, mod_index, validator);
+    let handle = row.handle;
+    table.push(row);
+    handle
 }

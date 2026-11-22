@@ -2,8 +2,9 @@
 //! mod registers each controller once at startup, from [`Hooks::register`](crate::Hooks::register),
 //! and holds the [`TicketController`] it gets back to hold chunks with.
 
+use super::mod_chunk_tickets::{ControllerTickets, ModTicket};
 use crate::{LevelRef, ServerHost, TicketValidation, callback_owner::CallbackOwner};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 // no wire: retained executable code and a borrow of staged tickets stay in-process.
 /// Validate one controller's saved chunk tickets in the supplied server level
@@ -28,28 +29,11 @@ pub struct RegisteredTicketValidator {
     owner: CallbackOwner,
 }
 
-impl RegisteredTicketValidator {
-    pub(crate) fn new(callback: Arc<LoadingValidationCallback>, owner: CallbackOwner) -> Self {
-        Self { callback, owner }
-    }
-
-    /// Run the callback under its registered owner's panic and refusal policy.
-    // hidden: game-side dispatch, not part of the mod surface.
-    #[doc(hidden)]
-    pub fn call(&self, invoke: impl FnOnce(&LoadingValidationCallback)) {
-        // CallbackOwner reports refusals and panics; validation still promotes the survivors.
-        let _ = self
-            .owner
-            .call("chunk ticket validator", "validate_tickets", || {
-                invoke(self.callback.as_ref());
-            });
-    }
-}
-
 /// What the game knows about a registered controller.
 pub(crate) struct ControllerInfo {
     /// The namespaced id, `mymod:quarry`, which the tickets are saved under.
-    pub(crate) id: Box<str>,
+    pub(crate) id: &'static str,
+    pub(crate) handle: TicketController,
     /// The controller's retained saved-ticket validator, if registered.
     pub(crate) validator: Option<RegisteredTicketValidator>,
 }
@@ -61,52 +45,114 @@ pub(crate) struct ControllerInfo {
 /// `OnceLock`. Active chunk-ticket reads and writes authorize by this registry-issued handle
 /// rather than the current caller; separate controllers cannot read or release each other's
 /// tickets, and a handle from a refused registration does nothing. Use its namespaced `id()` when
-/// you need to store a controller name; its slot is local to this game's registry.
+/// you need to store a controller name; that name cannot recover the handle.
 // no wire: the handle resolves only in the registry that issued it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct TicketController {
-    /// Its place in the installed controller table.
-    pub(crate) slot: u32,
+    slot: u32,
+    identity: usize,
 }
 
 impl TicketController {
     /// The controller's namespaced id (`mymod:quarry`), as its tickets are saved under it; empty
-    /// for a registration that was refused.
+    /// for a registration that was refused or is no longer installed.
     pub fn id(self) -> &'static str {
-        self.info().map_or("", |info| &info.id)
+        self.info().map_or("", |info| info.id)
     }
-    /// The controller in slot `slot` of the installed table. For the game.
-    // hidden: a game-side helper, not part of the mod surface
-    #[doc(hidden)]
-    pub fn from_slot(slot: u32) -> Option<Self> {
-        controllers().get(slot as usize).map(|_| Self { slot })
-    }
-    /// The installed controller with this id. For the game.
-    // hidden: a game-side helper, not part of the mod surface
-    #[doc(hidden)]
-    pub fn from_id(id: &str) -> Option<Self> {
-        let slot = controllers().iter().position(|info| &*info.id == id)?;
-        Some(Self { slot: slot as u32 })
-    }
-    /// Its slot in the installed table. For the game.
-    // hidden: a game-side helper, not part of the mod surface
-    #[doc(hidden)]
-    pub fn slot(self) -> u32 {
-        self.slot
-    }
-    /// The controller's enabled saved-ticket validator, if any. For the game.
-    // hidden: a game-side helper, not part of the mod surface
-    #[doc(hidden)]
-    pub fn validator(self) -> Option<&'static RegisteredTicketValidator> {
-        self.info()?
-            .validator
-            .as_ref()
-            .filter(|validator| validator.owner.is_enabled())
-    }
+
     fn info(self) -> Option<&'static ControllerInfo> {
-        controllers().get(self.slot as usize)
+        controllers()
+            .get(self.slot as usize)
+            .filter(|info| info.handle == self)
     }
+}
+
+/// Prepare a new controller row at registration, never by looking up an existing name or slot.
+pub fn issue_controller(
+    slot: u32,
+    id: Box<str>,
+    mod_id: &'static str,
+    mod_index: usize,
+    validator: Option<Arc<LoadingValidationCallback>>,
+) -> crate::__private::parts_installation::ControllerInfoInput {
+    // The nonempty save name already lives for the session. Retain its allocation so even a
+    // handle from an abandoned registration cannot alias a later registration at the same slot.
+    let id: &'static str = Box::leak(id);
+    crate::__private::parts_installation::ControllerInfoInput {
+        id,
+        handle: TicketController {
+            slot,
+            identity: id.as_ptr() as usize,
+        },
+        validator: validator.map(|callback| RegisteredTicketValidator {
+            callback,
+            owner: CallbackOwner::for_index(mod_id, mod_index),
+        }),
+    }
+}
+
+/// The inert handle returned for a refused registration.
+pub fn refused_controller() -> TicketController {
+    TicketController {
+        slot: u32::MAX,
+        identity: 0,
+    }
+}
+
+/// Resolve an issued handle for an active ticket operation. Save names and slots cannot do this.
+pub fn active_controller_slot(controller: TicketController) -> Option<u32> {
+    controller.info().map(|_| controller.slot)
+}
+
+/// Resolve a persisted controller name to a store slot, not to an active handle.
+pub fn saved_controller_slot(id: &str) -> Option<u32> {
+    controllers()
+        .iter()
+        .position(|info| info.id == id)
+        .map(|slot| slot as u32)
+}
+
+/// Resolve a store slot to its persisted name, not to an active handle.
+pub fn saved_controller_name(slot: u32) -> Option<&'static str> {
+    controllers().get(slot as usize).map(|info| info.id)
+}
+
+/// Validate a level's staged rows at activation, without lending out callbacks or active handles.
+/// Only controllers with staged rows and an enabled validator get a borrowed validation view.
+pub fn validate_staged_tickets(
+    host: &mut dyn ServerHost,
+    level: LevelRef,
+    staged: Vec<ModTicket>,
+) -> Vec<ModTicket> {
+    let controllers = controllers();
+    let mut ready = Vec::new();
+    let mut groups = BTreeMap::new();
+    for ticket in staged {
+        let validator = controllers
+            .get(ticket.controller as usize)
+            .and_then(|info| info.validator.as_ref())
+            .filter(|validator| validator.owner.is_enabled());
+        if let Some(validator) = validator {
+            groups
+                .entry(ticket.controller)
+                .or_insert_with(|| (validator, Vec::new()))
+                .1
+                .push(ticket);
+        } else {
+            ready.push(ticket);
+        }
+    }
+    for (validator, mut rows) in groups.into_values() {
+        // CallbackOwner reports refusals and panics; activation still promotes the survivors.
+        let _ = validator
+            .owner
+            .call("chunk ticket validator", "validate_tickets", || {
+                (validator.callback)(host, level, &mut ControllerTickets::new(&mut rows));
+            });
+        ready.append(&mut rows);
+    }
+    ready
 }
 
 #[cfg(any(test, feature = "testing"))]

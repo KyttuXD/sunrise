@@ -56,7 +56,7 @@ use crate::{
     Backend, BackendMut, BackendMutRef, BackendRef, BlockEntityRef, BlockEntityTypeKey, BlockSide,
     ClientHost, Commands, EntityRef, FluidStack, Host, InventoryView, ItemComponentEditor,
     ItemPlace, ItemPlaceEditError, ItemStack, ItemStackView, LevelRef, Messages, Mods, PlayerRef,
-    Players, ServerHost, TEST_MODS, Tag, Text, TicketController, WorldEpoch,
+    Players, ServerHost, TEST_MODS, Tag, Text, WorldEpoch,
 };
 
 /// The world epoch of every fake's handles.
@@ -189,11 +189,6 @@ pub fn inherit_mods<A, R, F: FnOnce(&A) -> R + Send>(f: F) -> impl FnOnce(&A) ->
         );
         f(argument)
     }
-}
-
-/// The ticket controller with this id that the mods of the enclosing `with_mods` registered.
-pub fn ticket_controller(id: &str) -> Option<TicketController> {
-    TicketController::from_id(id)
 }
 
 struct RestoreControllers(Option<&'static [ControllerInfo]>);
