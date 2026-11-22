@@ -14,7 +14,8 @@ fn fixture() -> Option<&'static Fixture> {
     static FIXTURE: OnceLock<Option<Fixture>> = OnceLock::new();
     FIXTURE
         .get_or_init(|| {
-            let root = std::env::var_os("SUNRISE_RESOURCES")
+            let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+                .or_else(|| std::env::var_os("SUNRISE_RESOURCES"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
