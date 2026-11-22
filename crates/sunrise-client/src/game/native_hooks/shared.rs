@@ -3396,14 +3396,6 @@ impl Game<'_> {
             },
         })
     }
-    /// The presentation-only view transform native mods compose at vanilla's
-    /// `GameRenderer.bobHurt` / `bobView` stage (`render_view_transform`).
-    pub(super) fn native_render_view_transform_matrix(&self, partial: f32) -> glam::Mat4 {
-        let mut transform = mod_api::ViewTransform::IDENTITY;
-        self.native_render_view_transform(partial, &mut transform);
-        glam::Mat4::from_cols_array(&transform.matrix())
-    }
-
     /// What native mods hand shader packs in this frame (`native_shader_params`),
     /// with values that aren't finite as 0.
     pub(super) fn native_shader_params_now(&self, partial: f32) -> [[f32; 4]; 8] {

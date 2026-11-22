@@ -471,17 +471,16 @@ impl Game<'_> {
             (view, Some((source, angles)))
         };
         if run_hooks {
-            let placed = view.position;
-            let mut position = placed;
+            let mut position = mod_api::CameraPosition::placed_at(view.position);
             self.native_camera_position(partial, &mut position);
             if self.apply_requested_camera_type()
                 && let Some((source, angles)) = alignment
             {
                 view = self.align_view_with_angles(&source, partial, angles);
             }
-            for (i, edited) in position.into_iter().enumerate() {
-                if edited.to_bits() != placed[i].to_bits() {
-                    view.position[i] = edited;
+            for (coordinate, override_value) in view.position.iter_mut().zip(position.overrides()) {
+                if let Some(value) = override_value {
+                    *coordinate = value;
                 }
             }
         }

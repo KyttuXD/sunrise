@@ -127,66 +127,76 @@ impl CameraEntity {
     }
 }
 
-pub(crate) fn refused_angles_output(
-    yaw: &f32,
-    pitch: &f32,
-    roll: &f32,
-) -> Result<(), &'static str> {
-    for (field, angle) in [("yaw", yaw), ("pitch", pitch), ("roll", roll)] {
-        if !angle.is_finite() {
-            return Err(field);
-        }
-    }
-    Ok(())
+/// The placed camera position and its explicit world-space axis overrides.
+/// An overridden axis stays pinned even when it equals the placed coordinate.
+// no wire: lends the already placed camera to a render-frame callback.
+// exhaustive: the game supplies the placement; mods use the methods to edit it.
+#[derive(Clone, Copy, Debug)]
+pub struct CameraPosition {
+    placed: [f64; 3],
+    overrides: [Option<f64>; 3],
 }
 
-pub(crate) fn refused_position_output(position: &[f64; 3]) -> Result<(), &'static str> {
-    position
-        .iter()
-        .all(|coordinate| coordinate.is_finite())
-        .then_some(())
-        .ok_or("position")
+impl CameraPosition {
+    #[doc(hidden)]
+    pub const fn placed_at(placed: [f64; 3]) -> Self {
+        Self {
+            placed,
+            overrides: [None; 3],
+        }
+    }
+
+    /// The coordinates after the previous listeners' edits, in X, Y, Z order.
+    pub fn coordinates(&self) -> [f64; 3] {
+        std::array::from_fn(|i| self.overrides[i].unwrap_or(self.placed[i]))
+    }
+
+    /// Set explicit X, Y and Z overrides. `None` leaves that axis and any prior override alone.
+    /// Returns `false` without changing any axis if a proposed coordinate is not finite.
+    pub fn set(&mut self, axes: [Option<f64>; 3]) -> bool {
+        if !axes.into_iter().flatten().all(f64::is_finite) {
+            return false;
+        }
+        for (kept, axis) in self.overrides.iter_mut().zip(axes) {
+            if axis.is_some() {
+                *kept = axis;
+            }
+        }
+        true
+    }
+
+    #[doc(hidden)]
+    pub const fn overrides(&self) -> [Option<f64>; 3] {
+        self.overrides
+    }
 }
 
 /// Column-major 4x4 presentation-only view transform composed at vanilla's
 /// `GameRenderer.bobHurt` / `bobView` stage (`render_view_transform`).
 ///
 /// Operations post-multiply onto the current matrix (`self = self * m`), matching vanilla's
-/// `PoseStack` multiplication order. The matrix and its inverse must both be finite.
-/// A method that returns `false` refused the proposed transform and left the previous one intact.
+/// `PoseStack` multiplication order. A method returning `false` leaves the previous transform
+/// intact: the proposed transform or a composition used by the frame cannot be inverted finitely.
 // no wire: client-local per-frame render transform at the GameRenderer bob stage.
-// exhaustive: its field is private, so mods compose through its transform methods
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewTransform {
+// exhaustive: its fields are private, so mods compose through its transform methods.
+#[derive(Clone, Copy)]
+pub struct ViewTransform<'frame> {
     matrix: [f32; 16],
+    usable_in_frame: &'frame dyn Fn([f32; 16]) -> bool,
 }
 
-impl Default for ViewTransform {
-    fn default() -> Self {
-        Self::IDENTITY
-    }
-}
+impl<'frame> ViewTransform<'frame> {
+    const IDENTITY: [f32; 16] = glam::Mat4::IDENTITY.to_cols_array();
 
-impl ViewTransform {
-    /// The identity transform.
-    pub const IDENTITY: Self = Self {
-        matrix: [
-            1.0, 0.0, 0.0, 0.0, //
-            0.0, 1.0, 0.0, 0.0, //
-            0.0, 0.0, 1.0, 0.0, //
-            0.0, 0.0, 0.0, 1.0,
-        ],
-    };
-
-    /// Wraps a column-major 4x4 matrix if it and its inverse are finite.
-    pub fn from_matrix(matrix: [f32; 16]) -> Option<Self> {
-        let m = glam::Mat4::from_cols_array(&matrix);
-        if !m.is_finite() {
-            return None;
-        }
-        let determinant = m.determinant();
-        (determinant != 0.0 && determinant.is_finite() && m.inverse().is_finite())
-            .then_some(Self { matrix })
+    #[doc(hidden)]
+    pub fn with_frame<R>(
+        usable_in_frame: impl Fn([f32; 16]) -> bool,
+        callback: impl for<'scope> FnOnce(&mut ViewTransform<'scope>) -> R,
+    ) -> R {
+        callback(&mut ViewTransform {
+            matrix: Self::IDENTITY,
+            usable_in_frame: &usable_in_frame,
+        })
     }
 
     /// Returns the column-major 4x4 matrix.
@@ -194,21 +204,30 @@ impl ViewTransform {
         self.matrix
     }
 
-    /// Replaces the transform with `matrix` if it and its inverse are finite.
+    /// Replaces the transform if it and the frame matrices it affects have finite inverses.
     pub fn set_matrix(&mut self, matrix: [f32; 16]) -> bool {
-        let Some(transform) = Self::from_matrix(matrix) else {
+        let m = glam::Mat4::from_cols_array(&matrix);
+        if !m.is_finite() {
             return false;
-        };
-        *self = transform;
+        }
+        let determinant = m.determinant();
+        if determinant == 0.0
+            || !determinant.is_finite()
+            || !m.inverse().is_finite()
+            || !(self.usable_in_frame)(matrix)
+        {
+            return false;
+        }
+        self.matrix = matrix;
         true
     }
 
-    /// Resets the transform to [`Self::IDENTITY`].
-    pub fn reset(&mut self) {
-        *self = Self::IDENTITY;
+    /// Resets the transform to identity, subject to the same check as [`Self::set_matrix`].
+    pub fn reset(&mut self) -> bool {
+        self.set_matrix(Self::IDENTITY)
     }
 
-    /// Post-multiplies by a column-major 4x4 matrix if the product and its inverse are finite.
+    /// Post-multiplies by a column-major 4x4 matrix, with the same check as [`Self::set_matrix`].
     pub fn mul(&mut self, rhs: [f32; 16]) -> bool {
         let product = glam::Mat4::from_cols_array(&self.matrix) * glam::Mat4::from_cols_array(&rhs);
         self.set_matrix(product.to_cols_array())
@@ -274,8 +293,11 @@ mod view_transform_tests {
 
     #[test]
     fn post_multiplies_translation_and_rejects_non_finite_inputs() {
-        let mut t = ViewTransform::default();
-        assert_eq!(t, ViewTransform::IDENTITY);
+        let mut t = ViewTransform {
+            matrix: ViewTransform::IDENTITY,
+            usable_in_frame: &|_| true,
+        };
+        assert_eq!(t.matrix(), ViewTransform::IDENTITY);
         assert!(t.translate(1.0, -2.0, 3.0));
         assert!(t.scale(2.0, 2.0, 2.0));
         assert_eq!(
@@ -287,38 +309,42 @@ mod view_transform_tests {
                 1.0, -2.0, 3.0, 1.0,
             ]
         );
-        let before = t;
+        let before = t.matrix();
         assert!(!t.translate(f32::NAN, 0.0, 0.0));
         assert!(!t.rotate_z(f32::INFINITY));
         assert!(!t.scale(1.0, f32::NEG_INFINITY, 1.0));
         assert!(!t.set_matrix([f32::NAN; 16]));
-        assert_eq!(t, before);
-        assert!(ViewTransform::from_matrix([f32::INFINITY; 16]).is_none());
-        t.reset();
-        assert_eq!(t, ViewTransform::IDENTITY);
+        assert_eq!(t.matrix(), before);
+        assert!(t.reset());
+        assert_eq!(t.matrix(), ViewTransform::IDENTITY);
     }
 
     #[test]
     fn singular_view_transform_writes_are_refused_without_losing_the_previous_transform() {
-        let mut transform = ViewTransform::IDENTITY;
+        let mut transform = ViewTransform {
+            matrix: ViewTransform::IDENTITY,
+            usable_in_frame: &|_| true,
+        };
         assert!(transform.translate(2.0, 3.0, 4.0));
-        let previous = transform;
+        let previous = transform.matrix();
         let singular = [
             1.0, 0.0, 0.0, 0.0, // the first two columns are identical
             1.0, 0.0, 0.0, 0.0, //
             0.0, 0.0, 1.0, 0.0, //
             0.0, 0.0, 0.0, 1.0,
         ];
-        assert!(ViewTransform::from_matrix(singular).is_none());
         assert!(!transform.set_matrix(singular));
         assert!(!transform.mul(singular));
         assert!(!transform.scale(0.0, 1.0, 1.0));
-        assert_eq!(transform, previous);
+        assert_eq!(transform.matrix(), previous);
     }
 
     #[test]
     fn rotations_match_right_handed_axes() {
-        let mut rz = ViewTransform::IDENTITY;
+        let mut rz = ViewTransform {
+            matrix: ViewTransform::IDENTITY,
+            usable_in_frame: &|_| true,
+        };
         assert!(rz.rotate_z(core::f32::consts::FRAC_PI_2));
         let m = rz.matrix();
         assert!(m[0].abs() < 1e-6);

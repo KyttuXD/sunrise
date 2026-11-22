@@ -355,6 +355,17 @@ pub(crate) fn log_and_queue_named_panic(
     named_callback: Option<&Identifier>,
     payload: &(dyn std::any::Any + Send),
 ) {
+    report_callback_panic(installed, hook, mod_id, named_callback, true, payload);
+}
+
+fn report_callback_panic(
+    installed: Option<&Installed>,
+    hook: &'static str,
+    mod_id: &'static str,
+    named_callback: Option<&Identifier>,
+    disabled: bool,
+    payload: &(dyn std::any::Any + Send),
+) {
     let reason = payload
         .downcast_ref::<&str>()
         .copied()
@@ -364,10 +375,12 @@ pub(crate) fn log_and_queue_named_panic(
         log::error!(
             "mod {mod_id} panicked in {hook} ({id}) and has been disabled for this callback for the rest of the session: {reason}"
         );
-    } else {
+    } else if disabled {
         log::error!(
             "mod {mod_id} panicked in hook {hook} and has been disabled for this hook for the rest of the session: {reason}"
         );
+    } else {
+        log::error!("mod {mod_id} panicked in hook {hook}; discarded this invocation: {reason}");
     }
     if let Some(installed) = installed {
         let mut queue = installed
@@ -391,6 +404,20 @@ pub(crate) fn invoke<T>(
 ) -> Option<T> {
     contain_callback(call, |payload| {
         record_hook_panic(hook_id.into(), hook, mod_id, payload)
+    })
+}
+
+/// Uses the shared diagnostic fence but leaves the listener available for the next frame.
+#[inline]
+pub(crate) fn invoke_frame<T>(
+    hook: &'static str,
+    mod_id: &'static str,
+    call: impl FnOnce() -> T,
+) -> Option<T> {
+    contain_callback(call, |payload| {
+        let (entered, trapped) = LISTENER_SERIAL.get();
+        LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
+        report_callback_panic(installed(), hook, mod_id, None, false, payload);
     })
 }
 

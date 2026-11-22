@@ -158,6 +158,14 @@ mod root {
             }
         }
 
+        pub(super) fn invoke_frame<T>(
+            _: &'static str,
+            _: &'static str,
+            call: impl FnOnce() -> T,
+        ) -> Option<T> {
+            Some(call())
+        }
+
         pub(super) fn report_output_refusal(
             owner: &'static str,
             hook: &'static str,

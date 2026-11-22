@@ -13,11 +13,12 @@ pub trait Hooks {
     /// stage, after hurt tilt and view bobbing and before rendering the world. It also runs when
     /// a screen has input focus and this world render stage still runs.
     ///
-    /// `transform` starts as [`ViewTransform::IDENTITY`] each frame. Listeners compose local
+    /// `transform` starts at identity each frame. Listeners compose local
     /// rotations, translations, and scales onto it in dependency order (for example, camera shake
     /// scaled by [`ClientGuiOptions::screen_effect_scale`], recoil kicks, or lean tilts). Sunrise
     /// multiplies the composed matrix directly into the view-bob matrix with no artificial angle or
-    /// offset caps. Non-finite and non-invertible candidates are refused by `ViewTransform`.
+    /// offset caps. An operation returns `false` and keeps the current transform if its proposal
+    /// or any affected frame composition cannot be inverted finitely.
     /// The camera position and angles, the audio listener, the player position and aim are unchanged.
-    fn render_view_transform(partial: f32, transform: &mut mod_api::ViewTransform);
+    fn render_view_transform(partial: f32, transform: &mut mod_api::ViewTransform<'_>);
 }

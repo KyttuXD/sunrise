@@ -140,10 +140,79 @@ impl Renderer {
             .taa_render_size([self.config.width, self.config.height]);
         self.asked_world_views(taa_frustum(views.cull().view_proj(bob), size))
     }
+    /// Validator for the live bob transform. The world/shadow cull, the native post
+    /// projection and the shader-pack model-view do not invert the same product.
+    pub fn view_transform_validator(
+        &self,
+        [yaw, pitch, roll]: [f32; 3],
+        fov: f32,
+        far: f32,
+        vanilla_bob: Mat4,
+        spin: Mat4,
+    ) -> impl Fn([f32; 16]) -> bool + use<> {
+        let window = [self.config.width, self.config.height];
+        let capture = self.screenshot_size();
+        let views = [Some(window), capture].map(|size| {
+            size.map(|[w, h]| {
+                View::screen_rolled(yaw, pitch, roll, fov, w as f32 / h.max(1) as f32, far)
+            })
+        });
+        let pack_post = self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        let pack_rotation = pack_post
+            .then(|| sunrise_render_shaderpack::joml::view_rotation_matrix(yaw, pitch, roll).0);
+        let native_projections = self.native.as_ref().map(|native| {
+            let taa = !pack_post && native.post.is_none();
+            let scale = self.world_post.scale;
+            let window_sizes = self.world_post.render_sizes(window, scale, taa);
+            let capture_sizes = capture.map(|size| {
+                self.world_post.render_sizes(
+                    size,
+                    super::screenshot::screenshot_world_scale(scale),
+                    taa,
+                )
+            });
+            window_sizes
+                .chain(capture_sizes.into_iter().flatten())
+                .map(move |[w, h]| super::world_projection(fov, w as f32 / h.max(1) as f32, far))
+        });
+        move |matrix| {
+            let bob = vanilla_bob * Mat4::from_cols_array(&matrix);
+            let pose = bob * spin;
+            views
+                .iter()
+                .flatten()
+                .all(|view| usable_view_transform(view, bob, spin))
+                && pack_rotation.is_none_or(|rotation| invertible(pose * rotation))
+                && native_projections
+                    .clone()
+                    .into_iter()
+                    .flatten()
+                    .all(|projection| {
+                        invertible(super::native_post::view_projection(projection, bob, spin))
+                    })
+        }
+    }
+
     fn screen_view(&self, fov_degrees: f32, yaw: f32, pitch: f32, roll: f32, far: f32) -> View {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         View::screen_rolled(yaw, pitch, roll, fov_degrees, aspect, far)
     }
+}
+
+fn invertible(matrix: Mat4) -> bool {
+    if !matrix.is_finite() {
+        return false;
+    }
+    let determinant = matrix.determinant();
+    determinant != 0.0 && determinant.is_finite() && matrix.inverse().is_finite()
+}
+
+fn usable_view_transform(view: &View, bob: Mat4, spin: Mat4) -> bool {
+    invertible(super::native_post::view_projection(
+        view.projection,
+        bob,
+        spin,
+    )) && invertible(view.view_proj(bob * spin))
 }
 
 /// Where a perspective `view_proj` sees from, in its own (camera-relative)
@@ -192,6 +261,23 @@ pub fn test_frustum(planes: [Vec4; 6]) -> JoinedFrusta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finite_transform_that_overflows_the_frame_projection_is_refused() {
+        let view = View::screen(0.0, 0.0, 70.0, 16.0 / 9.0, 512.0);
+        let enormous = Mat4::from_translation(Vec3::new(0.0, 3.0e38, 0.0));
+        assert!(invertible(enormous));
+        assert!(!(view.projection * enormous).is_finite());
+        mod_api::ViewTransform::with_frame(
+            |matrix| usable_view_transform(&view, Mat4::from_cols_array(&matrix), Mat4::IDENTITY),
+            |transform| {
+                assert!(transform.translate(1.0, 0.0, 0.0));
+                let accepted = transform.matrix();
+                assert!(!transform.translate(0.0, 3.0e38, 0.0));
+                assert_eq!(transform.matrix(), accepted);
+            },
+        );
+    }
 
     /// The formulas `Renderer` used before views existed, kept to pin the
     /// screen view to them bit for bit.

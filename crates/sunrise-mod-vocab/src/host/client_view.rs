@@ -31,7 +31,7 @@ pub trait ClientViewClientHost {
     /// The last request wins and [`Self::camera_type`] reports it immediately. Requests before
     /// or during `compute_camera_angles` apply before that frame's detached camera placement,
     /// FOV and spectator post effects. Requests during `camera_position` re-align an entity-bound
-    /// camera with the already-computed angles, keeping only coordinates that listeners changed.
+    /// camera with the already-computed angles, keeping only coordinates explicitly pinned by listeners.
     /// The selected custom camera is not re-aligned. Later requests apply at the next frame's
     /// camera extraction. No cycle hook is emitted.
     fn set_camera_type(&self, camera_type: CameraType);

@@ -11199,6 +11199,25 @@ impl Game<'_> {
         let distance = (terrain_distance * 16) as f32;
         let depth_far =
             sunrise_client::camera::depth_far(terrain_distance, self.settings.cloud_range);
+        let bob = if camera_effects
+            && self.player.is_some()
+            && mod_api::__private::listened(mod_api::HookId::RenderViewTransform)
+            && let Some(renderer) = &self.renderer
+        {
+            let usable = renderer.view_transform_validator(
+                [yaw, pitch, roll],
+                fov_degrees,
+                depth_far,
+                bob,
+                spin,
+            );
+            mod_api::ViewTransform::with_frame(usable, |transform| {
+                self.native_render_view_transform(camera_alpha as f32, transform);
+                bob * glam::Mat4::from_cols_array(&transform.matrix())
+            })
+        } else {
+            bob
+        };
         let mods_read_camera = !mod_api::__private::mods().is_empty();
         self.screen_blur_requested.set(false);
         self.native_camera_frame = (mods_read_camera && !title).then(|| {

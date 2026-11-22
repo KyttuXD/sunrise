@@ -6,7 +6,7 @@ impl Game<'_> {
     pub(in crate::game) fn native_render_view_transform(
         &self,
         partial: f32,
-        transform: &mut mod_api::ViewTransform,
+        transform: &mut mod_api::ViewTransform<'_>,
     ) {
         self.fire_render_view_transform(partial, transform);
     }

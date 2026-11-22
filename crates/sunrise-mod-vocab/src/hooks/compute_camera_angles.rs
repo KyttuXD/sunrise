@@ -6,7 +6,6 @@ pub trait Hooks {
         dispatch = "flat",
         side = "client",
         contract = "listen",
-        output_validator = "crate::client::camera::refused_angles_output",
         neoforge = "ViewportEvent.ComputeCameraAngles",
         cancellable = false
     )]
@@ -14,8 +13,8 @@ pub trait Hooks {
     /// and sleeping bed rotation (`ViewportEvent.ComputeCameraAngles` in `Camera.alignWithEntity`).
     ///
     /// Starts from the camera entity's interpolated `(view_y_rot(partial), view_x_rot(partial), 0.0)`
-    /// in degrees. Listeners see the previous listener's accepted angles. A non-finite write is
-    /// reported to the log with the mod ID and leaves those angles intact. This hook does not run
+    /// in degrees. Each listener sees the preceding listener's assignments, with no filtering
+    /// or normalization at dispatch, as in NeoForge's setters. This hook does not run
     /// for the interpolating `NewMinecartBehavior` rider branch or for a custom studio camera.
     ///
     /// Third-person front mirroring (`yaw + 180`, `-pitch`, `-roll`), detached back-off along the

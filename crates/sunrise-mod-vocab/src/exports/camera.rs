@@ -1,3 +1,3 @@
 pub use crate::client::camera::{
-    CameraEntity, CameraType, FovPlayer, LocalRotationError, ViewTransform,
+    CameraEntity, CameraPosition, CameraType, FovPlayer, LocalRotationError, ViewTransform,
 };

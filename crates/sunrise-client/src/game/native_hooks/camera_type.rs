@@ -136,6 +136,13 @@ mod camera_type_tests {
     #[test]
     #[ignore = "daily"]
     fn shared_camera_pose_requests_apply_before_frame_consumers() {
+        if run_fresh_cases(
+            "game::native_hooks::camera_type::camera_type_tests::shared_camera_pose_requests_apply_before_frame_consumers",
+            "SUNRISE_CAMERA_SHARED_CHILD",
+            &["shared"],
+        ) {
+            return;
+        }
         use std::sync::atomic::Ordering;
 
         let calls = Arc::new(Calls::default());
@@ -176,16 +183,17 @@ mod camera_type_tests {
             host: &dyn ClientHost,
             event: &mut mod_api::CameraPositionEvent<'_>,
         ) {
-            event.position[0] = 12.0;
+            let [_, _, z] = event.position.coordinates();
+            assert!(event.position.set([Some(12.0), None, Some(z)]));
             host.set_camera_type(CameraType::FirstPerson);
         }
     }
 
     #[test]
     #[ignore = "daily"]
-    fn frame_camera_position_keeps_only_changed_axes_when_realigning() {
+    fn frame_camera_position_keeps_explicit_axes_when_realigning() {
         if run_fresh_cases(
-            "game::native_hooks::camera_type::camera_type_tests::frame_camera_position_keeps_only_changed_axes_when_realigning",
+            "game::native_hooks::camera_type::camera_type_tests::frame_camera_position_keeps_explicit_axes_when_realigning",
             "SUNRISE_CAMERA_POSITION_CHILD",
             &["position"],
         ) {
@@ -209,7 +217,11 @@ mod camera_type_tests {
                     );
                     let (position, _, _, _) = game.frame_camera(1.0).unwrap();
                     assert_eq!(game.camera_type, CameraType::FirstPerson);
-                    assert_eq!(position.to_array(), [12.0, 1.0, 0.0]);
+                    assert_eq!(
+                        position.to_array(),
+                        [12.0, 1.0, 4.0],
+                        "an explicit Z equal to the detached placement stays pinned"
+                    );
 
                     let custom = glam::DVec3::new(2.0, 31.0, 5.0);
                     game.studio.freecam.activate(custom, 180.0, 0.0, 70.0);
@@ -226,8 +238,7 @@ mod camera_type_tests {
 
     enum AngleWriter {
         Set,
-        Invalid(Arc<std::sync::atomic::AtomicUsize>),
-        Panic(Arc<std::sync::atomic::AtomicUsize>),
+        PanicOnce(Arc<std::sync::atomic::AtomicUsize>),
         Add,
     }
     #[mod_api::__subscriptions]
@@ -240,15 +251,13 @@ mod camera_type_tests {
             use std::sync::atomic::Ordering;
             match self {
                 Self::Set => (event.yaw, event.pitch, event.roll) = (17.0, 2.0, 10.0),
-                Self::Invalid(calls) => {
-                    calls.fetch_add(1, Ordering::Relaxed);
-                    event.yaw = -5.0;
-                    event.pitch = f32::NAN;
-                }
-                Self::Panic(calls) => {
-                    calls.fetch_add(1, Ordering::Relaxed);
+                Self::PanicOnce(calls) => {
                     event.roll = 90.0;
-                    panic!("fixture camera callback panicked");
+                    match calls.fetch_add(1, Ordering::Relaxed) {
+                        0 => panic!("fixture camera callback panicked"),
+                        1 => {}
+                        _ => event.pitch = f32::NAN,
+                    }
                 }
                 Self::Add => event.yaw += 10.0,
             }
@@ -257,40 +266,45 @@ mod camera_type_tests {
 
     #[test]
     #[ignore = "daily"]
-    fn camera_angle_failures_keep_accepted_angles_and_only_panics_disable_the_listener() {
+    fn a_failed_camera_listener_retries_next_frame_without_losing_preceding_angles() {
         if run_fresh_cases(
-            "game::native_hooks::camera_type::camera_type_tests::camera_angle_failures_keep_accepted_angles_and_only_panics_disable_the_listener",
+            "game::native_hooks::camera_type::camera_type_tests::a_failed_camera_listener_retries_next_frame_without_losing_preceding_angles",
             "SUNRISE_CAMERA_ANGLE_FAILURE_CHILD",
             &["angles"],
         ) {
             return;
         }
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let invalid = Arc::new(AtomicUsize::new(0));
-        let panics = Arc::new(AtomicUsize::new(0));
+        let executions = Arc::new(AtomicUsize::new(0));
         let mods = vec![
             ModEntry::new("set", Box::new(AngleWriter::Set)),
-            ModEntry::new("invalid", Box::new(AngleWriter::Invalid(invalid.clone()))),
-            ModEntry::new("camera-panic", Box::new(AngleWriter::Panic(panics.clone()))),
+            ModEntry::new(
+                "camera-panic",
+                Box::new(AngleWriter::PanicOnce(executions.clone())),
+            ),
             ModEntry::new("add", Box::new(AngleWriter::Add)),
         ];
         with_mods(mods.into(), || {
             with_client_game(|game| {
                 game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
                 game.title = None;
-                for _ in 0..2 {
+                for expected_roll in [10.0, 90.0] {
                     let (_, yaw, pitch, roll) = game.frame_camera(1.0).unwrap();
-                    assert_eq!((yaw, pitch, roll), (27.0, 2.0, 10.0));
+                    assert_eq!((yaw, pitch, roll), (27.0, 2.0, expected_roll));
                 }
+                assert_eq!(executions.load(Ordering::Relaxed), 2);
+
+                // NeoForge assigns angles as given. Check the dispatched value without using
+                // a deliberately non-finite angle to place a render camera.
+                let (mut yaw, mut pitch, mut roll) = (0.0, 0.0, 0.0);
+                game.native_compute_camera_angles(1.0, &mut yaw, &mut pitch, &mut roll);
+                assert!(pitch.is_nan());
+                assert_eq!((yaw, roll), (27.0, 90.0));
             });
+            let notices = mod_api::__private::take_hook_panics();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].mod_id, "camera-panic");
+            assert_eq!(notices[0].hook, "compute_camera_angles");
         });
-        assert_eq!(invalid.load(Ordering::Relaxed), 2);
-        assert_eq!(panics.load(Ordering::Relaxed), 1);
-        assert!(
-            mod_api::__private::take_hook_panics()
-                .iter()
-                .any(|notice| notice.mod_id == "camera-panic"
-                    && notice.hook == "compute_camera_angles")
-        );
     }
 }

@@ -1404,6 +1404,17 @@ pub(super) mod tests {
         cases: &[&str],
         at_once: usize,
     ) -> bool {
+        run_fresh_cases_with_env(name, flag, cases, at_once, &[])
+    }
+
+    /// Set extra variables only on the isolated test processes.
+    pub(in crate::game) fn run_fresh_cases_with_env(
+        name: &str,
+        flag: &str,
+        cases: &[&str],
+        at_once: usize,
+        env: &[(&str, &str)],
+    ) -> bool {
         if std::env::var_os(flag).is_some() {
             return false;
         }
@@ -1427,6 +1438,7 @@ pub(super) mod tests {
                     "--test-threads=4",
                 ])
                 .current_dir(&scratch)
+                .envs(env.iter().copied())
                 .env(flag, case)
                 .env("SUNRISE_TEST_RESOURCES", &resources)
                 .env("SUNRISE_NO_AUDIO", "1")

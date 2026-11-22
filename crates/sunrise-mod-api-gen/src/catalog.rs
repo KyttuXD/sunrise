@@ -189,9 +189,10 @@ pub struct Hook {
     /// The inert answer for a disabled content owner's subscribed block Part: Rust statements
     /// setting the answer, or `signal` to report engine inactivity separately from listener output.
     pub inert: Option<String>,
-    /// A global listen or cancel hook's per-listener output check. For listeners it takes
-    /// the proposed outputs; for cancel hooks it takes the accepted then proposed outputs.
-    /// Each set follows declaration order. A refusal leaves the previous outputs intact.
+    /// A global cancel hook's per-listener check of the outputs it wrote: a path to
+    /// `fn(&accepted, ..., &proposed, ...) -> Result<(), &'static str>` taking each set of
+    /// vector/scalar outputs in declaration order and naming the first refused one. A refused
+    /// result, including its cancellation, rolls back; later listeners still run.
     pub output_validator: Option<String>,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
@@ -517,14 +518,14 @@ impl Hook {
             return Err(CatalogError::InvalidContract(name));
         }
         if let Some(validator) = &api.output_validator
-            && (!matches!(api.contract, Contract::Listen | Contract::Cancel)
+            && (api.contract != Contract::Cancel
                 || scope.is_some()
                 || entry.event_per_listener
                 || syn::parse_str::<syn::Path>(validator).is_err())
         {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error: "output_validator is a path on a global listen or cancel hook with shared outputs"
+                error: "output_validator is a path on a global cancel hook with shared outputs"
                     .into(),
             });
         }

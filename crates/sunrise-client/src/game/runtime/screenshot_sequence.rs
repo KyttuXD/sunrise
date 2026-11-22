@@ -325,16 +325,15 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Screen, Sequence, parse};
+    use super::{Screen, parse};
     use crate::game::{
-        native_entity_refs::tests::{run_fresh_cases, with_client_game},
+        native_entity_refs::tests::{run_fresh_cases_with_env, with_client_game},
         native_hooks::particle_count_tests::frame_scene,
     };
     use mod_api::{
         CameraPositionEvent, ClientHost, ComputeCameraAnglesEvent, Hooks, ModEntry,
         RenderViewTransformEvent,
     };
-    use serde_json::json;
     use std::{
         path::PathBuf,
         sync::{
@@ -356,12 +355,12 @@ mod tests {
         }
         fn camera_position(&self, _: &dyn ClientHost, event: &mut CameraPositionEvent<'_>) {
             self.1.fetch_add(1, Ordering::Relaxed);
-            event.position[0] = 0.25;
+            assert!(event.position.set([Some(0.25), None, None]));
         }
         fn render_view_transform(
             &self,
             _: &dyn ClientHost,
-            event: &mut RenderViewTransformEvent<'_>,
+            event: &mut RenderViewTransformEvent<'_, '_>,
         ) {
             assert!(event.transform.translate(2.0, 0.0, 0.0));
         }
@@ -370,10 +369,12 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn sequence_checks_the_extracted_camera_and_paused_worlds_still_apply_view_transforms() {
-        if run_fresh_cases(
+        if run_fresh_cases_with_env(
             "game::screenshot_sequence::tests::sequence_checks_the_extracted_camera_and_paused_worlds_still_apply_view_transforms",
             "SUNRISE_SEQUENCE_CAMERA_CHILD",
-            &["frame"],
+            &["1"],
+            1,
+            &[("SUNRISE_STILL", "1")],
         ) {
             return;
         }
@@ -388,30 +389,50 @@ mod tests {
                 let _event_loop = frame_scene(game);
                 game.screen = Screen::Playing;
                 game.settings.view_bobbing = false;
+                game.settings.chunk_fade = 0.0;
+                game.settings.sunrise.lod_distance = 0;
+                game.settings.sunrise.taa = false;
+                game.settings.sunrise.shadow_cache = false;
+                game.settings.sunrise.frame_generation =
+                    sunrise_client::graphics::FrameGeneration::Off;
+                game.clock.set_frozen(true);
                 let (reply, result) = mpsc::channel();
-                game.screenshot_sequence = Some(Sequence {
-                    frames: 2,
-                    step_ms: 16.0,
-                    next: 1,
-                    path: PathBuf::from("unused.png"),
-                    reply,
-                    scene: game.sequence_scene(game.renderer.as_ref().unwrap()),
-                    camera: None,
-                    pack: json!({}),
-                });
-                for (camera_yaw, count) in [(45.0, 1), (90.0, 2)] {
-                    game.render_with(|_, frame| {
-                        assert_eq!(frame.yaw, camera_yaw);
-                        assert_eq!(frame.camera.x, 0.25);
-                        assert_eq!(angles.load(Ordering::Relaxed), count);
-                        assert_eq!(positions.load(Ordering::Relaxed), count);
-                        Ok(true)
-                    })
-                    .unwrap();
-                    assert_eq!(game.screenshot_sequence.is_some(), count == 1);
-                }
-                let reply = result.try_recv().unwrap();
-                assert!(reply.contains("camera changed"), "{reply}");
+                let scratch = tempfile::tempdir().unwrap();
+                let target = scratch.path().join("final.png");
+                assert!(
+                    game.screenshot_sequence_command(
+                        &format!("screenshot-sequence 2 16 {}", target.display()),
+                        &reply,
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert_eq!(angles.load(Ordering::Relaxed), 0);
+                assert_eq!(positions.load(Ordering::Relaxed), 0);
+
+                assert!(game.render_sequence_frame().unwrap());
+                assert_eq!(angles.load(Ordering::Relaxed), 1);
+                assert_eq!(positions.load(Ordering::Relaxed), 1);
+                assert_eq!(game.screenshot_sequence.as_ref().unwrap().next, 2);
+                assert!(result.try_recv().is_err());
+
+                assert!(game.render_sequence_frame().unwrap());
+                assert_eq!(angles.load(Ordering::Relaxed), 2);
+                assert_eq!(positions.load(Ordering::Relaxed), 2);
+                assert!(game.screenshot_sequence.is_none());
+                assert!(game.renderer.as_ref().unwrap().screenshot.is_none());
+                assert!(game.renderer.as_ref().unwrap().screenshot_result.is_none());
+                assert!(!target.exists());
+                let response: serde_json::Value =
+                    serde_json::from_str(&result.try_recv().unwrap()).unwrap();
+                assert_eq!(response["frame"].as_u64(), Some(2));
+                assert!(
+                    response["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("camera changed"),
+                    "{response}"
+                );
 
                 game.screen = Screen::Paused;
                 game.render_with(|_, frame| {

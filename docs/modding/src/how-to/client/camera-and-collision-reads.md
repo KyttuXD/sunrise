@@ -77,21 +77,20 @@ Three separate client hooks match vanilla's and NeoForge's distinct camera stage
   entity's interpolated `(view_y_rot(partial), view_x_rot(partial), 0.0)` and runs **before**
   `Camera.setRotation`, third-person front mirroring (`yaw + 180`, `-pitch`, `-roll`), detached
   back-off along the rotated look vector, and sleeping bed rotation. Edit the event's `yaw`, `pitch`,
-  and `roll` fields directly in degrees. Like NeoForge, the hook skips the interpolating minecart rider
+  and `roll` fields directly in degrees, without filtering. Like NeoForge, the hook skips the interpolating minecart rider
   branch; it also skips the studio's custom camera, which does not align to an entity.
 - `camera_position(partial, position)` sees the final world-space position (`Camera.setPosition`),
-  including the interpolating rider's placement or the studio's selected camera. The event borrows
-  the world coordinates, for example `event.position[0] = x`. The overridden position and the effective
-  camera angles drive the view and directional audio. The entity's eye and look, the player's position,
-  and the player's aim are unchanged. Non-finite angle or position writes are reported with the mod ID
-  and leave the preceding listener's accepted values intact.
+  including the interpolating rider's placement or the studio's selected camera. Read the current
+  coordinates with `event.position.coordinates()` and pin X with `event.position.set([Some(x), None, None])`.
+  A non-finite position edit returns `false` without changing any axis. The overridden position and
+  effective angles drive the view and directional audio, without changing the entity's eye and look or
+  the player's position and aim.
 - `render_view_transform(partial, transform)` runs at vanilla's `GameRenderer.bobHurt` / `bobView`
-  stage, after hurt tilt and view bobbing, with a [`ViewTransform`] that starts at
-  `ViewTransform::IDENTITY` each frame. Compose local translations, rotations, or scales onto it in
+  stage, after hurt tilt and view bobbing, with a `ViewTransform` that starts at identity each frame. Compose local translations, rotations, or scales onto it in
   dependency order for presentation-only effects such as camera shake, recoil, or lean without moving
   the camera, player or audio listener. It runs even while a screen has input focus if the world bob
-  stage still runs. The transform and its inverse must remain finite; a refused operation returns
-  `false` without changing the transform. Read `ClientHost::gui_options().screen_effect_scale` (`Options.screenEffectScale`)
+  stage still runs. If the transform or any affected frame matrix cannot be inverted finitely, the
+  operation returns `false` without changing the transform. Read `ClientHost::gui_options().screen_effect_scale` (`Options.screenEffectScale`)
   when your effect should respect the player's Distortion Effects slider. Sunrise applies no artificial
   angle or offset caps.
 
@@ -100,7 +99,8 @@ shared callbacks such as `compute_camera_angles` or `camera_position` can reques
 `camera_type()` reports the latest request immediately; several requests coalesce to the last one.
 Requests before or during `compute_camera_angles` apply before that frame's detached camera
 placement, FOV and spectator post effects. Requests during `camera_position` refresh the entity
-alignment using the already-computed angles, carrying only coordinates that were changed by listeners.
+alignment using the already-computed angles, carrying only explicitly pinned axes (even when their
+values match the original placement).
 They do not re-position a selected custom camera. Requests from later render callbacks apply at the
 next frame's extraction. Setting a type never emits
 `camera_type_cycle`; F5 alone cycles, and its final event choice wins over requests made inside the
