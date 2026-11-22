@@ -797,7 +797,8 @@ impl Game<'_> {
             && let Some(player) = if predicting {
                 self.local_player()
             } else {
-                self.player(self.native_acting_id())
+                let uuid = self.native_acting_id();
+                self.player(uuid)
             }
         {
             self.dispatch_item_smelted(player, &item_smelted);
