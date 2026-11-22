@@ -358,7 +358,9 @@ impl Game<'_> {
     /// `cancel_task`: withdraws a waiting task by its opaque `TaskId`, disposing of its captures
     /// under the scheduling owner's panic policy when attributed.
     pub(in crate::game) fn cancel_task(&mut self, id: TaskId) -> bool {
-        let Some(task) = self.native_lifecycle.tasks.cancel(id) else {
+        let Some(task) = mod_api::__private::game::CallbackOwner::call_host(|| {
+            self.native_lifecycle.tasks.cancel(id)
+        }) else {
             return false;
         };
         dispose_pending_task(task);

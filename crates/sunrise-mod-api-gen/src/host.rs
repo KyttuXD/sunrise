@@ -646,13 +646,20 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                     } else {
                         call
                     };
-                    if is_service || borrows_caller_callback(&entry.sig) {
-                        code.push_str(&format!("{sig} {{ {setup} {call} }}\n"));
-                    } else {
-                        code.push_str(&format!(
-                            "{sig} {{ {setup} mod_api::__private::game::CallbackOwner::call_host(|| {{ {call} }}) }}\n"
-                        ));
-                    }
+                    let call = match name.as_str() {
+                        // Closing a journal must still abort after a retained callback catches
+                        // the engine-panic relay. The scheduler splits delegation at the sites
+                        // where it takes or gives back ownership of a task's captures.
+                        "transaction_close" => format!(
+                            "mod_api::__private::game::CallbackOwner::close_host_transaction(commit, |commit| {{ {call} }})"
+                        ),
+                        "schedule_task" | "cancel_task" => call,
+                        _ if is_service || borrows_caller_callback(&entry.sig) => call,
+                        _ => format!(
+                            "mod_api::__private::game::CallbackOwner::call_host(move || {{ {call} }})"
+                        ),
+                    };
+                    code.push_str(&format!("{sig} {{ {setup} {call} }}\n"));
                 }
                 code.push_str("}\n");
             }

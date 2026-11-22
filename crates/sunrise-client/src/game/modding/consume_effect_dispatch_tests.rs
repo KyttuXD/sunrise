@@ -5,8 +5,8 @@ use crate::game::{
     native_guest_turn_tests::with_guests,
 };
 use mod_api::{
-    __private::{HookPanicReport, take_hook_panics},
-    ConsumeEffectEvent, Hooks, ModEntry, ServerHost,
+    __private::{HookPanicReport, game::CallbackOwner, take_hook_panics},
+    ConsumeEffectEvent, Hooks, HostTransaction, ModEntry, ObjectiveRenderType, ServerHost, Text,
 };
 use std::sync::{Arc, Mutex};
 use sunrise_client::{
@@ -739,6 +739,152 @@ fn a_panicking_guest_turn_restores_cross_level_state_and_quarantines_its_exit_li
                 assert_eq!(game.lan_acting, Some(12));
                 assert_eq!(game.lan_guest_swaps, [12]);
                 game.chat_capture = None;
+            })
+            .unwrap();
+        });
+    });
+}
+
+struct DropsRejectedTask {
+    fill_queue: bool,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+#[mod_api::__subscriptions]
+impl Hooks for DropsRejectedTask {
+    fn consume_effect(&self, host: &mut dyn ServerHost, _: &mut ConsumeEffectEvent<'_>) {
+        if self.fill_queue {
+            for _ in 0..mod_api::MAX_PENDING_TASKS {
+                host.schedule_task(1, Box::new(|_| {})).unwrap();
+            }
+        }
+        struct Capture(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+                panic!("rejected task capture");
+            }
+        }
+        let capture = Capture(self.dropped.clone());
+        let _ = host.schedule_task(1, Box::new(move |_| drop(capture)));
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn rejected_task_captures_unwind_only_the_invoking_consume_callback() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for world_ready in [false, true] {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mods = vec![ModEntry::new(
+            "task_meal",
+            Box::new(DropsRejectedTask {
+                fill_queue: world_ready,
+                dropped: dropped.clone(),
+            }),
+        )];
+        mod_platform::testing::with_mods(mods.into(), || {
+            with_guests(|game| {
+                if world_ready {
+                    game.native_lifecycle.world_open_ready().unwrap();
+                } else {
+                    game.native_lifecycle.begin_close();
+                }
+                game.as_guest(12, |game| {
+                    let user = game.entity(12).unwrap();
+                    let stack = ItemStack::new("minecraft:apple", 1);
+                    let consumable = parse_consumable(&serde_json::json!({
+                        "on_consume_effects": [{ "type": "task_meal:effect" }]
+                    }))
+                    .unwrap();
+                    let [ConsumeEffect::Native(effect)] = consumable.effects.as_slice() else {
+                        panic!("expected native effect");
+                    };
+                    assert!(!game.native_consume_effect(effect, &stack, user));
+                    assert!(dropped.load(Ordering::Relaxed));
+                    assert_eq!(
+                        take_hook_panics(),
+                        [HookPanicReport {
+                            mod_id: "task_meal",
+                            hook: "consume_effect",
+                        }]
+                    );
+                    assert!(!game.native_consume_effect(effect, &stack, user));
+                    assert!(take_hook_panics().is_empty());
+                })
+                .unwrap();
+            });
+        });
+    }
+}
+
+struct CatchesEngineRelay(Arc<std::sync::atomic::AtomicUsize>);
+#[mod_api::__subscriptions]
+impl Hooks for CatchesEngineRelay {
+    fn consume_effect(&self, host: &mut dyn ServerHost, event: &mut ConsumeEffectEvent<'_>) {
+        let commit = event.kind == "transaction_meal:commit";
+        let result = host.transaction(|host, _| {
+            host.add_objective(
+                "staged",
+                "dummy",
+                Text::literal("Staged"),
+                ObjectiveRenderType::Integer,
+            )
+            .unwrap();
+            assert!(host.objective("staged").is_some());
+            let relay = std::panic::catch_unwind(|| {
+                CallbackOwner::call_host(|| panic!("engine fault during consumption"));
+            });
+            assert!(relay.is_err());
+            if commit { Ok(()) } else { Err(()) }
+        });
+        assert_eq!(result.is_ok(), commit);
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn catching_a_delegated_fault_aborts_the_journal_even_if_the_callback_returns_ok() {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    let closed = Arc::new(AtomicUsize::new(0));
+    let mods = vec![ModEntry::new(
+        "transaction_meal",
+        Box::new(CatchesEngineRelay(closed.clone())),
+    )];
+    mod_platform::testing::with_mods(mods.into(), || {
+        with_guests(|game| {
+            game.as_guest(12, |game| {
+                let user = game.entity(12).unwrap();
+                let stack = ItemStack::new("minecraft:apple", 1);
+                for (attempt, kind) in ["transaction_meal:abort", "transaction_meal:commit"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let consumable = parse_consumable(&serde_json::json!({
+                        "on_consume_effects": [{ "type": kind }]
+                    }))
+                    .unwrap();
+                    let [ConsumeEffect::Native(effect)] = consumable.effects.as_slice() else {
+                        panic!("expected native effect");
+                    };
+                    let panic = catch_unwind(AssertUnwindSafe(|| {
+                        game.native_consume_effect(effect, &stack, user);
+                    }))
+                    .unwrap_err();
+                    assert_eq!(
+                        panic.downcast_ref::<&str>(),
+                        Some(&"engine fault during consumption")
+                    );
+                    assert_eq!(closed.load(Ordering::Relaxed), attempt + 1);
+                    assert!(game.transaction_current().is_none());
+                    assert!((game as &dyn ServerHost).objective("staged").is_none());
+                    assert!(take_hook_panics().is_empty());
+                }
             })
             .unwrap();
         });

@@ -350,21 +350,32 @@ impl CallbackOwner {
 
     /// Execute the engine body delegated by a retained wrapper, outside all mod scopes.
     pub fn call_engine<T>(invoke: impl FnOnce() -> T) -> T {
-        Self::call_delegated(true, invoke)
+        Self::call_delegated(true, false, invoke)
     }
 
     /// Execute a host or service method called from a retained callback outside that
-    /// callback's panic and phase-refusal scopes while preserving the caller's mod mark
+    /// callback's panic scope while preserving the caller's mod mark
     /// for APIs that attribute work to the calling mod.
     pub fn call_host<T>(invoke: impl FnOnce() -> T) -> T {
-        Self::call_delegated(false, invoke)
+        Self::call_delegated(false, false, invoke)
     }
 
-    fn call_delegated<T>(clear_mod_mark: bool, invoke: impl FnOnce() -> T) -> T {
+    /// Let the existing journal close on exit even if the callback caught a delegated
+    /// engine-panic relay. That frame must abort, and the original fault stays pending.
+    pub fn close_host_transaction(commit: bool, close: impl FnOnce(bool)) {
+        let commit = commit && !engine_panic_pending();
+        Self::call_delegated(false, true, || close(commit));
+    }
+
+    fn call_delegated<T>(
+        clear_mod_mark: bool,
+        closing_transaction: bool,
+        invoke: impl FnOnce() -> T,
+    ) -> T {
         if !retained_callback_active() {
             return invoke();
         }
-        if engine_panic_pending() && !std::thread::panicking() {
+        if !closing_transaction && engine_panic_pending() && !std::thread::panicking() {
             unwind_through_wrapper();
         }
         let _contained = RetainedCallbackScope(RETAINED_CALLBACK.replace(false));
@@ -679,35 +690,5 @@ mod tests {
             "test callback panicked; it is disabled: original opaque callback panic"
         );
         assert!(poisoned.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn call_host_propagates_delegated_panics_and_allows_unwind_cleanup() {
-        let owner = CallbackOwner::for_mod("test_call_host_owner");
-        let rolled_back = AtomicBool::new(false);
-        struct Rollback<'a>(&'a AtomicBool);
-        impl Drop for Rollback<'_> {
-            fn drop(&mut self) {
-                CallbackOwner::call_host(|| self.0.store(true, Ordering::Relaxed));
-            }
-        }
-        let panic = catch_unwind(AssertUnwindSafe(|| {
-            let _ = owner.call("test", "host_call", || {
-                let _guard = Rollback(&rolled_back);
-                // Even if the retained callback catches the relay, the delegated panic still
-                // unwinds on exit and does not disable the calling callback.
-                let _ = catch_unwind(AssertUnwindSafe(|| {
-                    CallbackOwner::call_host(|| panic!("delegated host failure"));
-                }));
-            });
-        }))
-        .unwrap_err();
-        assert_eq!(
-            panic.downcast_ref::<&str>(),
-            Some(&"delegated host failure")
-        );
-        assert!(rolled_back.load(Ordering::Relaxed));
-        assert!(owner.is_enabled());
-        assert_eq!(owner.call("test", "host_call", || 23), Ok(23));
     }
 }
