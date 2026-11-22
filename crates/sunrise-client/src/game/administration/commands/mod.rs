@@ -1166,15 +1166,6 @@ impl Game<'_> {
         }
         Ok(count)
     }
-    /// ItemStack.getDisplayName of one `item` with no components.
-    pub(super) fn item_display_name(&self, item: &str) -> Text {
-        self.stack_display_name(&ItemStack {
-            item: item.into(),
-            count: 1,
-            damage: 0,
-            extra: None,
-        })
-    }
     /// `ItemStack.getDisplayName`: the hover name (custom name in italics,
     /// a written book's title, a potion's effect name, a lodestone compass, else the item's
     /// translated name) in brackets, in the rarity colour and showing the
@@ -1228,6 +1219,12 @@ impl Game<'_> {
             Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
             None => (0, None),
         };
+        let prototype = ItemStack {
+            item: id.as_str().into(),
+            count: 1,
+            damage,
+            extra,
+        };
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
         let max_stack = self.items().get(&id).map_or(64, |i| i.max_stack) as i32;
@@ -1239,7 +1236,7 @@ impl Game<'_> {
                 "commands.give.failed.toomanyitems",
                 &[
                     Text::literal(limit.to_string()),
-                    self.item_display_name(&id),
+                    self.stack_display_name(&prototype),
                 ],
             )));
         }
@@ -1270,10 +1267,8 @@ impl Game<'_> {
                     remaining -= size;
                     let rest = g.give_acting_stack(
                         ItemStack {
-                            item: id.as_str().into(),
                             count: size as u32,
-                            damage,
-                            extra: extra.clone(),
+                            ..prototype.clone()
                         },
                         uuid,
                     );
@@ -1289,13 +1284,7 @@ impl Game<'_> {
                 }
             });
         }
-        // The prototype stack: one item.
-        let name = self.stack_display_name(&ItemStack {
-            item: id.as_str().into(),
-            count: 1,
-            damage,
-            extra: extra.clone(),
-        });
+        let name = self.stack_display_name(&prototype);
         let message = if targets.len() == 1 {
             Text::translate(
                 "commands.give.success.single",
