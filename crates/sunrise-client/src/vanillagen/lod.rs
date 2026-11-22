@@ -231,7 +231,7 @@ fn decorated_batch(
                 .remove(&(x + i as i32 % 3 - 1, z + i as i32 / 3 - 1))
                 .expect("generated neighborhood")
         });
-        worker.decorate(&mut region)?;
+        worker.decorate(&mut region, Default::default())?;
         for chunk in region {
             let pos = chunk.position();
             chunks.insert((pos.x, pos.z), chunk);

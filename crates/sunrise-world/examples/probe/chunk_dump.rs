@@ -420,7 +420,7 @@ pub fn main() -> Result<(), Error> {
             let stats = if phase == "terrain" {
                 Default::default()
             } else {
-                worker.decorate(&mut region)?
+                worker.decorate(&mut region, Default::default())?
             };
             if stats.failed > 0 || stats.unsupported > 0 {
                 failed += 1;

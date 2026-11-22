@@ -498,7 +498,7 @@ fn generated_structure_chest_stays_pending_after_save_and_reload() {
     let mut region: [Proto; 9] = std::array::from_fn(|i| {
         generator.proto(&mut worker, 43 + i as i32 % 3 - 1, 21 + i as i32 / 3 - 1)
     });
-    generator.decorate(&mut worker, &mut region);
+    generator.decorate(&mut worker, &mut region, Default::default());
     let chunk = generator.finish(region.into_iter().nth(4).unwrap());
     const CHEST: (i32, i32, i32) = (692, 60, 348);
     const TABLE: &str = "minecraft:chests/underwater_ruin_small";

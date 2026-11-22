@@ -85,7 +85,12 @@ impl ChunkGenerator for Simulated {
     fn decorates(&self) -> bool {
         true
     }
-    fn decorate(&self, _worker: &mut (), _region: &mut [Proto; 9]) {
+    fn decorate(
+        &self,
+        _worker: &mut (),
+        _region: &mut [Proto; 9],
+        _: sunrise_client::streaming::DecorationDependencies<'_>,
+    ) {
         thread::sleep(self.decorate);
     }
     fn finish(&self, proto: Proto) -> Chunk {

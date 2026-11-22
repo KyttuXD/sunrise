@@ -80,7 +80,12 @@ impl ChunkGenerator for Recorder {
     fn decorates(&self) -> bool {
         true
     }
-    fn decorate(&self, _: &mut (), region: &mut [Proto; 9]) {
+    fn decorate(
+        &self,
+        _: &mut (),
+        region: &mut [Proto; 9],
+        _: sunrise_client::streaming::DecorationDependencies<'_>,
+    ) {
         let center = region[4].downcast_ref::<Recorded>().unwrap();
         let center = (center.x, center.z);
         for proto in region.iter_mut() {
@@ -409,7 +414,7 @@ fn saved_proto_chunks_restore_exactly() {
     let keys: Vec<(i32, i32)> = (0..9).map(|i| (3 + i % 3 - 1, 7 + i / 3 - 1)).collect();
     let mut region: [Proto; 9] =
         std::array::from_fn(|i| generator.proto(&mut worker, keys[i].0, keys[i].1));
-    generator.decorate(&mut worker, &mut region);
+    generator.decorate(&mut worker, &mut region, Default::default());
     assert!(generator.is_decorated(&region[4]));
     generator.save_protos(&region.iter().collect::<Vec<_>>());
     let mut seeded = generator.inner.saved_proto(&region[4]).unwrap();
@@ -432,8 +437,8 @@ fn saved_proto_chunks_restore_exactly() {
         generator.proto(&mut worker, x, z)
     });
     // Decoration mutates the checked-out region after the unknown key is restored.
-    generator.decorate(&mut worker, &mut region);
-    generator.decorate(&mut worker, &mut restored);
+    generator.decorate(&mut worker, &mut region, Default::default());
+    generator.decorate(&mut worker, &mut restored, Default::default());
     generator.save_protos(&[&restored[4]]);
     save.flush().unwrap();
     let proto = save
@@ -553,7 +558,7 @@ fn saved_proto_block_entities_keep_their_id() {
     let keys: Vec<(i32, i32)> = (0..9).map(|i| (43 + i % 3 - 1, 21 + i / 3 - 1)).collect();
     let mut region: [Proto; 9] =
         std::array::from_fn(|i| generator.proto(&mut worker, keys[i].0, keys[i].1));
-    generator.decorate(&mut worker, &mut region);
+    generator.decorate(&mut worker, &mut region, Default::default());
     generator.save_protos(&region.iter().collect::<Vec<_>>());
     save.flush().unwrap();
     let mut file = RegionFile::open(dir.join("region/r.1.0.mca")).unwrap();

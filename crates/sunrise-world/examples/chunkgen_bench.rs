@@ -501,7 +501,7 @@ fn main() -> Result<(), Error> {
                                 };
                                 let mut region: [ProtoChunk; 9] =
                                     region.try_into().map_err(|_| "region size")?;
-                                let stats = worker.decorate(&mut region)?;
+                                let stats = worker.decorate(&mut region, Default::default())?;
                                 let mut totals = totals.lock().unwrap();
                                 totals.placed += stats.placed;
                                 totals.unsupported += stats.unsupported;

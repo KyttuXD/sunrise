@@ -2551,7 +2551,7 @@ fn a_decorated_superflat_world_without_structures_grows_its_features() {
         let mut worker = terrain.worker();
         let mut region: [_; 9] =
             std::array::from_fn(|i| terrain.proto(&mut worker, 3 + i as i32 % 3, 3 + i as i32 / 3));
-        terrain.decorate(&mut worker, &mut region);
+        terrain.decorate(&mut worker, &mut region, Default::default());
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
         let mut found = Vec::new();
@@ -6326,7 +6326,7 @@ fn content_root_generates_a_biome_modifier_ore() {
         let mut worker = terrain.worker();
         let mut region: [Proto; 9] =
             std::array::from_fn(|i| terrain.proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1));
-        terrain.decorate(&mut worker, &mut region);
+        terrain.decorate(&mut worker, &mut region, Default::default());
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
         let mut count = 0;
@@ -6987,7 +6987,7 @@ fn a_feature_gives_a_mods_sign_its_block_entity() {
         let mut worker = terrain.worker();
         let mut region: [Proto; 9] =
             std::array::from_fn(|i| terrain.proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1));
-        terrain.decorate(&mut worker, &mut region);
+        terrain.decorate(&mut worker, &mut region, Default::default());
         let [_, _, _, _, center, ..] = region;
         let chunk = terrain.finish(center);
         let mut placed = 0;

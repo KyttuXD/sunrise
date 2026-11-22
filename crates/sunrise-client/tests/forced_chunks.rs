@@ -59,7 +59,12 @@ impl ChunkGenerator for Plain {
     }
     /// The centre gets its features, as vanilla's FEATURES step does; the
     /// neighbours are only written to.
-    fn decorate(&self, _: &mut (), region: &mut [Proto; 9]) {
+    fn decorate(
+        &self,
+        _: &mut (),
+        region: &mut [Proto; 9],
+        _: sunrise_client::streaming::DecorationDependencies<'_>,
+    ) {
         region[4].downcast_mut::<Column>().unwrap().decorated = true;
     }
     fn is_decorated(&self, proto: &Proto) -> bool {

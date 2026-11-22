@@ -306,7 +306,7 @@ mod tests {
                     .generate_proto(ChunkPos::new(x + i % 3 - 1, i / 3 - 1))
                     .unwrap()
             });
-            worker.decorate(&mut region).unwrap();
+            worker.decorate(&mut region, Default::default()).unwrap();
             let [.., center, _, _, _, _] = region;
             (worker, center)
         };
@@ -495,7 +495,7 @@ mod tests {
                     region.iter_mut().for_each(ProtoChunk::set_full);
                 }
                 region[4].block_entities.extend(existing);
-                worker.decorate(&mut region).unwrap();
+                worker.decorate(&mut region, Default::default()).unwrap();
                 region
                     .into_iter()
                     .flat_map(|chunk| chunk.block_entities)
@@ -663,7 +663,7 @@ mod tests {
                     .unwrap()
             });
             let undecorated = blocks(&region[4]);
-            worker.decorate(&mut region).unwrap();
+            worker.decorate(&mut region, Default::default()).unwrap();
             assert!(region[4].is_decorated(), "{stages:?}");
             assert!(blocks(&region[4]) == undecorated, "{stages:?}");
             if stages == surface {
@@ -800,7 +800,7 @@ mod tests {
             .try_into()
             .unwrap_or_else(|_| panic!("nine chunks"));
         let before = std::array::from_fn(|i| snapshot(&region[i]));
-        worker.decorate(&mut region).unwrap();
+        worker.decorate(&mut region, Default::default()).unwrap();
         [before, std::array::from_fn(|i| snapshot(&region[i]))]
     }
 

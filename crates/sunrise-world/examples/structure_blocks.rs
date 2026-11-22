@@ -66,7 +66,7 @@ fn main() -> Result<(), Error> {
         let stats = if std::env::var_os("SUNRISE_TERRAIN_ONLY").is_some() {
             Default::default()
         } else {
-            worker.decorate(&mut region)?
+            worker.decorate(&mut region, Default::default())?
         };
         if stats.failed > 0 {
             eprintln!(
