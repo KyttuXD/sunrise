@@ -4368,7 +4368,7 @@ fn block_base_of(tag: &str, declarations: &[&str], facts: &str) -> (PathBuf, Vec
         Some(J::Arr(rows)) => rows.len(),
         _ => panic!("{tag}: facts.json has no states"),
     };
-    let rows = vec![r#"{"item":"minecraft:test"}"#; count].join(",");
+    let rows = vec![r#"{"item":"minecraft:test","sound":{"identity":"other"}}"#; count].join(",");
     fs::write(
         base.join("gameplay-facts.json"),
         format!(r#"{{"states":[{rows}]}}"#),

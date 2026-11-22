@@ -88,6 +88,7 @@ public final class VanillaGameplayFactsExporter {
             else if (sound == SoundType.STEM) sounds.addProperty("identity", "stem");
             else if (sound == SoundType.CHERRY_WOOD) sounds.addProperty("identity", "cherry_wood");
             else if (sound == SoundType.BAMBOO_WOOD) sounds.addProperty("identity", "bamboo_wood");
+            else sounds.addProperty("identity", "other");
             sounds.addProperty("volume", sound.getVolume());
             sounds.addProperty("pitch", sound.getPitch());
             sounds.add("break", sound(sound.getBreakSound()));

@@ -465,6 +465,29 @@ impl BlockFacts {
             }
             let state = registry.state(id).ok_or("missing registry state")?;
             let sound = &entry.sound;
+            let identity = match sound.identity.as_deref() {
+                Some("other") => BlockSoundTypeIdentity::Other,
+                Some("wood") => BlockSoundTypeIdentity::Wood,
+                Some("nether_wood") => BlockSoundTypeIdentity::NetherWood,
+                Some("stem") => BlockSoundTypeIdentity::Stem,
+                Some("cherry_wood") => BlockSoundTypeIdentity::CherryWood,
+                Some("bamboo_wood") => BlockSoundTypeIdentity::BambooWood,
+                Some(other) => {
+                    return Err(format!(
+                        "{}: block state {index} has unknown sound type identity {other:?}",
+                        path.display()
+                    )
+                    .into());
+                }
+                None => {
+                    return Err(format!(
+                        "{}: block state {index} is missing its sound type identity. \
+                         Prepare these resources again with the launcher or sunrise-prepare --prepare",
+                        path.display()
+                    )
+                    .into());
+                }
+            };
             let prop = |k: &str| state.properties.get(k).map(String::as_str);
             let (fluid, fluid_level, fluid_falling) = match state.name.as_str() {
                 "minecraft:water" | "minecraft:lava" => {
@@ -555,19 +578,7 @@ impl BlockFacts {
                         .unwrap_or("minecraft:air"),
                 ),
                 sounds: BlockSoundType {
-                    identity: match sound.identity.as_deref() {
-                        None => BlockSoundTypeIdentity::Other,
-                        Some("wood") => BlockSoundTypeIdentity::Wood,
-                        Some("nether_wood") => BlockSoundTypeIdentity::NetherWood,
-                        Some("stem") => BlockSoundTypeIdentity::Stem,
-                        Some("cherry_wood") => BlockSoundTypeIdentity::CherryWood,
-                        Some("bamboo_wood") => BlockSoundTypeIdentity::BambooWood,
-                        Some(other) => {
-                            return Err(
-                                format!("unknown block sound type identity: {other:?}").into()
-                            );
-                        }
-                    },
+                    identity,
                     volume: sound.volume as f32,
                     pitch: sound.pitch as f32,
                     break_sound: sound_event(sound.r#break.id.as_deref())?,

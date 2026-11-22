@@ -83,20 +83,57 @@ impl Game<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::native_entity_refs::tests::with_game;
+pub(super) mod tests {
+    use super::super::native_entity_refs::tests::{fixture_root, with_game};
     use mod_api::BlockSoundCause::{Break, Dig, Fall, Place, Step};
     use std::sync::Arc;
     use sunrise_client::mobs::{Mob, MobEvent, equine};
     use sunrise_core::{geometry::Vec3, position::BlockPos};
     use sunrise_world::level::LevelAccess;
 
+    // The executable installs its client callback table once per process.
+    pub(in crate::game) fn install_sound_fixture_in_child(test: &str) -> bool {
+        const CHILD: &str = "SUNRISE_BLOCK_SOUND_TEST_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            crate::entry::install_client_hooks();
+            return true;
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--include-ignored", "--exact", test, "--nocapture"])
+            .env(CHILD, test)
+            .env(
+                "SUNRISE_TEST_RESOURCES",
+                fixture_root().canonicalize().unwrap(),
+            )
+            .env("SUNRISE_HOME", root.join("home"))
+            .env("SUNRISE_LAUNCHER_HOME", root.join("launcher"))
+            .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
+            .env("SUNRISE_NO_AUDIO", "1")
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed; 0 failed;"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
     #[test]
     #[ignore = "daily"]
     fn a_block_part_answers_the_sound_type_a_block_plays() {
+        if !install_sound_fixture_in_child(
+            "game::native_block_sounds::tests::a_block_part_answers_the_sound_type_a_block_plays",
+        ) {
+            return;
+        }
         mod_platform::__private::part_tests::sound_type_game_thread();
-        // The client library asks the mods through the executable's callbacks.
-        crate::entry::install_client_hooks();
         with_game(|game| {
             let registry = game.pack.assets.registry;
             let player = Some((7, "minecraft:player"));

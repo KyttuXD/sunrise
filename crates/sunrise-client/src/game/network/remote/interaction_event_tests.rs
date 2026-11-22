@@ -1881,7 +1881,11 @@ fn powder_snow_placement_uses_the_bucket_event_and_contextual_levels() {
         }
     }
     const EMPTY_POWDER_SNOW: &str = "minecraft:item.bucket.empty_powder_snow";
-    crate::entry::install_client_hooks();
+    if !crate::game::native_block_sounds::tests::install_sound_fixture_in_child(
+        "game::remote::interaction_event_tests::powder_snow_placement_uses_the_bucket_event_and_contextual_levels",
+    ) {
+        return;
+    }
     for listened in [false, true] {
         let observed = Arc::new(AtomicUsize::new(0));
         let mut mods = vec![mod_api::ModEntry::new(
