@@ -508,14 +508,13 @@ impl StructureState {
             .filter_map(|start| {
                 let index = (self.registry.structures.iter()).position(|s| s.name == start.name)?;
                 let def = &self.registry.structures[index];
-                if !start.pieces.is_empty()
-                    && let Some(pieces) = start
-                        .pieces
-                        .iter()
-                        .map(|piece| self.saved_piece(piece))
-                        .collect::<Option<Vec<_>>>()
-                {
-                    return Some(Arc::new(StructureStart::new(index, def, chunk, pieces)));
+                let (pieces, complete, native) =
+                    load_saved_pieces(def, &start.pieces, self.resources.registry, |piece| {
+                        self.saved_pool_piece(piece)
+                    });
+                if native || (complete && !pieces.is_empty()) {
+                    return (!pieces.is_empty())
+                        .then(|| Arc::new(StructureStart::new(index, def, chunk, pieces)));
                 }
                 if let Some(bounds) = start.bounds {
                     let made = generated.get_or_insert_with(|| {
@@ -570,26 +569,6 @@ impl StructureState {
         PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
             .ok()
             .map(Piece::Pool)
-    }
-    /// A saved piece, as `StructureStart.loadStaticStart` loads it: a jigsaw
-    /// piece from `PoolPiece::from_saved`, a mod type's piece from its
-    /// `load_piece` (the `StructurePieceType` is the loader), none otherwise.
-    fn saved_piece(&self, piece: &sunrise_core::nbt::Tag) -> Option<Piece> {
-        if let Some(pool) = self.saved_pool_piece(piece) {
-            return Some(pool);
-        }
-        let sunrise_core::nbt::Tag::Compound(map) = piece else {
-            return None;
-        };
-        let id = match map.get(&"id".into()) {
-            Some(sunrise_core::nbt::Tag::String(s)) => s.to_string_lossy(),
-            _ => return None,
-        };
-        let types = super::structure::mod_types::mod_structure_types();
-        types
-            .get(&*id)?
-            .load_piece(self.resources.registry, map)
-            .map(Piece::Legacy)
     }
     pub(super) fn set_saved_starts(&self, source: Arc<super::generator::SavedStructureStarts>) {
         let _ = self.saved.set(source);
@@ -655,6 +634,9 @@ impl StructureState {
                 saved,
             )
             .into_iter()
+            // An empty saved native start prevents regeneration of its set, but is not a
+            // valid start (`StructureStart.isValid`) and cannot be referenced or placed.
+            .filter(|start| !start.pieces.is_empty())
             .map(Arc::new)
             .collect(),
         );
@@ -925,8 +907,51 @@ fn pieces_box(pieces: &[Piece]) -> Option<[i32; 6]> {
     }
     union.map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
 }
-/// `StructureStart.loadStaticStart` / `PiecesContainer.load`, restricted to complete supported
-/// starts. Unsupported or unreadable children leave the entire start to regeneration.
+/// `PiecesContainer.load`: use registered native loaders with the unchanged piece tags.
+/// Keep walking after a native child fails. The caller still needs to distinguish incomplete
+/// built-in starts, whose unsupported piece types Sunrise has not yet ported.
+fn load_saved_pieces(
+    def: &StructureDef,
+    children: &[sunrise_core::nbt::Tag],
+    registry: &crate::registry::BlockRegistry,
+    mut load_vanilla: impl FnMut(&sunrise_core::nbt::Tag) -> Option<Piece>,
+) -> (Vec<Piece>, bool, bool) {
+    use sunrise_core::nbt::Tag;
+    let native_type = matches!(&def.kind, StructureKind::Mod(_));
+    let mut native = native_type;
+    let mut complete = true;
+    let mut pieces = Vec::with_capacity(children.len());
+    let types = super::structure::mod_types::mod_structure_types();
+    for child in children {
+        let loaded = if let Tag::Compound(tag) = child
+            && let Some(id) = saved_piece_name(child)
+            && let Some(registered) = types.get(&id)
+        {
+            native = true;
+            registered.load_piece(registry, tag).map(Piece::Legacy)
+        } else {
+            let loaded = load_vanilla(child);
+            if loaded.is_none() && native_type {
+                log::error!(
+                    "structure {}: no loader for saved piece {:?}",
+                    def.name,
+                    saved_piece_name(child),
+                );
+            }
+            loaded
+        };
+        if let Some(piece) = loaded {
+            pieces.push(piece);
+        } else {
+            complete = false;
+        }
+    }
+    (pieces, complete, native)
+}
+
+/// `StructureStart.loadStaticStart` / `PiecesContainer.load`. For native starts, keep all
+/// successfully loaded children even if another failed. Unsupported built-in starts still use
+/// the existing regeneration path until their loaders are ported.
 pub(super) fn read_saved_start(
     index: usize,
     def: &StructureDef,
@@ -947,9 +972,6 @@ pub(super) fn read_saved_start(
     let Tag::List(children) = tag.get("Children")? else {
         return None;
     };
-    if children.is_empty() {
-        return None;
-    }
     if matches!(&def.kind, StructureKind::Monument(_)) {
         // `OceanMonumentStructure.regeneratePiecesAfterLoad` throws the saved pieces away and
         // reads only the first one's box and orientation. A first piece that is not the
@@ -964,9 +986,8 @@ pub(super) fn read_saved_start(
         start.references = int("references");
         return Some(start);
     }
-    let pieces = children
-        .iter()
-        .map(|piece| {
+    let (pieces, complete, native) =
+        load_saved_pieces(def, children, resources.registry, |piece| {
             // `PiecesContainer.load`'s RENAMES read the old jigsaw ids as `jigsaw`; the other
             // supported types are template pieces and the mineshaft, fortress and stronghold
             // pieces that read their own tags.
@@ -988,8 +1009,10 @@ pub(super) fn read_saved_start(
             PoolPiece::from_saved(&tag_json(piece), resources, bindings)
                 .ok()
                 .map(Piece::Pool)
-        })
-        .collect::<Option<Vec<_>>>()?;
+        });
+    if !native && (!complete || pieces.is_empty()) {
+        return None;
+    }
     let mut start = StructureStart::new(index, def, chunk, pieces);
     start.references = int("references");
     Some(start)

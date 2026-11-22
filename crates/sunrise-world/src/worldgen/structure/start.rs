@@ -1527,10 +1527,19 @@ fn generate(
     )))
 }
 impl StructureStart {
-    /// A start of `def` (registry index `structure`) from its pieces, at
-    /// least one: their box, grown where the structure adapts the terrain.
+    /// A start of `def` (registry index `structure`) from its pieces: their box,
+    /// grown where the structure adapts the terrain. An empty saved start is
+    /// invalid and serves only to prevent generating replacement pieces.
     pub fn new(structure: usize, def: &StructureDef, chunk: ChunkPos, pieces: Vec<Piece>) -> Self {
-        let mut bounding_box = pieces[0].bounding_box();
+        let mut bounding_box = pieces.first().map_or_else(
+            || {
+                BoundingBox::new(
+                    [chunk.x << 4, 0, chunk.z << 4],
+                    [chunk.x << 4, 0, chunk.z << 4],
+                )
+            },
+            Piece::bounding_box,
+        );
         let mut override_bounds: Option<BoundingBox> = None;
         let mut has_piece_beardifier = false;
         for (index, piece) in pieces.iter().enumerate() {
