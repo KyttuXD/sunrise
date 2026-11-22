@@ -6,9 +6,14 @@ use crate::sdk_fetch::{self, Base, CacheStamp};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use sunrise_mod_package::sdk::{self, Index};
-use sunrise_native_build::{contract, library_record::Library, prebuilt::Route, rust::Unpacked};
+use sunrise_native_build::{
+    Bundle, contract,
+    library_record::Library,
+    prebuilt::{self, Package, Route},
+    rust::Unpacked,
+};
 
 /// Names the cache's folder instead of the platform's.
 const CACHE_ENV: &str = "SUNRISE_MOD_CACHE";
@@ -208,11 +213,7 @@ pub(crate) struct NativeSdk {
 }
 
 impl NativeSdk {
-    fn slices(
-        &self,
-        side: sdk::Side,
-        release: bool,
-    ) -> Result<sunrise_native_build::prebuilt::Package, String> {
+    fn slices(&self, side: sdk::Side, release: bool) -> Result<Package, String> {
         sdk_fetch::fetch_slices(
             &self.base,
             &self.index,
@@ -222,6 +223,21 @@ impl NativeSdk {
             &self.dir,
             &self.stamp,
         )
+    }
+
+    fn compile(
+        &self,
+        bundle: &Bundle,
+        plan: &contract::Plan,
+        events: &mut Events,
+    ) -> Result<(), String> {
+        if prebuilt::needs_pinned_patch_tool(&plan.package, bundle)? {
+            let (_temporary, tool) =
+                sdk_fetch::fetch_tool(&self.base, &self.index, &self.rust.target, &self.dir)?;
+            events.run_tool(&tool, plan)
+        } else {
+            contract::run(plan, &mut std::io::empty(), events)
+        }
     }
 }
 
@@ -259,9 +275,37 @@ pub(crate) struct Built {
 }
 
 /// Turns the build's event lines into the lines a developer reads, and keeps its result.
+#[derive(Default)]
 struct Events {
     partial: Vec<u8>,
     built: Option<contract::Event>,
+    failed: Option<String>,
+}
+
+impl Events {
+    /// Run the verified SDK tool using the native-build contract. The plan already answers consent.
+    fn run_tool(&mut self, tool: &Path, plan: &contract::Plan) -> Result<(), String> {
+        let mut input = serde_json::to_vec(plan).map_err(|e| e.to_string())?;
+        input.push(b'\n');
+        let describe = |error: std::io::Error| format!("{}: {error}", tool.display());
+        let mut child = Command::new(tool)
+            .arg("native-build")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(describe)?;
+        let sent = child.stdin.take().expect("piped stdin").write_all(&input);
+        let received = std::io::copy(&mut child.stdout.take().expect("piped stdout"), self);
+        let status = child.wait().map_err(describe)?;
+        if !status.success() {
+            return Err(self.failed.take().unwrap_or_else(|| {
+                format!("{}: native-build exited with {status}", tool.display())
+            }));
+        }
+        sent.map_err(describe)?;
+        received.map_err(describe)?;
+        Ok(())
+    }
 }
 
 impl Write for Events {
@@ -274,7 +318,7 @@ impl Write for Events {
                     println!("Compiling {id} ({done}/{total})")
                 }
                 Ok(event @ contract::Event::Built { .. }) => self.built = Some(event),
-                // A failure is the build's returned error; consent is never asked (the plan answers).
+                Ok(contract::Event::Failed { error, .. }) => self.failed = Some(error),
                 _ => {}
             }
         }
@@ -328,8 +372,6 @@ pub(crate) fn build(
         })
         .transpose()?;
     let package = sdk.slices(side, release)?;
-    let rust_release = sdk.index.toolchain.rust;
-    let rust = sdk.rust;
 
     let work = match &release_host {
         Some((host, _)) => cache.join("release-work").join(&build).join(&id).join(host),
@@ -355,7 +397,7 @@ pub(crate) fn build(
     if (registry || release) && (update_lock || !lock.exists()) {
         println!("Pinning dependencies in Cargo.lock");
         sunrise_native_build::registry_generate::generate(
-            || Ok(rust.clone()),
+            || Ok(sdk.rust.clone()),
             sunrise_native_build::registry_generate::game_lock,
             &bundle,
             update_lock,
@@ -373,18 +415,15 @@ pub(crate) fn build(
     let plan = contract::Plan {
         contract: contract::CONTRACT,
         work,
-        toolchain: rust,
+        toolchain: sdk.rust.clone(),
         package,
         mods: project,
         target,
         registry: Some(!release),
         mixins_from_source: false,
     };
-    let mut events = Events {
-        partial: Vec::new(),
-        built: None,
-    };
-    contract::run(&plan, &mut std::io::empty(), &mut events).map_err(failed)?;
+    let mut events = Events::default();
+    sdk.compile(&bundle, &plan, &mut events).map_err(failed)?;
     let Some(contract::Event::Built {
         route,
         binary,
@@ -417,7 +456,7 @@ pub(crate) fn build(
                 &build,
                 &id,
                 &bundle.manifest.version.to_string(),
-                &rust_release,
+                &sdk.index.toolchain.rust,
             );
             crate::release::BuiltLibrary::from_event(&route, host, library, record, &identity)
                 .map(|library| (library, name))

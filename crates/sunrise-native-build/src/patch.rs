@@ -456,7 +456,7 @@ pub fn prepare<'a>(
     let mut extras = extras(&bundles)?;
     extras.loops = loops;
     extras.linked = sdk_extern_names(sdk).map(str::to_owned).collect();
-    extras.lower_crate_cfg = Some(sdk.lower_crate_cfg().clone());
+    extras.lower_crate_cfg = Some(sdk.lower_crate_cfg().cloned().unwrap_or_default());
     let generated = api_gen::patch::generate(&source, CRATE, &targets, &extras, &index);
     let refusals: Vec<String> = match &generated {
         Ok(_) => Vec::new(),

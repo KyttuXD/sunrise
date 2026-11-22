@@ -2520,67 +2520,77 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_lower_crates_feature_gated_definition_takes_precedence_over_a_glob() {
-        use crate::functions::{CrateModules, FunctionIndex, ModuleFile, sha256};
-        use std::process::Command;
+        use crate::functions::{FILE, FunctionIndex};
+        use crate::staging::{self, Build, Mode};
+        use std::{fs, process::Command};
 
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let lib = root.join("lib.rs");
-        let lower = r#"
-            pub mod other {
-                pub fn helper() -> u8 { 3 }
+        let pristine = tempfile::tempdir().unwrap();
+        let staged = tempfile::tempdir().unwrap();
+        let lower = "crates/lower/src";
+        let anim = format!("{lower}/anim.rs");
+        let marker = "#[sunrise_mod_api_macros::replaceable]";
+        let sources = [
+            (
+                "crates/sunrise-client/Cargo.toml",
+                "[package]\nname = 'sunrise-client'\n",
+            ),
+            ("crates/sunrise-client/src/lib.rs", "pub mod game;\n"),
+            ("crates/sunrise-client/src/game.rs", ""),
+            ("crates/sunrise-client/src/entry.rs", ""),
+            ("crates/sunrise-mod-api-gen/internals.txt", ""),
+            (crate::crossing::CROSSING_FOREIGN_FILE, "[]"),
+            (
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"sunrise-client\"\nversion = \"0.1.0\"\n",
+            ),
+            ("crates/lower/Cargo.toml", "[package]\nname = 'lower'\n"),
+            (
+                "crates/lower/src/lib.rs",
+                "pub mod other { pub fn helper() -> u8 { 3 } }\npub mod anim;\n",
+            ),
+            (
+                &anim,
+                r#"
+                use super::other::*;
+                #[cfg(feature = "local-helper")]
+                include!("with_helper.rs");
+                #[cfg(not(feature = "local-helper"))]
+                include!("without_helper.rs");
+                #[sunrise_mod_api_macros::replaceable]
+                pub fn copy() -> u8 { helper() }
+                "#,
+            ),
+            (
+                "crates/lower/src/with_helper.rs",
+                "pub fn helper() -> u8 { 7 }\n",
+            ),
+            ("crates/lower/src/without_helper.rs", ""),
+        ];
+        for root in [pristine.path(), staged.path()] {
+            for (path, text) in sources {
+                let path = root.join(path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, text).unwrap();
             }
-            #[cfg_attr(feature = "local-helper", path = "with_helper.rs")]
-            pub mod anim;
-        "#;
-        let glob = "use super::other::*;";
-        let with_helper = format!(
-            r##"
-            {glob}
-            #[cfg(feature = r#"local-helper"#,)]
-            pub fn helper() -> u8 {{ 7 }}
-        "##
-        );
-        let file = |path: &str, text: &str, cfg: Vec<String>| {
-            std::fs::write(root.join(path), text).unwrap();
-            ModuleFile {
-                path: path.into(),
-                cfg,
-                sha256: sha256(text.as_bytes()),
-            }
+        }
+        let root = staged.path();
+        let build = Build {
+            commit: "c".repeat(40),
         };
+        staging::stage(root, &root.join("internals.json"), Mode::Build, &build).unwrap();
+        let (pinned, index): (Build, FunctionIndex) =
+            mod_surface::build_data::read(FILE, &fs::read_to_string(root.join(FILE)).unwrap())
+                .unwrap();
+        assert_eq!(pinned, build);
+        let index = index.checked().unwrap();
+        // The staged installer is real; the marker is only a proc-macro input to the unchanged
+        // game source and needn't be linked into this direct rustc fixture.
+        let staged_anim = root.join(anim);
+        let text = fs::read_to_string(&staged_anim).unwrap();
+        fs::write(&staged_anim, text.replace(marker, "")).unwrap();
+        let lib = root.join(lower).join("lib.rs");
         let feature = r#"feature="local-helper""#;
-        let index = FunctionIndex {
-            crates: BTreeMap::from([(
-                "lower".to_owned(),
-                CrateModules {
-                    library: "lower".into(),
-                    modules: BTreeMap::from([
-                        ("lower".to_owned(), vec![file("lib.rs", lower, Vec::new())]),
-                        (
-                            "lower::anim".to_owned(),
-                            vec![
-                                file("anim.rs", glob, vec![format!("not({feature})")]),
-                                file("with_helper.rs", &with_helper, vec![feature.into()]),
-                            ],
-                        ),
-                    ]),
-                },
-            )]),
-            ..FunctionIndex::default()
-        };
-        let copy = Tree {
-            copies: vec![quote!(
-                pub fn copy() -> u8 {
-                    helper()
-                }
-            )],
-            ..Tree::default()
-        };
-        let tree = Tree {
-            children: BTreeMap::from([("anim".to_owned(), copy)]),
-            ..Tree::default()
-        };
+        let targets = ["lower::anim::copy".into()];
         let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
         let rlib = root.join("liblower.rlib");
         for (lower_has_feature, expected) in [(true, 7), (false, 3)] {
@@ -2602,19 +2612,24 @@ mod tests {
                 String::from_utf8_lossy(&compiled.stderr)
             );
 
-            let cfg = BTreeMap::from([(
-                "lower".to_owned(),
-                lower_has_feature
-                    .then_some(feature.to_owned())
-                    .into_iter()
-                    .collect(),
-            )]);
-            let mut source = Source::indexed(root, &index, Some(&cfg)).unwrap();
-            let generated = mirror(&mut source, "lower", &tree, &[], None).unwrap();
+            let extras = Extras {
+                lower_crate_cfg: Some(BTreeMap::from([(
+                    "lower".to_owned(),
+                    lower_has_feature
+                        .then_some(feature.to_owned())
+                        .into_iter()
+                        .collect(),
+                )])),
+                ..Extras::default()
+            };
+            let generated = generate(pristine.path(), "patch", &targets, &extras, &index).unwrap();
+            let [(_, body)] = generated.libs.as_slice() else {
+                panic!("expected one lower-crate patch library");
+            };
             let program = root.join("patch.rs");
-            std::fs::write(
+            fs::write(
                 &program,
-                format!("{generated}\nfn main() {{ assert_eq!(anim::copy(), {expected}); }}"),
+                format!("{body}\nfn main() {{ assert_eq!(anim::copy(), {expected}); }}"),
             )
             .unwrap();
             let exe = root.join(format!("patch{}", std::env::consts::EXE_SUFFIX));
