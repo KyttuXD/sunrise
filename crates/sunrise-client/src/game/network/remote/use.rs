@@ -232,10 +232,26 @@ impl Game<'_> {
     /// `Minecraft.startUseItem`'s block turn for `hand`: a use that swung drops
     /// the hand (`LocalPlayer.itemUsed`) when it spent the held item or the
     /// player has infinite materials.
-    pub(in crate::game) fn remote_use_block(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_block(
+        &mut self,
+        hand: Hand,
+        attempt: mod_api::InteractionAttempt,
+        hit: Option<Hit>,
+    ) -> bool {
         let before = self.with_hand(hand, |g| g.held().map(|s| s.count));
         let swings = self.swings_started;
-        let done = self.remote_use_item_on(hand);
+        let done = self.remote_use_item_on(hand, attempt, hit);
+        self.finish_remote_use_block(hand, before, swings, done);
+        done
+    }
+
+    pub(super) fn finish_remote_use_block(
+        &mut self,
+        hand: Hand,
+        before: Option<u32>,
+        swings: u32,
+        done: bool,
+    ) {
         if done
             && self.swings_started != swings
             && let Some(after) = self.with_hand(hand, |g| g.held().map(|s| s.count))
@@ -243,7 +259,6 @@ impl Game<'_> {
         {
             self.heights.item_used(hand);
         }
-        done
     }
 
     /// Whether the block hit takes a main-hand right click with `held`
@@ -536,20 +551,29 @@ impl Game<'_> {
         }
     }
 
-    /// The rest of Minecraft.startUseItem once the main hand's target passed:
-    /// the main hand's item, then the off hand's turn (its block, its item).
-    /// The server does each packet's part with that packet's hand only.
-    pub(in crate::game) fn remote_use_hands(&mut self, attempt: mod_api::InteractionAttempt) {
+    /// Continue Minecraft.startUseItem after this hand's target passed:
+    /// its item, then the off hand's target and item if this is the main hand.
+    /// When resumed after a server answer, use the original block hit.
+    pub(in crate::game) fn remote_use_hands(
+        &mut self,
+        hand: Hand,
+        attempt: mod_api::InteractionAttempt,
+        block_hit: Option<Hit>,
+    ) {
         // Nothing in the crosshair: an empty hand's click is heard, by mods only.
-        let miss = mod_api::__private::listened(mod_api::HookId::RightClickEmpty)
+        let miss = block_hit.is_none()
+            && mod_api::__private::listened(mod_api::HookId::RightClickEmpty)
             && !self.entity_targeted()
             && self.pick().is_none();
-        if miss && self.held().is_none() {
-            self.native_right_click_empty(Hand::Main);
+        if miss && self.with_hand(hand, |g| g.held().is_none()) {
+            self.native_right_click_empty(hand);
         }
         // A successful Item.use always drops the hand (LocalPlayer.itemUsed).
-        if self.remote_use_item(Hand::Main) {
-            self.heights.item_used(Hand::Main);
+        if self.remote_use_item(hand) {
+            self.heights.item_used(hand);
+            return;
+        }
+        if hand == Hand::Off {
             return;
         }
         // The off hand's turn: the event again, then the entity or the block.
@@ -562,10 +586,10 @@ impl Game<'_> {
             }
             return;
         }
-        let off_target = if self.remote_use_targets_entity() {
+        let off_target = if block_hit.is_none() && self.remote_use_targets_entity() {
             self.remote_use_entity(Hand::Off)
         } else {
-            self.remote_use_block(Hand::Off)
+            self.remote_use_block(Hand::Off, attempt, block_hit)
         };
         if off_target {
             return;

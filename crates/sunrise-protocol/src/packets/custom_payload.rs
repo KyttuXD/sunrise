@@ -53,6 +53,10 @@ pub const SERVERBOUND_LIMIT: usize = 32_767;
 /// ClientboundCustomPayloadPacket.MAX_PAYLOAD_SIZE in vanilla 26.3.
 pub const CLIENTBOUND_LIMIT: usize = 1_048_576;
 
+/// Play payloads for server-authoritative cauldron clicks.
+pub const CAULDRON_ENTRIES_CHANNEL: &str = "sunrise:cauldron_entries";
+pub const CAULDRON_USE_CHANNEL: &str = "sunrise:cauldron_use";
+
 /// Common payload with a directional unknown-id limit, excluding the identifier.
 /// Registered payloads use their own codec constraints, not this discard cap.
 pub struct PayloadCodec<const CLIENTBOUND: bool, const PLAY: bool>;
@@ -88,7 +92,8 @@ fn uses_registered_payload_codec(channel: &str, play: bool, clientbound: bool) -
         | "sunrise:selector_tokens" => play && clientbound,
         // Configuration both ways (the capability), play clientbound only.
         crate::menu_extra::CHANNEL => !play || clientbound,
-        "sunrise:recipe_transfer" => play,
+        "sunrise:recipe_transfer" | CAULDRON_USE_CHANNEL => play,
+        CAULDRON_ENTRIES_CHANNEL => play && clientbound,
         crate::passage_sync::CROSS_CHANNEL => play && !clientbound,
         crate::carry_age::CHANNEL => play && !clientbound,
         crate::custom_book::CHANNEL => play || clientbound,

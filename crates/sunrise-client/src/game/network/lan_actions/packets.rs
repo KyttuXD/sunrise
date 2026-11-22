@@ -184,11 +184,43 @@ impl Game<'_> {
         {
             return self.guest_passage_cross(conn, &p.data);
         }
+        use super::super::cauldron_prediction::{USE_CHANNEL, UseOnOutcome, use_result};
         let Some(host) = self.lan.as_ref() else {
             return;
         };
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
+        };
+        // An authoritative request is an ordinary UseItemOn with a receipt, not
+        // permission to use an item or to bypass the vanilla loaded/dead checks.
+        let (packet, receipt) = match packet {
+            S::CustomPayload(p) if p.channel == USE_CHANNEL => {
+                use sunrise_protocol::buf::{Codec, Reader};
+                let mut input = Reader::new(&p.data);
+                let decoded = (|| -> sunrise_protocol::Result<_> {
+                    let receipt = input.i64()?;
+                    let packet = play::UseItemOn::read(&mut input)?;
+                    if input.remaining() != 0 || packet.sequence < 0 {
+                        return Err(sunrise_protocol::Error::new("invalid block use request"));
+                    }
+                    Ok((receipt, packet))
+                })();
+                let (receipt, packet) = match decoded {
+                    Ok(request) => request,
+                    Err(error) => {
+                        log::warn!("authoritative block use from guest {conn} refused: {error}");
+                        return;
+                    }
+                };
+                let guest = &host.hub.guests[gi];
+                if !guest.client_loaded() {
+                    host.hub
+                        .send_to(conn, &use_result(receipt, UseOnOutcome::default()));
+                    return;
+                }
+                (S::UseItemOn(packet), Some(receipt))
+            }
+            packet => (packet, None),
         };
         // A dead player acts no more, but the death screen still respawns and chats: its
         // commands run as anyone's (ServerGamePacketListenerImpl.handleChatCommand doesn't
@@ -202,6 +234,10 @@ impl Game<'_> {
                     | S::CustomClickAction(_)
             )
         {
+            if let Some(receipt) = receipt {
+                host.hub
+                    .send_to(conn, &use_result(receipt, UseOnOutcome::default()));
+            }
             return;
         }
         // The window a packet names is the open one, as in vanilla's handlers. With no menu open
@@ -587,7 +623,14 @@ impl Game<'_> {
                 host.hub.ack(conn, p.sequence);
                 let hit = Hit::from_use_item_on(&p);
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
-                let _ = self.guest_use_item_on(conn, gi, hit, hand);
+                let result = self.guest_use_item_on(conn, gi, hit, hand, receipt);
+                if result.is_err()
+                    && let Some(receipt) = receipt
+                    && let Some(host) = self.lan.as_ref()
+                {
+                    host.hub
+                        .send_to(conn, &use_result(receipt, UseOnOutcome::default()));
+                }
             }
             S::UseItem(p) => {
                 let Some(host) = self.lan.as_mut() else {

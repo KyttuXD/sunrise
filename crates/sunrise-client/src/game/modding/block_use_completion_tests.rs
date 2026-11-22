@@ -139,7 +139,7 @@ fn consuming_cancellation_has_one_outer_on_local_and_packet_routes() {
                         .iter()
                         .position(|guest| guest.conn == 12)
                         .unwrap();
-                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main).is_ok());
+                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main, None).is_ok());
                 } else {
                     g.as_guest(12, |g| {
                         g.forced_hit = Some(hit);
@@ -179,7 +179,7 @@ fn consuming_cancellation_has_one_outer_on_local_and_packet_routes() {
                         .iter()
                         .position(|guest| guest.conn == 12)
                         .unwrap();
-                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main).is_ok());
+                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main, None).is_ok());
                 } else {
                     g.as_guest(12, |g| {
                         g.forced_hit = Some(hit);
@@ -228,7 +228,7 @@ fn consuming_cancellation_has_one_outer_on_local_and_packet_routes() {
                         .iter()
                         .position(|guest| guest.conn == 12)
                         .unwrap();
-                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main).is_ok());
+                    assert!(g.guest_use_item_on(12, gi, hit, Hand::Main, None).is_ok());
                 } else {
                     g.as_guest(12, |g| {
                         g.forced_hit = Some(hit);
@@ -308,7 +308,7 @@ fn resource_gated_block_use_order_and_stacks_on_server_and_guest() {
                     .position(|guest| guest.conn == 12)
                     .unwrap();
                 assert!(matches!(
-                    g.guest_use_item_on(12, gi, hit, Hand::Main),
+                    g.guest_use_item_on(12, gi, hit, Hand::Main, None),
                     Ok(true)
                 ));
                 g.as_guest(12, |g| assert_eq!(g.held(), Some(&after)))
@@ -402,7 +402,7 @@ fn resource_gated_map_on_banner_fires_once_and_toggles_the_real_marker() {
                 .position(|guest| guest.conn == 12)
                 .unwrap();
             assert!(matches!(
-                g.guest_use_item_on(12, gi, hit, Hand::Main),
+                g.guest_use_item_on(12, gi, hit, Hand::Main, None),
                 Ok(true)
             ));
             SEEN.with_borrow(|seen| {
@@ -551,7 +551,7 @@ fn block_use_listener_replacements_keep_original_on_both_routes() {
                             .iter()
                             .position(|guest| guest.conn == 12)
                             .unwrap();
-                        assert!(g.guest_use_item_on(12, gi, hit, Hand::Main).is_ok());
+                        assert!(g.guest_use_item_on(12, gi, hit, Hand::Main, None).is_ok());
                     } else {
                         g.as_guest(12, |g| {
                             g.forced_hit = Some(hit);
@@ -712,7 +712,7 @@ fn run_block_use_regression(g: &mut Game<'_>, packet: bool, stack: ItemStack) {
             .iter()
             .position(|guest| guest.conn == 12)
             .unwrap();
-        assert!(g.guest_use_item_on(12, gi, hit, Hand::Main).is_ok());
+        assert!(g.guest_use_item_on(12, gi, hit, Hand::Main, None).is_ok());
     } else {
         g.as_guest(12, |g| {
             g.set_mode_id(0);

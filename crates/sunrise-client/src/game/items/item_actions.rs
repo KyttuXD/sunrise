@@ -15,7 +15,7 @@ impl Game<'_> {
         // but on a server a spectator's use on a block opens the block's
         // menu (ServerPlayerGameMode.useItemOn).
         if self.spectator() {
-            if let Some(GuestUse::OnBlock(hand)) = self.guest_use
+            if let Some(GuestUse::OnBlock { hand, .. }) = self.guest_use
                 && let Some(hit) = self.pick()
             {
                 self.with_hand(hand, |game| {
@@ -39,7 +39,7 @@ impl Game<'_> {
                 .with_hand(hand, |g| g.interact_entity(Some(target)))?
                 .then_some(hand));
         }
-        let on_block = matches!(guest, Some(GuestUse::OnBlock(_)));
+        let on_block = matches!(guest, Some(GuestUse::OnBlock { .. }));
         if !on_block
             && self.riding.is_some()
             && let Some(item) = self.held().map(|s| s.item.clone())
@@ -52,13 +52,15 @@ impl Game<'_> {
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
         let block_hit = match guest {
-            Some(GuestUse::OnBlock(_)) => self.pick(),
+            Some(GuestUse::OnBlock { .. }) => self.pick(),
             Some(GuestUse::Item(_)) => None,
             _ if self.entity_targeted() => None,
             _ => self.pick(),
         };
         let hands = match guest {
-            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand) | GuestUse::Entity(hand, _)) => {
+            Some(
+                GuestUse::OnBlock { hand, .. } | GuestUse::Item(hand) | GuestUse::Entity(hand, _),
+            ) => {
                 vec![hand]
             }
             None => Hand::BOTH.to_vec(),

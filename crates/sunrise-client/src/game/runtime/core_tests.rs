@@ -428,7 +428,7 @@ fn right_click_block_controls_cauldron_use() {
         mob.extra.leash = Some(sunrise_client::mobs::leash::Holder::Player);
         game.mobs.push(mob);
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:lead", 1));
-        game.guest_use = Some(GuestUse::OnBlock(Hand::Main));
+        game.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.forced_hit = Some(hit);
         cancel.store(true, Ordering::SeqCst);
         let before = calls.load(Ordering::SeqCst);
@@ -441,7 +441,7 @@ fn right_click_block_controls_cauldron_use() {
 
         // A spectator's packet reaches the event, even when canceled.
         game.set_mode_id(3);
-        game.guest_use = Some(GuestUse::OnBlock(Hand::Main));
+        game.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.forced_hit = Some(hit);
         cancel.store(true, Ordering::SeqCst);
         let before = calls.load(Ordering::SeqCst);
@@ -487,7 +487,7 @@ fn fence_ties_without_a_lead_only_on_main_hand() {
         mob.extra.leash = Some(Holder::Player);
         game.mobs.push(mob);
         game.forced_hit = Some(hit);
-        game.guest_use = Some(GuestUse::OnBlock(Hand::Off));
+        game.guest_use = Some(GuestUse::on_block(Hand::Off));
         game.with_hand(Hand::Off, |game| game.use_hand(Some(&hit)))
             .unwrap();
         assert_eq!(game.mobs[0].extra.leash, Some(Holder::Player));
@@ -497,7 +497,7 @@ fn fence_ties_without_a_lead_only_on_main_hand() {
         assert_eq!(game.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
         game.mobs[0].extra.leash = Some(Holder::Player);
         game.offhand = None;
-        game.guest_use = Some(GuestUse::OnBlock(Hand::Main));
+        game.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.with_hand(Hand::Main, |game| game.use_hand(Some(&hit)))
             .unwrap();
         assert_eq!(game.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));

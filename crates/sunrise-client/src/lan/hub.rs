@@ -4489,6 +4489,13 @@ impl Hub {
                     events.push(HostEvent::Packet(conn, Box::new(S::UseItemOn(p))));
                     *held = self.move_queued(i);
                 }
+                S::CustomPayload(p)
+                    if p.channel
+                        == sunrise_protocol::packets::custom_payload::CAULDRON_USE_CHANNEL =>
+                {
+                    events.push(HostEvent::Packet(conn, Box::new(S::CustomPayload(p))));
+                    *held = self.move_queued(i);
+                }
                 // handleInteract is the game's too, like handleAttack above: a move queued
                 // behind it waits for the next tick.
                 S::Interact(p) => {

@@ -2222,6 +2222,10 @@ impl Game<'_> {
                     }
                     self.lan_guest_joined(conn, entities, spawn);
                     let host = self.lan.as_ref()?;
+                    super::cauldron_prediction::publish_registrations(
+                        &super::cauldron_interactions::snapshot(),
+                        host.hub.guest(conn),
+                    );
                     if self.is_dedicated_server()
                         && let Some(g) = host.hub.guest(conn)
                     {

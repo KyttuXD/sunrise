@@ -335,9 +335,9 @@ fn hit() -> Hit {
 
 fn use_block(game: &mut Game<'_>, client: bool) -> bool {
     if client {
-        game.remote_use_item_on(Hand::Main)
+        game.remote_use_item_on(Hand::Main, mod_api::InteractionAttempt::Press, None)
     } else {
-        game.guest_use = Some(super::super::GuestUse::OnBlock(Hand::Main));
+        game.guest_use = Some(super::super::GuestUse::on_block(Hand::Main));
         game.use_hand(Some(&hit())).unwrap()
     }
 }
@@ -689,9 +689,9 @@ fn phase_events_replace_the_behaviour_before_its_part_on_both_sides() {
                     ..Controls::default()
                 };
                 let used = if client {
-                    game.remote_use_item_on(Hand::Off)
+                    game.remote_use_item_on(Hand::Off, mod_api::InteractionAttempt::Press, None)
                 } else {
-                    game.guest_use = Some(super::super::GuestUse::OnBlock(Hand::Off));
+                    game.guest_use = Some(super::super::GuestUse::on_block(Hand::Off));
                     game.with_hand(Hand::Off, |g| g.use_hand(Some(&hit())).unwrap())
                 };
                 assert!(used);
@@ -841,7 +841,7 @@ fn a_spectator_fires_right_click_block_on_the_client_and_its_cancel_answers() {
             // Nobody answers: the event fired, and the spectator's click ends there, no swing.
             *observer.0.lock().unwrap() = Controls::default();
             let swings = game.swings_started;
-            assert!(game.remote_use_item_on(Hand::Main));
+            assert!(game.remote_use_item_on(Hand::Main, mod_api::InteractionAttempt::Press, None));
             assert_eq!(observer.0.lock().unwrap().clicks, 1);
             assert_eq!(game.swings_started, swings);
             for (answer, ends, swings_by) in [
@@ -855,7 +855,11 @@ fn a_spectator_fires_right_click_block_on_the_client_and_its_cancel_answers() {
                     ..Controls::default()
                 };
                 let swings = game.swings_started;
-                assert_eq!(game.remote_use_item_on(Hand::Main), ends, "{answer:?}");
+                assert_eq!(
+                    game.remote_use_item_on(Hand::Main, mod_api::InteractionAttempt::Press, None),
+                    ends,
+                    "{answer:?}"
+                );
                 assert_eq!(game.swings_started - swings, swings_by, "{answer:?}");
                 assert_eq!(observer.0.lock().unwrap().clicks, 1, "{answer:?}");
             }
@@ -895,8 +899,8 @@ fn a_spectators_passing_block_click_skips_item_use_for_both_hands() {
             };
             let swings = game.swings_started;
             // The real target turn precedes remote_use_hands' item/off-hand sequence.
-            assert!(!game.remote_use_item_on(Hand::Main));
-            game.remote_use_hands(mod_api::InteractionAttempt::Press);
+            assert!(!game.remote_use_item_on(Hand::Main, mod_api::InteractionAttempt::Press, None));
+            game.remote_use_hands(Hand::Main, mod_api::InteractionAttempt::Press, None);
             let state = observer.0.lock().unwrap();
             assert_eq!(state.clicks, 2);
             assert_eq!(state.click_hands, [Hand::Main, Hand::Off]);
@@ -1292,7 +1296,7 @@ fn an_item_used_from_the_off_hand_reaches_the_use_hooks_on_the_server() {
             game.world.set(0, 63, 0, stone).unwrap();
             game.world.set(0, 64, 0, stone).unwrap();
             game.forced_hit = Some(hit());
-            for guest in [None, Some(super::super::GuestUse::OnBlock(Hand::Off))] {
+            for guest in [None, Some(super::super::GuestUse::on_block(Hand::Off))] {
                 game.inventory[game.selected] = None;
                 *observer.0.lock().unwrap() = Controls {
                     hands: Some(Vec::new()),
@@ -1690,7 +1694,7 @@ fn item_use_overlap_matrix_on_the_server() {
                                                 Answer::Success | Answer::Fail | Answer::Consume
                                             )
                                     };
-                                    game.guest_use = Some(super::super::GuestUse::OnBlock(hand));
+                                    game.guest_use = Some(super::super::GuestUse::on_block(hand));
                                     game.adv.progress = Default::default();
                                     let swings = game.swings_started;
                                     let used =

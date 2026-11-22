@@ -527,7 +527,7 @@ impl Game<'_> {
         });
         let Some((hit, state)) = target else {
             // EnderEyeItem.useOn passes off a frame: a guest's UseItem throws it.
-            if matches!(self.guest_use, Some(super::GuestUse::OnBlock(_))) {
+            if matches!(self.guest_use, Some(super::GuestUse::OnBlock { .. })) {
                 return Ok(false);
             }
             // EnderEyeItem.use: startUsingItem (getUseDuration 0, so the use

@@ -177,7 +177,11 @@ Answer on the client as well when prediction must stop the hand loop: an answer
 made only on the server cannot suppress an offhand attempt already predicted by
 the client.
 
-A client without this mod predicts vanilla here; the server corrects it.
+A client without this mod usually predicts vanilla here; the server corrects it.
+For a [server-registered cauldron click](../../how-to/world/cauldron-interactions.md#client-prediction),
+the client waits for the server's block phase to pass or be skipped before running
+its own `ItemAfterBlock`. The server's later item result does not decide whether
+that local phase runs, but it can stop air use and the other hand's turn.
 
 `Success`, `SuccessServer` and `Consume` consume the interaction and end the
 client's hand loop. Only `Success` swings on the client; `SuccessServer` swings

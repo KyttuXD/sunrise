@@ -117,12 +117,6 @@
       "canonical_path": "crate::client::camera::CameraType"
     },
     {
-      "name": "CauldronFire",
-      "path": "crate::block::cauldron_interactions::CauldronFire",
-      "hash": "81acbbcd86849277",
-      "canonical_path": "crate::block::cauldron_interactions::CauldronFire"
-    },
-    {
       "name": "ChatVisibility",
       "path": "crate::entity::types::ChatVisibility",
       "hash": "a41766187068e728",

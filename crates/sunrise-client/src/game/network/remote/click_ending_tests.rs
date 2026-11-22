@@ -105,7 +105,7 @@ fn flint_and_steel_use_on_ends_the_click() {
         inside: false,
     });
 
-    let done = game.remote_use_block(Hand::Main);
+    let done = game.remote_use_block(Hand::Main, mod_api::InteractionAttempt::Press, None);
     assert!(done, "flint and steel useOn must end the click");
 }
 
@@ -174,6 +174,6 @@ fn an_end_crystal_click_on_a_block_ends_there() {
         game.cooldowns
             .add(sunrise_client::cooldowns::group(&crystal, None), 20);
         aim(game, 2);
-        assert!(!game.remote_use_block(Hand::Main));
+        assert!(!game.remote_use_block(Hand::Main, mod_api::InteractionAttempt::Press, None));
     });
 }

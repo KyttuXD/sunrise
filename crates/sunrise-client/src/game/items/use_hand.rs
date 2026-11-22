@@ -35,7 +35,7 @@ impl Game<'_> {
         // mods' hook, the block's own use, then the item's.
         use mod_api::InteractionResult as Answer;
         use mod_api::TriState;
-        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
+        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock { .. }));
         let mut block_hit = block_hit;
         let (mut use_block, mut use_item) = (TriState::Default, TriState::Default);
         let block_phase = sunrise_client::spans::guard("use_block");
@@ -58,6 +58,8 @@ impl Game<'_> {
                     self.use_failed = answer == Answer::Fail;
                     return Ok(true);
                 }
+                // A canceled PASS permits Item.use but never reaches ItemStack.useOn.
+                native_hooks::BlockClickAnswer::Canceled(_) if on_block => return Ok(false),
                 native_hooks::BlockClickAnswer::Canceled(_) => {
                     (use_block, use_item) = (TriState::False, TriState::False);
                 }
@@ -105,9 +107,13 @@ impl Game<'_> {
                 {
                     return Ok(true);
                 }
-                if self.use_on_cauldron(hit.pos)? {
-                    self.swing_arm();
-                    return Ok(true);
+                match self.use_on_cauldron(hit.pos)? {
+                    sunrise_client::cauldron::Outcome::Success => {
+                        self.swing_arm();
+                        return Ok(true);
+                    }
+                    sunrise_client::cauldron::Outcome::Consume => return Ok(true),
+                    sunrise_client::cauldron::Outcome::Pass => {}
                 }
                 if let Some(placed) = self.use_on_campfire(hit.pos)? {
                     if placed {
@@ -328,6 +334,14 @@ impl Game<'_> {
                     return Ok(true);
                 }
             }
+        }
+        // The block passed or was skipped, independently of what ItemStack.useOn
+        // is about to answer. Record this on the current guest turn only.
+        if let Some(GuestUse::OnBlock {
+            block_fell_through, ..
+        }) = &mut self.guest_use
+        {
+            *block_fell_through = true;
         }
         // RightClickBlock's useItem FALSE: no ItemStack.useOn, so only Item.use is left (a guest's UseItem asks for it).
         if !use_item.or(true) {

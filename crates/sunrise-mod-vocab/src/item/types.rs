@@ -755,7 +755,7 @@ pub enum UsePhase {
     ItemBeforeBlock,
     /// `BlockBehaviour.useItemOn`, before the block's Part and template.
     Block,
-    /// `Item.useOn`, after the block passed and before the item's Part.
+    /// `Item.useOn`, after the block passes or is skipped and before the item's Part.
     ItemAfterBlock,
 }
 

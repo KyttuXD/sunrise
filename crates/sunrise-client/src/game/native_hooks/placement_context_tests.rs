@@ -406,7 +406,7 @@ fn substituted_placement_uses_the_held_item_preclear_and_selected_placed_by() {
                     inside: false,
                 };
                 *game.held_mut() = Some(ItemStack::new(item, 2));
-                game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
+                game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
                 assert!(game.use_hand(Some(&hit)).unwrap());
                 assert_eq!(game.held().unwrap().count, remaining);
                 assert_eq!(game.world.block(4, 64, z), primary);
@@ -560,7 +560,7 @@ fn player_and_dispenser_apply_only_the_context_seen_by_the_veto() {
                 trace.lock().unwrap().occupy_target = occupy_target;
                 game.world.set(4, 64, z, stone).unwrap();
                 *game.held_mut() = Some(ItemStack::new("minecraft:stone", 2));
-                game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
+                game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
                 let hit = Hit {
                     pos: [4, 63, z],
                     face: [0, 1, 0],

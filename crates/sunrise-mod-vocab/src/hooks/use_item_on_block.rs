@@ -7,7 +7,9 @@ pub trait Hooks {
     /// `Pass` continues to the block, skipping the item's `on_item_use_first`
     /// Part; any result other than `Pass` ends the block interaction.
     /// A block-phase `TryWithEmptyHand` can still try the empty-hand behaviour.
-    /// A client without this mod predicts vanilla here; the server corrects it.
+    /// On a server-registered cauldron click, the client waits for block fallthrough before
+    /// `ItemAfterBlock`; a consuming server item result doesn't skip this local phase.
+    /// Other clicks can predict vanilla on a client without the mod; the server corrects it.
     #[hook(
         dispatch = "flat",
         side = "both",

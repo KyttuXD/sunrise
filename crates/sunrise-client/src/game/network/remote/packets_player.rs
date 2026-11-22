@@ -33,8 +33,13 @@ impl Game<'_> {
         if let Some(player) = self.player.as_mut() {
             player.entity_id = p.player_id;
         }
+        self.native_net
+            .holds
+            .borrow_mut()
+            .clear_cauldron_continuations();
         if let Some(r) = self.remote.as_mut() {
             r.carried.set(Some(0));
+            r.pending_cauldrons.get_mut().clear();
             // handleLogin makes a new ClientLevel: its predictions count from 0.
             r.sequence = 0;
             r.own_invisible = false;
@@ -146,10 +151,15 @@ impl Game<'_> {
         }
         // handleRespawn makes a new ClientLevel for another dimension
         // key (a proxy's server switch too): its predictions count from 0.
-        if let Some(r) = self.remote.as_mut()
-            && r.level != p.spawn.dimension
-        {
-            r.sequence = 0;
+        self.native_net
+            .holds
+            .borrow_mut()
+            .clear_cauldron_continuations();
+        if let Some(r) = self.remote.as_mut() {
+            r.pending_cauldrons.get_mut().clear();
+            if r.level != p.spawn.dimension {
+                r.sequence = 0;
+            }
         }
         self.portals.respawn_attributes.respawn(p.keep & 1 != 0);
         let entry = if died {

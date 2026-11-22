@@ -182,16 +182,12 @@ sunrise-client game::carrier_transfers::tests::the_live_assembly_publishes_the_c
 sunrise-client game::carrier_transfers::tests::the_supported_backup_restores_identical_carriers_and_chunks lib daily resources
 sunrise-client game::cartography::tests::crafting_map_takes_use_real_saved_maps lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_client_skips_custom_prediction lib daily resources
-sunrise-client game::cauldron_interactions::tests::cauldron_duplicates_name_both_owners lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_dye_tag_shadows_exact_handler_even_on_pass lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_outer_abort_discards_effects_and_drops lib daily resources
-sunrise-client game::cauldron_interactions::tests::cauldron_panicking_fire_is_atomic lib daily resources
-sunrise-client game::cauldron_interactions::tests::cauldron_refused_fire_is_atomic lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_register_to_all_and_admission_errors lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_syrup_applies_once lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_tag_registration_normalizes_admits_and_expands_over_the_complete_set lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_transfer_awards_two_statistics_once lib daily resources
-sunrise-client game::cauldron_interactions::tests::cauldron_unknown_effect_keys_refuse_before_fire lib daily resources
 sunrise-client game::cauldron_interactions::tests::cauldron_world_close_discards_callbacks_before_failed_preparation lib daily resources
 sunrise-client game::chat::damage_type_registry_tests::a_world_packs_damage_type_parses_in_damage lib daily resources
 sunrise-client game::chat::enchantment_snapshot_tests::synchronized_definitions_refresh_existing_enchantment_views lib daily resources

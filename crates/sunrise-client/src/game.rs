@@ -2584,7 +2584,10 @@ enum FallStep {
 /// item's own (`Item.use`). Running both for either would use the item twice.
 #[derive(Clone, Copy)]
 enum GuestUse {
-    OnBlock(Hand),
+    OnBlock {
+        hand: Hand,
+        block_fell_through: bool,
+    },
     Item(Hand),
     /// `handleInteract`: `Player.interactOn` with the hand, nothing else (the
     /// client sends UseItem itself when the entity passed), on the entity the
@@ -2592,6 +2595,14 @@ enum GuestUse {
     /// `packet.entityId()` once and range checks it, so the click never picks
     /// an entity again from the view.
     Entity(Hand, InteractTarget),
+}
+impl GuestUse {
+    fn on_block(hand: Hand) -> Self {
+        Self::OnBlock {
+            hand,
+            block_fell_through: false,
+        }
+    }
 }
 /// The entity an interact packet names and where its client clicked it (the
 /// packet's location, measured from the entity's position): what
@@ -9630,7 +9641,7 @@ impl Game<'_> {
         };
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = sunrise_client::items::bucket_contents(&stack.item);
-        if matches!(self.guest_use, Some(GuestUse::OnBlock(_)))
+        if matches!(self.guest_use, Some(GuestUse::OnBlock { .. }))
             && (item == "bucket" || bucket.is_some())
         {
             return Ok(UseResult::Pass);

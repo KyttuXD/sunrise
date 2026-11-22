@@ -36,7 +36,7 @@ use super::raw_backlog::Received;
 use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
 use super::remote_vehicles::PassengerSeat;
 use super::render_tick::{mob_tracking_body, player_tracking_body};
-use super::{Dim, Game, Mining, Screen, item_use::ticks_left, level_sounds::LevelSound};
+use super::{Dim, Game, Hit, Mining, Screen, item_use::ticks_left, level_sounds::LevelSound};
 use crate::game::api_values::TryIntoApi;
 use mod_api::InteractionKey;
 use movement::MovePacket;
@@ -284,6 +284,29 @@ enum OwnProfile {
     Done(Option<sunrise_client::skins::Textures>),
 }
 
+pub(in crate::game) struct PendingCauldron {
+    hand: Hand,
+    hit: Hit,
+    attempt: mod_api::InteractionAttempt,
+    selected: usize,
+    main: Option<ItemStack>,
+    off: Option<ItemStack>,
+    aim: ItemUseAim,
+    swing: [bool; 2],
+    sequence: i32,
+    item_after_block: bool,
+}
+
+#[derive(PartialEq)]
+struct ItemUseAim {
+    // UseItem carries these angles but not the server's ray origin.
+    rotation: (f32, f32),
+    eye: Option<[f64; 3]>,
+    // The local ray can also come from a tracked input device.
+    ray: Option<([f64; 3], [f64; 3])>,
+    reach: f64,
+}
+
 /// The packet route that starts a remote level entry.
 pub(in crate::game) enum RemoteDimensionEntry {
     Login,
@@ -449,6 +472,11 @@ pub(super) struct Remote {
     inventory_craft_grid: [Option<ItemStack>; 4],
     inventory_craft_result: Option<ItemStack>,
     use_target: Option<[i32; 3]>,
+    pub(super) cauldron_entries: Option<sunrise_client::cauldron::interactions::Dispatcher<()>>,
+    /// Receipts are connection-scoped; unlike block prediction sequences, they
+    /// are never reset on a level change.
+    cauldron_receipt: i64,
+    pub(in crate::game) pending_cauldrons: std::cell::RefCell<HashMap<i64, PendingCauldron>>,
     /// A mod menu's extra data, kept for the `OpenScreen` of its window that
     /// follows (`sunrise:menu_extra`).
     pub(in crate::game) menu_extra: Option<sunrise_protocol::menu_extra::Message>,
@@ -1063,6 +1091,15 @@ impl Game<'_> {
             // ClientCommonPacketListenerImpl.handlePing runs on the game
             // thread, after all preceding packets (especially teleports).
             C::Ping(p) => self.send(S::Pong(p)),
+            C::CustomPayload(p) if p.channel == super::cauldron_prediction::ENTRIES_CHANNEL => {
+                let entries = super::cauldron_prediction::decode_registrations(&p.data)?;
+                if let Some(remote) = &mut self.remote {
+                    remote.cauldron_entries = Some(entries);
+                }
+            }
+            C::CustomPayload(p) if p.channel == super::cauldron_prediction::USE_CHANNEL => {
+                self.receive_cauldron_use(&p.data)?;
+            }
             // The server's next generation of mod registries: all of it or the connection.
             C::CustomPayload(p) if p.channel == sunrise_client::datapack_net::CHANNEL => {
                 sunrise_client::datapack_net::accept_chunk(&p.data)?;
@@ -2063,10 +2100,10 @@ impl sunrise_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_
         self.0.remote_use_entity(Hand::Main)
     }
     fn use_block(&mut self) -> bool {
-        self.0.remote_use_block(Hand::Main)
+        self.0.remote_use_block(Hand::Main, self.1, None)
     }
     fn use_item(&mut self) {
-        self.0.remote_use_hands(self.1);
+        self.0.remote_use_hands(Hand::Main, self.1, None);
     }
 }
 
@@ -2833,7 +2870,8 @@ pub(crate) mod tests {
                         12,
                         game.guest_index(12).unwrap(),
                         hit,
-                        super::Hand::Main
+                        super::Hand::Main,
+                        None,
                     )
                     .unwrap()
                 );

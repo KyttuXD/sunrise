@@ -18,7 +18,6 @@
   "crate::client::types::BossBarOverlay",
   "crate::entity::behaviors::BrainMemory",
   "crate::client::camera::CameraType",
-  "crate::block::cauldron_interactions::CauldronFire",
   "crate::entity::types::ChatVisibility",
   "crate::world::types::ChunkStatus",
   "crate::world::types::ClipBlock",

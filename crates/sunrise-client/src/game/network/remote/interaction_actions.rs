@@ -2,7 +2,10 @@ use super::*;
 
 impl Game<'_> {
     /// Runs one interaction and restores the caller's swing policy afterwards, on every return path.
-    fn with_interaction_swing_scope<R>(&mut self, action: impl FnOnce(&mut Self) -> R) -> R {
+    pub(super) fn with_interaction_swing_scope<R>(
+        &mut self,
+        action: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let previous = self.remote.as_ref().map(|remote| remote.interaction_swing);
         let result = action(self);
         if let (Some(remote), Some(previous)) = (self.remote.as_mut(), previous) {

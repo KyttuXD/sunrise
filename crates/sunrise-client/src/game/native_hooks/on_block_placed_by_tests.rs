@@ -170,7 +170,7 @@ impl Hooks for Probe {
 
 fn place(game: &mut Game<'_>, pos: [i32; 3], stack: ItemStack) {
     *game.held_mut() = Some(stack);
-    game.guest_use = Some(GuestUse::OnBlock(mod_api::Hand::Main));
+    game.guest_use = Some(GuestUse::on_block(mod_api::Hand::Main));
     let [x, y, z] = pos;
     let hit = Hit {
         pos: [x, y - 1, z],
