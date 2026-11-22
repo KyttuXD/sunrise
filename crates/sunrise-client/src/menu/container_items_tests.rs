@@ -22,7 +22,7 @@ fn asked() -> Vec<(String, bool)> {
 /// carried bundle clicked on a slot does (`canItemBeInBundle`, then `tryInsert`).
 fn into_bundle(context: &LoopContext, stack: &ItemStack) -> (u32, u32) {
     let items = Items::for_tests(Default::default());
-    let mut contents = Contents::from_items(&items, Vec::new());
+    let mut contents = Contents::from_items(&items, Vec::new()).unwrap();
     let mut insert = |stack: &ItemStack| {
         let fits = can_be_in_bundle(context, stack);
         contents.try_insert(&items, &mut stack.clone(), fits)

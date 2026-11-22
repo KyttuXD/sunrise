@@ -3801,6 +3801,67 @@ mod tests {
     }
 
     #[test]
+    fn bundle_weight_refuses_prototype_cycles_without_masking_stack_patches() {
+        use crate::bundle::{Contents, stack_bar, tooltip_layout};
+        use sunrise_core::nbt::Tag;
+
+        let root =
+            std::env::temp_dir().join(format!("sunrise-bundle-cycles-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("items.json"),
+            r#"{
+                "minecraft:black_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:black_bundle"}]},
+                "minecraft:white_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:orange_bundle"}]},
+                "minecraft:orange_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:white_bundle"}]},
+                "minecraft:blue_bundle": {"minecraft:max_stack_size": 1, "minecraft:bundle_contents": [{"id": "minecraft:stone", "count": 16}]},
+                "minecraft:stone": {"minecraft:max_stack_size": 64}
+            }"#,
+        )
+        .unwrap();
+        let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        let stone = ItemStack::new("minecraft:stone", 1);
+        let mut empty = Contents::from_items(&items, Vec::new()).unwrap();
+        for id in ["minecraft:black_bundle", "minecraft:white_bundle"] {
+            let mut cyclic = ItemStack::new(id, 1);
+            assert!(Contents::of(&items, &cyclic).is_none());
+            assert_eq!(Contents::room_in_stack(&items, &cyclic, &stone), None);
+            assert!(tooltip_layout(&items, &cyclic, 0.0, 0.0, 96.0, 2).is_none());
+            let bar = stack_bar(&items, &cyclic).unwrap();
+            assert_eq!((bar.width, bar.color), (13, 0xFF5454));
+            assert_eq!(empty.try_insert(&items, &mut cyclic, true), 0);
+            assert_eq!(cyclic.count, 1);
+        }
+        assert!(empty.items().is_empty());
+
+        let mut child = ItemStack::new("minecraft:white_bundle", 1);
+        child
+            .data_mut()
+            .set_other("minecraft:bundle_contents", Some(Tag::List(Vec::new())));
+        let mut parent = ItemStack::new("minecraft:red_bundle", 1);
+        parent.data_mut().bundle_contents = vec![child.clone()];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(60));
+
+        child
+            .data_mut()
+            .set_other("minecraft:bundle_contents", None);
+        child.data_mut().set_other(
+            "!minecraft:bundle_contents",
+            Some(Tag::Compound(Default::default())),
+        );
+        assert_eq!(Contents::room_in_stack(&items, &child, &stone), None);
+        parent.data_mut().bundle_contents = vec![child];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(0));
+
+        // Both siblings can independently inherit the same nonempty prototype.
+        parent.data_mut().bundle_contents = vec![ItemStack::new("minecraft:blue_bundle", 1); 2];
+        assert_eq!(Contents::room_in_stack(&items, &parent, &stone), Some(24));
+    }
+
+    #[test]
     fn loot_table_ids_list_the_roots_and_the_packs_tables() {
         let root = std::env::temp_dir().join(format!("sunrise-loot-ids-{}", std::process::id()));
         fs::create_dir_all(root.join("data/mymod/loot_table/rooms")).unwrap();

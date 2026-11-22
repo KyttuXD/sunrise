@@ -139,11 +139,11 @@ impl Game<'_> {
         match component {
             Component::Container => slots.len() < 256,
             Component::Charged => slots.len() < 1024,
-            Component::Bundle => !sunrise_client::bundle::Contents::from_items(
+            Component::Bundle => sunrise_client::bundle::Contents::from_items(
                 self.res.items(),
                 slots.iter().flatten().cloned().collect(),
             )
-            .is_full(),
+            .is_some_and(|contents| !contents.is_full()),
         }
     }
     fn contents_accepts(
@@ -167,8 +167,7 @@ impl Game<'_> {
             .filter_map(|(_, s)| s.clone())
             .collect();
         sunrise_client::bundle::Contents::from_items(self.res.items(), rest)
-            .room_for(self.res.items(), item)
-            >= item.count
+            .is_some_and(|contents| contents.room_for(self.res.items(), item) >= item.count)
     }
     /// ComponentSlotCollection.modifySlots: visit occupied slots only, then
     /// commit the component through the same live parent slot.

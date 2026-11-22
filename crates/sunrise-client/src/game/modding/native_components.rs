@@ -783,6 +783,62 @@ mod item_resource_property_tests {
 
             let removed_bundle = bundle.without_component(game, &contents);
             let removed_bundle_stack = engine(&removed_bundle, 1);
+
+            // An authoritative inventory update carries the patch, not the effective
+            // prototype value. Check all three states through the real slot codec.
+            use sunrise_protocol::{
+                buf::{Codec, Reader},
+                item::{Component, component::BUNDLE_CONTENTS},
+                packets::play::ContainerSetSlot,
+                registry::{Builtin, Dynamic},
+            };
+            let builtin = Builtin::load(&Builtin::find(&resources).unwrap()).unwrap();
+            let synced = Dynamic::default();
+            for (stack, expected) in [
+                (&bundle_stack, Some(32)),
+                (&emptied, Some(0)),
+                (&removed_bundle_stack, None),
+            ] {
+                let packet = ContainerSetSlot {
+                    container: 0,
+                    state: 1,
+                    slot: 36,
+                    item: sunrise_client::lan::guest::stack_to_network(
+                        |name| builtin.get("minecraft:item").unwrap().id(name).unwrap(),
+                        |registry, name| builtin.get(registry)?.id(name),
+                        &Some(stack.clone()),
+                    ),
+                };
+                let mut writer = sunrise_core::vanilla_bytes::Writer::new();
+                ContainerSetSlot::write(&packet, &mut writer);
+                let received = ContainerSetSlot::read(&mut Reader::new(&writer.data))
+                    .unwrap()
+                    .item
+                    .unwrap();
+                match expected {
+                    Some(0) => assert!(matches!(
+                        received.component(BUNDLE_CONTENTS),
+                        Some(Component::Stacks(contents)) if contents.is_empty()
+                    )),
+                    _ => assert!(received.component(BUNDLE_CONTENTS).is_none()),
+                }
+                assert_eq!(
+                    received.removed.contains(&BUNDLE_CONTENTS),
+                    expected.is_none()
+                );
+                let adopted = sunrise_client::item_sync::from_network(&received, &builtin, &synced);
+                let contents = sunrise_client::bundle::contents_of(items, &adopted);
+                assert_eq!(
+                    contents.map(|contents| contents.iter().map(|stack| stack.count).sum::<u32>()),
+                    expected,
+                );
+                assert_eq!(
+                    sunrise_items::properties::stack_bar(items, &adopted, items.get(&adopted.item))
+                        .map(|bar| bar.width),
+                    (expected == Some(32)).then_some(7),
+                );
+            }
+
             assert!(removed_bundle.bar(game).is_none());
             assert!(sunrise_client::bundle::Contents::of(items, &removed_bundle_stack).is_none());
             assert_eq!(
