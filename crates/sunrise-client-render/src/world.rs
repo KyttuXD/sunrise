@@ -222,6 +222,12 @@ pub struct World {
     /// (`ShulkerBoxBlockEntity.getBoundingBox`), as `moving_pistons` for pistons.
     pub shulkers: FxHashMap<[i32; 3], crate::block_entity_anim::Shulker>,
 }
+/// `Level.isRaining` and `isThundering` compare interpolated float strengths to doubles.
+/// Use zero strengths for a level that cannot have weather.
+pub fn weather_flags((rain, thunder): (f32, f32)) -> (bool, bool) {
+    (f64::from(rain) > 0.2, f64::from(thunder) > 0.9)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Weather {
     pub clear_time: i32,
@@ -233,6 +239,15 @@ pub struct Weather {
     pub thunder_level: (f32, f32),
 }
 impl Weather {
+    /// `MinecraftServer.getWeatherData` is shared; the Level interpolants are not.
+    pub fn copy_parameters_from(&mut self, weather: Self) {
+        self.clear_time = weather.clear_time;
+        self.rain_time = weather.rain_time;
+        self.thunder_time = weather.thunder_time;
+        self.raining = weather.raining;
+        self.thundering = weather.thundering;
+    }
+
     /// The timers of `advanceWeatherCycle`, which run only while
     /// `advance_weather` is on.
     pub fn tick_timers(&mut self, random: &mut sunrise_core::random::LegacyRandom) {
@@ -278,13 +293,21 @@ impl Weather {
         self.rain_level.1 =
             (self.rain_level.1 + if self.raining { 0.01 } else { -0.01 }).clamp(0.0, 1.0);
     }
+    /// `Level.setRainLevel` and `Level.setThunderLevel`: clamp both strengths to
+    /// `[0, 1]` and set both the previous and current interpolants.
+    pub fn set_levels(&mut self, rain: f32, thunder: f32) {
+        let rain = rain.clamp(0.0, 1.0);
+        let thunder = thunder.clamp(0.0, 1.0);
+        self.rain_level = (rain, rain);
+        self.thunder_level = (thunder, thunder);
+    }
+
     /// The levels at their targets at once (rain 1 while it rains, else 0, and thunder the
     /// same), both halves, so the frame shows them at any partial tick: a frozen world under
     /// `SUNRISE_STILL`, which would otherwise have to run about a hundred ticks to fade them.
     pub fn settle_levels(&mut self) {
         let target = |on: bool| if on { 1.0 } else { 0.0 };
-        self.rain_level = (target(self.raining), target(self.raining));
-        self.thunder_level = (target(self.thundering), target(self.thundering));
+        self.set_levels(target(self.raining), target(self.thundering));
     }
     /// Level.getRainLevel / getThunderLevel (thunder scales with rain).
     pub fn levels(&self, partial: f32) -> (f32, f32) {

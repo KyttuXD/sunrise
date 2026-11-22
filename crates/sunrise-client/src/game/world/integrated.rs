@@ -349,6 +349,9 @@ pub(super) struct Serving {
     /// Open to LAN or closed from inside a player's command, while the hub
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
+    /// `IntegratedServer.previousSimulationDistance`: the last owner option applied,
+    /// independent of the live distance a mod can write to the player list.
+    previous_simulation_distance: i32,
     /// Where the load focus is and how far the player's chunks are.
     load: LoadPhase,
 }
@@ -381,9 +384,15 @@ impl Serving {
             tasks,
             owner: 1,
             pending: None,
+            previous_simulation_distance: 0,
             load: LoadPhase::default(),
         }
     }
+    /// `IntegratedServer.getScaledTrackingDistance` reads the owner's current option.
+    pub(super) fn entity_distance(&self) -> f64 {
+        f64::from_bits(self.flags.entity_distance.load(Ordering::Relaxed))
+    }
+
     /// Send reports only to this server's owner, not to LAN clients.
     pub(super) fn reports(&self) -> &Reports {
         &self.flags.reports
@@ -842,28 +851,7 @@ impl Game<'_> {
                         // Only the connections run.
                         self.tick_server_measured(true)?;
                     } else {
-                        self.follow_distances(flags);
-                        let cpu = sunrise_client::spans::thread_cpu();
-                        let started = Instant::now();
-                        self.tick_server_measured(false)?;
-                        // MinecraftServer.tickServer's tick times, for /tick query.
-                        self.clock.record(started.elapsed());
-                        // Parallel Tick's Auto decides here, between ticks, how the next one runs.
-                        let on_cpu = sunrise_client::spans::thread_cpu().zip(cpu);
-                        sunrise_client::parallel::after_tick(
-                            started.elapsed().as_secs_f32() * 1000.0,
-                            on_cpu.map(|(end, start)| (end - start).as_secs_f32() * 1000.0),
-                        );
-                        self.debug_charts.log_tick(started, started.elapsed());
-                        flags.smoothed_tick_ms.store(
-                            self.debug_charts.smoothed_tick_ms.to_bits(),
-                            Ordering::Relaxed,
-                        );
-                        if let (Some(terrain), Ok(mut terrains)) =
-                            (self.end.locator(), flags.terrain.lock())
-                        {
-                            terrains.insert(self.dim.id(), terrain);
-                        }
+                        self.tick_integrated_unpaused(flags)?;
                     }
                     Ok(())
                 }));
@@ -911,6 +899,32 @@ impl Game<'_> {
             }
             return Err(error);
         }
+        Ok(())
+    }
+
+    /// `IntegratedServer.tickServer`: finish the server tick successfully before
+    /// following the owner's options.
+    fn tick_integrated_unpaused(&mut self, flags: &Flags) -> Result<()> {
+        let cpu = sunrise_client::spans::thread_cpu();
+        let started = Instant::now();
+        self.tick_server_measured(false)?;
+        // MinecraftServer.tickServer's tick times, for /tick query.
+        self.clock.record(started.elapsed());
+        // Parallel Tick's Auto decides here, between ticks, how the next one runs.
+        let on_cpu = sunrise_client::spans::thread_cpu().zip(cpu);
+        sunrise_client::parallel::after_tick(
+            started.elapsed().as_secs_f32() * 1000.0,
+            on_cpu.map(|(end, start)| (end - start).as_secs_f32() * 1000.0),
+        );
+        self.debug_charts.log_tick(started, started.elapsed());
+        flags.smoothed_tick_ms.store(
+            self.debug_charts.smoothed_tick_ms.to_bits(),
+            Ordering::Relaxed,
+        );
+        if let (Some(terrain), Ok(mut terrains)) = (self.end.locator(), flags.terrain.lock()) {
+            terrains.insert(self.dim.id(), terrain);
+        }
+        self.follow_distances(flags);
         Ok(())
     }
 
@@ -1016,6 +1030,9 @@ impl Game<'_> {
             force_game_mode: false,
         };
         startup::time("server.lan_host", || self.lan_host(settings, net, config))?;
+        self.settings.render_distance =
+            sunrise_client::lan::hub::effective_view_distance(view_distance);
+        self.streaming.radius = self.settings.render_distance;
         let commands = self.allow_commands();
         let pipe = {
             let host = self
@@ -1037,6 +1054,7 @@ impl Game<'_> {
             tasks,
             owner,
             pending: None,
+            previous_simulation_distance: 0,
             load: LoadPhase::default(),
         });
         // MinecraftServer.prepareLevels: the saved tickets' chunks load; the
@@ -1259,28 +1277,26 @@ impl Game<'_> {
         self.apply_publish();
         true
     }
-    /// IntegratedServer.tickServer: the server follows the window's render
-    /// and simulation distances when they change.
+    /// `IntegratedServer.tickServer` after the server tick: view follows the window
+    /// whenever the live distance differs; simulation follows only a change to the owner's option.
     fn follow_distances(&mut self, flags: &Flags) {
-        // IntegratedServer.getScaledTrackingDistance reads the option each time.
-        self.settings.entity_distance =
-            f64::from_bits(flags.entity_distance.load(Ordering::Relaxed));
-        let Some(host) = self.lan.as_mut() else {
+        let Some(old_view) = self.server_view_distance() else {
             return;
         };
         let view = flags.render_distance.load(Ordering::Relaxed).max(2);
-        let old = host.hub.config.view_distance;
-        if view != old {
-            log::info!("Changing view distance to {view}, from {old}");
-            host.hub.set_view_distance(view);
-            self.settings.render_distance = view;
+        if view != old_view {
+            log::info!("Changing view distance to {view}, from {old_view}");
+            self.set_view_distance(view);
         }
+        let Some(serving) = self.serving.as_mut() else {
+            return;
+        };
         let simulation = flags.simulation_distance.load(Ordering::Relaxed).max(2);
-        let old = host.hub.config.simulation_distance;
-        if simulation != old {
-            log::info!("Changing simulation distance to {simulation}, from {old}");
-            host.hub.set_simulation_distance(simulation);
-            self.settings.simulation_distance = simulation;
+        let old_simulation = serving.previous_simulation_distance;
+        if simulation != old_simulation {
+            log::info!("Changing simulation distance to {simulation}, from {old_simulation}");
+            serving.previous_simulation_distance = simulation;
+            self.set_simulation_distance(simulation);
         }
     }
 
@@ -1623,6 +1639,7 @@ pub(super) mod tests {
             tasks: receiver,
             owner: 0,
             pending: None,
+            previous_simulation_distance: 0,
             load: LoadPhase::default(),
         });
         move || {
@@ -1630,6 +1647,70 @@ pub(super) mod tests {
             flags.published.load(Ordering::Relaxed) == 0
                 && tasks.send(OwnerRequest::SetPregen(false)).is_err()
         }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn owner_distances_follow_the_server_tick() {
+        use mod_api::{Hooks, ModEntry, ServerTickEvent, ServerTickPhase};
+
+        type Read = (i32, i32);
+        struct Retune(Arc<Mutex<Vec<Read>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Retune {
+            fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
+                if !matches!(event.phase, ServerTickPhase::ServerTickStart { .. }) {
+                    return;
+                }
+                self.0.lock().unwrap().push((
+                    host.server_view_distance().unwrap(),
+                    host.server_simulation_distance().unwrap(),
+                ));
+                assert!(host.server_set_view_distance(6));
+                assert!(host.server_set_simulation_distance(5));
+            }
+        }
+
+        crate::game::in_own_process(
+            "game::integrated::tests::owner_distances_follow_the_server_tick",
+            || {
+                let seen = Arc::new(Mutex::new(Vec::new()));
+                let mods = vec![ModEntry::new("retune", Box::new(Retune(seen.clone())))];
+                mod_platform::testing::with_mods(mods.into(), || {
+                    crate::game::native_guest_turn_tests::with_guests(|game| {
+                        let _phase = mod_api::__private::PhaseOwner::scope(
+                            mod_api::__private::ModPhase::World,
+                        );
+                        let serving = Serving::fixture(0);
+                        let window = Integrated::fixture_for(&serving);
+                        game.serving = Some(serving);
+                        game.native_lifecycle_world_ready();
+                        let live = |game: &Game<'_>| {
+                            let config = &game.lan.as_ref().unwrap().hub.config;
+                            (config.view_distance, config.simulation_distance)
+                        };
+
+                        window.set_distances(48, 7, 1.0);
+                        game.tick_integrated_unpaused(&window.flags).unwrap();
+                        assert_eq!(live(game), (48, 7));
+                        game.tick_integrated_unpaused(&window.flags).unwrap();
+                        assert_eq!(live(game), (48, 5));
+
+                        window.set_distances(50, 9, 1.0);
+                        game.tick_integrated_unpaused(&window.flags).unwrap();
+                        assert_eq!(*seen.lock().unwrap(), [(2, 2), (48, 7), (48, 5)]);
+                        assert_eq!(live(game), (50, 9));
+                        assert_eq!(
+                            (
+                                game.settings.render_distance,
+                                game.settings.simulation_distance
+                            ),
+                            (32, 9)
+                        );
+                    });
+                });
+            },
+        );
     }
 
     #[test]
@@ -2050,6 +2131,7 @@ pub(super) mod tests {
                 tasks,
                 owner: 1,
                 pending: None,
+                previous_simulation_distance: 0,
                 load: LoadPhase::default(),
             });
             events.lock().unwrap().clear();

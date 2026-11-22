@@ -113,6 +113,19 @@ pub(super) fn emit<'a>(
             .map_err(|e| format!("{name}: {e}"))?;
         let carried: Vec<_> = declared.iter().map(|(arg, ty)| (arg.clone(), ty)).collect();
         let mut args = carried.clone();
+        if hook.independent_listener
+            && (is_render
+                || declaration_only
+                || hook.scope.is_some()
+                || hook.owner.is_some()
+                || hook.context == Some(PhaseContext::ChunkDisk)
+                || name == "consume_effect"
+                || !matches!(hook.contract, Contract::Listen | Contract::Cancel))
+        {
+            return Err(format!(
+                "{name}: independent_listener requires a global listen or cancel dispatcher"
+            ));
+        }
         let carrier = format!("{}Call", hook_id(name));
         let uses_carrier = !declared.is_empty()
             && (name == "apply_effect_tick" && declaration_only
@@ -1278,12 +1291,17 @@ pub(super) fn emit<'a>(
             name,
             "compute_camera_angles" | "camera_position" | "render_view_transform"
         );
+        let callback = if hook.independent_listener {
+            format!("super::runtime::Callback::IndependentHook(HookId::{hook_id})")
+        } else {
+            format!("HookId::{hook_id}")
+        };
         let run = |mod_id_expr: &str, on_abort: &str, expression: &str| {
             let invocation = if camera_frame {
                 format!("super::runtime::invoke_frame(\"{name}\", {mod_id_expr}, || {expression})")
             } else {
                 format!(
-                    "super::runtime::invoke(HookId::{hook_id}, \"{name}\", {mod_id_expr}, || {expression})"
+                    "super::runtime::invoke({callback}, \"{name}\", {mod_id_expr}, || {expression})"
                 )
             };
             let discard_batch = if answered_collect_batch {
@@ -1425,7 +1443,17 @@ pub(super) fn emit<'a>(
                 "continue;",
                 &listener_call(&mod_item),
             );
-            if let Some(validator) = &hook.output_validator {
+            if hook.independent_listener && local_cancel {
+                let out = cancel_out.unwrap();
+                let vetoed = fresh_name("vetoed", &mut used);
+                format!(
+                    "let {vetoed} = matches!({invocation}, Flow::Cancel);
+                     if {vetoed} || (!*{out} && {event}.cancelled) {{
+                         log::warn!(\"mod {{}}: hook {name} requested a veto\", {mod_entry}.id);
+                     }}
+                     {event}.cancelled |= {vetoed};"
+                )
+            } else if let Some(validator) = &hook.output_validator {
                 let flow = fresh_name("flow", &mut used);
                 let field = fresh_name("refused_field", &mut used);
                 let arguments = rollback
@@ -1467,6 +1495,18 @@ pub(super) fn emit<'a>(
         } else {
             "return;"
         };
+        let active_guard = fresh_name("_active_listener", &mut used);
+        let enter_active = |owner: &str| {
+            if hook.independent_listener {
+                format!(
+                    "let {active_guard} = super::runtime::ActiveListener::enter(HookId::{hook_id}, {owner});"
+                )
+            } else {
+                String::new()
+            }
+        };
+        let allow_active =
+            format!("|id| super::runtime::listener_is_inactive(HookId::{hook_id}, \"{name}\", id)");
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => {
                 let output = out.unwrap();
@@ -1556,15 +1596,25 @@ pub(super) fn emit<'a>(
                         format!("*{out} = {event}.cancelled;"),
                     )
                 };
+                let each = if hook.independent_listener {
+                    format!("super::runtime::listening_matching(HookId::{hook_id}, {allow_active})")
+                } else {
+                    format!("super::listening(HookId::{hook_id})")
+                };
+                let active = enter_active(&format!("{mod_entry}.id"));
                 (
                     String::new(),
                     format!(
-                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if {accepted} && !{receives} {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} {publish_each} }} }} {publish_end}"
+                        "{{ let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in {each} {{ if {accepted} && !{receives} {{ continue; }} {active} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); {local_event} {cancel_step} {publish_each} }} }} {publish_end}"
                     ),
                 )
             }
             None => {
-                let each = if filtered_subscribers {
+                let each = if hook.independent_listener {
+                    format!(
+                        "super::runtime::entered_with_id_matching(HookId::{hook_id}, \"{name}\", {allow_active})"
+                    )
+                } else if filtered_subscribers {
                     format!(
                         "super::runtime::entered_with_id_matching(HookId::{hook_id}, \"{name}\", {allow_subscriber})"
                     )
@@ -1574,7 +1624,8 @@ pub(super) fn emit<'a>(
                 (
                     String::new(),
                     format!(
-                        "for ({listener_id}, {mod_item}) in {each} {{ {} }}",
+                        "for ({listener_id}, {mod_item}) in {each} {{ {} {} }}",
+                        enter_active(&listener_id),
                         call(&mod_item, &listener_id, "continue;", "break")
                     ),
                 )

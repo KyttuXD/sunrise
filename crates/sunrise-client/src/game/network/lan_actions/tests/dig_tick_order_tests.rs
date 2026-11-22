@@ -21,7 +21,7 @@ fn every_level_ticks_before_the_connection_phase() {
     let dims = [Dim::Overworld, Dim::Nether];
     let mut dig = [0; 2];
     let mut heard = Vec::new();
-    for phase in server_tick_phases(&dims) {
+    for phase in server_tick_phases(&dims, &dims) {
         match phase {
             ServerTickPhase::Level(i, dim) => {
                 assert_eq!(dim, dims[i]);
@@ -30,6 +30,7 @@ fn every_level_ticks_before_the_connection_phase() {
                     heard.push(("dig", dim, dig[i]));
                 }
             }
+            ServerTickPhase::IdleLevel(dim) => panic!("unexpected idle level {dim:?}"),
             ServerTickPhase::Connections => {
                 for (dim, progress) in dims.into_iter().zip(dig) {
                     heard.push(("pre", dim, progress));

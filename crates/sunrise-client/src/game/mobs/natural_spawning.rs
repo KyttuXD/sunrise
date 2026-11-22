@@ -1590,11 +1590,11 @@ mod tests {
                 (0, 0),
                 std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
             );
-            game.border.set_center([8.0, 8.0]);
-            game.border.set_size(16.0);
+            game.border.set_center([8.0, 8.0]).unwrap();
+            game.border.set_size(16.0).unwrap();
             assert!(game.natural_level().can_spawn_in_chunk(0, 0));
             assert!(!game.natural_level().can_spawn_in_chunk(1, 0)); // unloaded
-            game.border.set_size(15.5);
+            game.border.set_size(15.5).unwrap();
             assert!(!game.natural_level().can_spawn_in_chunk(0, 0)); // partial
             assert!(game.natural_level().within_world_border(1, 1));
             assert!(!game.natural_level().within_world_border(0, 0));
@@ -1602,7 +1602,7 @@ mod tests {
                 assert!(level.within_world_border(BlockPos::new(1, 64, 1)));
                 assert!(!level.within_world_border(BlockPos::new(0, 64, 0)));
             });
-            game.border.set_size(16.5);
+            game.border.set_size(16.5).unwrap();
             assert!(game.natural_level().can_spawn_in_chunk(0, 0));
             assert!(game.mob_world_base(&[]).within_world_border(0, 0));
             assert!(!game.mob_world_base(&[]).within_world_border(17, 0));
@@ -1631,8 +1631,8 @@ mod tests {
             }
             game.tickets.update(None);
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 8.5)).unwrap());
-            game.border.set_center([8.0, 8.0]);
-            game.border.set_size(2.0);
+            game.border.set_center([8.0, 8.0]).unwrap();
+            game.border.set_size(2.0).unwrap();
             let mut scratch = SpawnScratch::default();
             game.spawning_chunks(&game.level_players(), &mut scratch);
             assert_eq!(scratch.candidates, vec![(0, 0)]);
@@ -1643,7 +1643,7 @@ mod tests {
             );
             // A contained chunk must actually reach the spawning pass, so an
             // empty category list cannot satisfy the rejected-chunk assertion.
-            game.border.set_size(64.0);
+            game.border.set_size(64.0).unwrap();
             game.world.random.set_seed(12345);
             game.spawn_natural();
             assert_ne!(
@@ -1651,7 +1651,7 @@ mod tests {
                 LegacyRandom::new(12345).next_long()
             );
             game.world.inhabited.clear();
-            game.border.set_size(2.0);
+            game.border.set_size(2.0).unwrap();
             game.world.random.set_seed(12345);
             game.spawn_natural();
             // No shuffle draw for one candidate, and no attempt draws for a

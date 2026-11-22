@@ -920,17 +920,15 @@ impl Game<'_> {
             streaming.remote = true;
             streaming.radius = self.streaming.radius;
             self.streaming = streaming;
-            let (time, day, weather) = (
-                self.world.game_time,
-                self.world.day_time,
-                self.world.weather,
-            );
+            let (time, day) = (self.world.game_time, self.world.day_time);
             self.reset_client_world(spawn.seed);
             if let Some(remote) = self.remote.as_ref() {
                 self.world
                     .chunks
                     .track_connection_groups(remote.group_count.clone());
             }
+            // The border and weather belong to this ClientLevel, not the connection.
+            self.border = Default::default();
             // Entity IDs belong to this ClientLevel, not the connection. A
             // same-level respawn keeps it; a replacement invalidates handles.
             self.native_lifecycle_open_started();
@@ -938,7 +936,6 @@ impl Game<'_> {
             self.world.shape = shape;
             self.world.game_time = time;
             self.world.day_time = day;
-            self.world.weather = weather;
             self.mobs.clear();
             self.clear_remote_objects();
             self.clear_remote_projectiles();

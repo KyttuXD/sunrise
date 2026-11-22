@@ -227,15 +227,111 @@ return `false` for a stale handle, a client, or a value the rule refuses.
 On a server, `host.tick_times()` returns the last 100 tick durations in
 nanoseconds (the tick numbered `n` at index `n % 100`; `tick_stats()` has the
 average). `host.server_view_distance()` and `host.server_simulation_distance()`
-read the distances in chunks; `host.server_set_view_distance(d)` and
-`host.server_set_simulation_distance(d)` change them live for 2 to 32 on a
-dedicated server and return `false` otherwise. `server.properties` is not
-written.
+read the live distances in chunks, or return `None` without a logical server
+player list. `host.server_set_view_distance(d)` and
+`host.server_set_simulation_distance(d)` update the distances sent to players
+and used for chunk tickets on either server, even in a world not open to LAN.
+The setters take 2 through 32 chunks and return `false` and log a refusal for
+an out-of-range distance or an unavailable player list.
+
+The setters change neither `server.properties` nor the owner's options. In an
+integrated world, the owner's render distance takes over at the end of an unpaused
+server tick, including the tick in which a listener wrote the distance. The owner's
+simulation distance only takes over when that option changes.
+
+`host.set_tick_rate(tps)` uses the integrated or dedicated server's clock setter, not
+`/tick rate`'s parser. Finite rates below 1 become 1; the command's upper limit does
+not apply. A non-finite rate or a call off the logical server returns `false` and logs
+the refusal. Even an equal write fires `server_tick_rate_changed` before the server
+adjusts the autosave countdown and sends the final rate and freeze state to clients.
+A listener can retune the clock through the same setter. The hook also runs when a
+server sprint ends, not when a client receives the server's rate.
 
 `host.tick_rate_is_frozen()` is `TickRateManager.isFrozen` (`/tick freeze`): `Some(true)` while the server's
 ticking is frozen, `None` on a client. A frozen server still runs the ticks `/tick step` asks for, so
 `server_tick_start`'s `world_running` can be true while it is frozen; read this to tell a frozen server from a
 paused level.
+
+## Weather
+
+Use the setter on any resident server level to request a storm for the server:
+
+```rust
+use mod_api::{LevelRef, ServerHost};
+
+fn request_storm(host: &mut dyn ServerHost, origin: LevelRef) -> bool {
+    origin.set_weather(host, 0, 600, true, true)
+}
+```
+
+The handle names the origin, even if that level is parked. The clear timer and the
+shared rain/thunder timer are signed tick values, not `/weather` command arguments.
+[`weather_change`](../../concepts/hooks-and-the-host.md#weather-parameters-and-strengths)
+can veto all the timers and flags together. The call returns `false` on a final veto
+or invalid level; a veto does not undo other writes a listener already made.
+
+To change the interpolated strengths immediately instead, call
+`level.set_weather_levels(host, 0.5, 0.25)` on the resident level the handle names,
+including a parked level. Both strengths clamp to 0–1, including infinities. NaN
+or an unavailable level is refused. This setter changes neither other levels'
+strengths nor the shared parameters, and does not call `weather_change`.
+`level.weather(host)` reads the named level's own strengths (thunder scaled by rain)
+at partial tick 1. These strengths stay with the level across swaps and idle ticks.
+`level.is_raining(host)` and `level.is_thundering(host)` compare those strengths, not
+the shared flags, against the double thresholds `0.2` and `0.9` respectively.
+`0.2_f32` counts as rain in a level that can have weather.
+
+## World borders
+
+`level.world_border(host)` reads `[min_x, min_z, max_x, max_z]` for the resident
+server level the handle names, including when another level is in place. It
+returns `None` for a stale or closed level. These methods write through the
+same setters as `/worldborder`, without the command's range and no-change checks:
+
+- `level.set_world_border_center(host, [x, z])` sets a finite center. The
+  geometry clips the edges, not the center itself.
+- `level.set_world_border_size(host, size, ticks)` sets a finite size. A size
+  is refused if the clamped and outward-rounded collision bounds would be
+  inverted. Nonpositive ticks set a fixed size; positive ticks request a timed
+  change from the current size.
+- `level.set_world_border_damage(host, per_block, safe_zone)` accepts signed,
+  finite damage settings. `level.set_world_border_warning(host, blocks, ticks)`
+  accepts signed warning settings.
+
+For example, request a border of 256 blocks over 200 ticks in the level a
+`LevelRef` names:
+
+```rust
+use mod_api::{LevelRef, ServerHost};
+
+fn resize_border(host: &mut dyn ServerHost, level: LevelRef) -> bool {
+    level.set_world_border_size(host, 256.0, 200)
+}
+```
+
+The setters return `false` and log refusals (for example, an invalid size or
+stale handle). They do not open or switch levels. Successful center, size and
+warning writes notify that level's watchers, even when a direct write repeats
+a value. Damage settings stay on the server.
+
+The `world_border_center_changed` and `world_border_bounds_changed` listeners
+can read the changed border with `event.level.world_border(host)`. The bounds
+listener also gets `event.lerp_ticks`: `None` for a fixed write, or
+`Some(requested_ticks)` for a timed write. A timed write to the current size
+still fires that start notice but creates no moving extent.
+`world_border_bounds_change_finish` names the level only after an actual
+moving extent reaches its target at the start of the level's normal tick, even
+if it is idle and parked. The server's tick functions run before the level's
+border advances. Loads and client packet application do not trigger these notifications.
+
+### Calling a setter from a listener
+
+For the weather, border and tick-rate hooks above, a nested setter can run.
+Its dispatch skips callbacks for that hook already running on the thread, not
+other eligible listeners. If a mod's callback panics, Sunrise logs the mod and
+hook, shows an error toast and disables just that callback for the rest of the
+session. Vetoes and hook refusals are logged each time and do not disable the
+callback. These hooks do not roll back writes a listener already made.
 
 ## Finding blocks in a chunk
 

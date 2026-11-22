@@ -210,7 +210,8 @@ impl Game<'_> {
         self.tick_player_stat_counters();
         self.tick_scoreboard();
         self.load_bossbars();
-        self.tick_worldborder();
+        self.player_border();
+        self.border_damage();
         self.tick_subtitles();
         self.tick_advancements();
         self.tick_player_model();

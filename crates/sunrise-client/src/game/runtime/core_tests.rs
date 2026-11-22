@@ -167,11 +167,19 @@ fn client_input_options_follow_settings() {
 
 #[test]
 fn weather_follows_the_dimension_type_not_the_id() {
-    use super::level_can_have_weather as w;
-    assert!(w(true, false, false)); // open sky
-    assert!(!w(true, true, false)); // ceiling (Nether, overworld_caves)
-    assert!(!w(false, false, false)); // no sky light
-    assert!(!w(true, false, true)); // the End is named by id
+    use sunrise_client::chunk::LevelShape;
+
+    let open = LevelShape::OVERWORLD;
+    assert!(open.can_have_weather(false));
+    assert!(!open.with_ceiling(true).can_have_weather(false));
+    assert!(
+        !LevelShape {
+            sky_light: false,
+            ..open
+        }
+        .can_have_weather(false)
+    );
+    assert!(!open.can_have_weather(true)); // the End is named by id
 }
 
 use super::*;

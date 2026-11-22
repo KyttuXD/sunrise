@@ -143,10 +143,13 @@ impl Game<'_> {
         if root.is_none() && dim == super::Dim::Overworld {
             root = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"));
         }
-        root.as_ref()
-            .and_then(|root| root.get("data"))
-            .map(sunrise_client::worldborder::WorldBorder::unpack)
-            .unwrap_or_default()
+        if let Some(data) = root.as_ref().and_then(|root| root.get("data")) {
+            match sunrise_client::worldborder::WorldBorder::unpack(data) {
+                Ok(border) => return border,
+                Err(error) => log::warn!("invalid saved world border in {}: {error}", dim.id()),
+            }
+        }
+        sunrise_client::worldborder::WorldBorder::default()
     }
     /// Save the border of the level in place (`SavedData`, one per level).
     pub(super) fn save_border(&self) {

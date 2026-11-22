@@ -605,6 +605,190 @@ fn an_event_cancelled_before_dispatch_reaches_only_listeners_receiving_cancelled
 }
 
 #[test]
+fn nested_weather_dispatch_skips_only_the_active_listener() {
+    struct Reenter(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Reenter {
+        #[listener(priority = 10)]
+        fn weather_change(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("reenter", event.thundering));
+            if event.raining && !event.thundering {
+                dispatch_weather_change(host, event.dimension, 0, 2, true, true, &mut false);
+                // Inputs are local to this listener, not outputs to the next.
+                event.clear_ticks = 99;
+                event.weather_ticks = 100;
+            }
+            Flow::Continue
+        }
+    }
+    struct Peer(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Peer {
+        fn weather_change(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            assert_eq!(
+                (event.clear_ticks, event.weather_ticks),
+                (0, if event.thundering { 2 } else { 1 })
+            );
+            self.0.lock().unwrap().push(("peer", event.thundering));
+            if event.thundering {
+                // Both listeners are now active. Neither should hear this deeper event;
+                // the flags also end recursion even if the stack check regresses.
+                dispatch_weather_change(host, event.dimension, 3, 0, false, false, &mut false);
+            }
+            Flow::Continue
+        }
+    }
+    let heard = Heard::default();
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("peer", Box::new(Peer(heard.clone()))),
+            ModEntry::new("reenter", Box::new(Reenter(heard.clone()))),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+            for _ in 0..2 {
+                dispatch_weather_change(
+                    &mut host,
+                    "minecraft:overworld",
+                    0,
+                    1,
+                    true,
+                    false,
+                    &mut false,
+                );
+            }
+        },
+    );
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            ("reenter", false),
+            ("peer", true),
+            ("peer", false),
+            ("reenter", false),
+            ("peer", true),
+            ("peer", false),
+        ]
+    );
+}
+
+#[test]
+fn a_weather_panic_disables_only_that_listener_and_preserves_prior_cancellation() {
+    struct Canceller;
+    #[mod_api::__subscriptions]
+    impl Hooks for Canceller {
+        #[listener(priority = 10)]
+        fn weather_change(&self, _: &mut dyn ServerHost, _: &mut WeatherChangeEvent<'_>) -> Flow {
+            Flow::Cancel
+        }
+    }
+    struct Faulty(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Faulty {
+        #[listener(priority = 5, receive_cancelled)]
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("faulty", event.cancelled));
+            event.cancelled = false;
+            panic!("weather listener panicked");
+        }
+
+        fn client_tick_pre(&self, _: &mut dyn ClientHost, _: &mut ClientTickPreEvent) {
+            self.0.lock().unwrap().push(("faulty-tick", false));
+        }
+    }
+    struct Peer(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Peer {
+        #[listener(receive_cancelled)]
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("peer", event.cancelled));
+            if event.thundering {
+                event.cancelled = false;
+            }
+            Flow::Continue
+        }
+    }
+    struct Plain(Heard);
+    #[mod_api::__subscriptions]
+    impl Hooks for Plain {
+        fn weather_change(
+            &self,
+            _: &mut dyn ServerHost,
+            event: &mut WeatherChangeEvent<'_>,
+        ) -> Flow {
+            self.0.lock().unwrap().push(("plain", event.cancelled));
+            Flow::Continue
+        }
+    }
+    let heard = Heard::default();
+    testing::with_dispatch(
+        vec![
+            ModEntry::new("peer", Box::new(Peer(heard.clone()))),
+            ModEntry::new("faulty", Box::new(Faulty(heard.clone()))),
+            ModEntry::new("plain", Box::new(Plain(heard.clone()))),
+            ModEntry::new("canceller", Box::new(Canceller)),
+        ]
+        .into(),
+        || {
+            let mut host = FakeHost::new();
+            let mut cancelled = false;
+            let failures = crate::runtime::isolated_failures();
+            dispatch_weather_change(
+                &mut host,
+                "minecraft:overworld",
+                0,
+                1,
+                true,
+                false,
+                &mut cancelled,
+            );
+            assert!(cancelled);
+            assert_eq!(crate::runtime::isolated_failures(), failures);
+
+            cancelled = false;
+            dispatch_weather_change(
+                &mut host,
+                "minecraft:overworld",
+                0,
+                2,
+                true,
+                true,
+                &mut cancelled,
+            );
+            assert!(!cancelled);
+            dispatch_client_tick_pre(&mut host);
+        },
+    );
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            ("faulty", true),
+            ("peer", true),
+            ("peer", true),
+            ("plain", false),
+            ("faulty-tick", false),
+        ]
+    );
+}
+
+#[test]
 fn window_resize_delivers_physical_and_gui_dimensions() {
     use std::sync::Mutex;
     struct Listener(Arc<Mutex<Vec<(u32, u32, u32, u32)>>>);

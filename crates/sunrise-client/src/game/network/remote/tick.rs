@@ -28,8 +28,8 @@ impl Game<'_> {
             }
         }
         // ClientLevel.tick: the border's size change, while the level runs.
-        if running {
-            self.border.tick();
+        if running && let Err(error) = self.border.tick() {
+            log::warn!("client world border tick refused: {error}");
         }
         // ClientLevel.tick: the End's sky flash, frozen or not.
         self.tick_end_flash();

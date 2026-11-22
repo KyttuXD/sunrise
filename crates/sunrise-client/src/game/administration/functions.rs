@@ -622,6 +622,9 @@ impl Game<'_> {
         if self.remote.is_some() {
             return;
         }
+        // Vanilla's SavedData is already loaded. Read our lazy scoreboard and storage
+        // before a load tag writes to them.
+        self.load_scoreboard();
         self.exec = ExecState::default();
         let source = self.server_source();
         if self.fns.load_pending {
@@ -1576,6 +1579,64 @@ mod tests {
                 "reload listener test_mod:listener: test_mod:machine: outer cause: middle cause: inner cause"
             ),
             "{reply}"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn tick_functions_write_to_the_overworld_before_its_idle_environment_tick() {
+        crate::game::in_own_process(
+            "game::functions::tests::tick_functions_write_to_the_overworld_before_its_idle_environment_tick",
+            || {
+                crate::game::native_entity_refs::tests::with_game(|game| {
+                    use crate::game::Dim;
+                    game.world_root = game.options.game_dir.clone().unwrap();
+                    game.build_registries();
+                    game.enter_level(Dim::Nether).unwrap();
+                    game.streaming.forced.insert((0, 0));
+                    assert_eq!(game.levels_to_tick(), [Dim::Nether]);
+                    assert_eq!(
+                        game.levels
+                            .parked_world(Dim::Overworld)
+                            .unwrap()
+                            .weather
+                            .rain_level
+                            .1,
+                        0.0
+                    );
+                    let id = "test:change_environment";
+                    game.fns.loaded = true;
+                    game.fns.store.functions.insert(
+                        id.into(),
+                        Function {
+                            id: id.into(),
+                            lines: [
+                                "execute in minecraft:overworld run worldborder set 20 5t",
+                                "execute in minecraft:overworld run weather rain 40t",
+                            ]
+                            .into_iter()
+                            .map(|line| datapack::FunctionLine::Command(line.into()))
+                            .collect(),
+                            parameters: Vec::new(),
+                        },
+                    );
+                    game.fns
+                        .store
+                        .function_tags
+                        .insert("minecraft:tick".into(), vec![(id.into(), true, false)]);
+
+                    game.tick_server(false).unwrap();
+
+                    assert_eq!(game.levels_to_tick(), [Dim::Nether]);
+                    assert_eq!(game.dim, Dim::Nether);
+                    let border = game.levels.parked_border(Dim::Overworld).unwrap();
+                    assert_eq!((border.target_size(), border.remaining_ticks()), (20.0, 4));
+                    let world = game.levels.parked_world(Dim::Overworld).unwrap();
+                    assert!(world.chunks.is_empty());
+                    assert_eq!(world.weather.rain_level, (0.0, 0.01));
+                    assert_eq!(game.world.weather.rain_time, 39);
+                });
+            },
         );
     }
 

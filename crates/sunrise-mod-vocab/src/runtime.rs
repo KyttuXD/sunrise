@@ -274,6 +274,8 @@ pub fn isolated_failures() -> u64 {
 #[derive(Clone, Copy)]
 pub(crate) enum Callback {
     Hook(generated::HookId),
+    /// A callback whose failure is contained without aborting an enclosing action.
+    IndependentHook(generated::HookId),
     DamageReduction,
     Registration,
 }
@@ -287,7 +289,7 @@ impl From<generated::HookId> for Callback {
 impl Callback {
     fn index(self) -> usize {
         match self {
-            Self::Hook(hook) => hook as usize,
+            Self::Hook(hook) | Self::IndependentHook(hook) => hook as usize,
             Self::DamageReduction => generated::HOOK_COUNT,
             Self::Registration => generated::HOOK_COUNT + 1,
         }
@@ -303,7 +305,8 @@ fn poison(callback: Callback, id: &'static str) -> bool {
     // quarantined editor must not abort an action that requested the catalog.
     if !matches!(
         callback,
-        Callback::Hook(generated::HookId::BuildCreativeModeTabContents)
+        Callback::IndependentHook(_)
+            | Callback::Hook(generated::HookId::BuildCreativeModeTabContents)
     ) {
         let (entered, trapped) = LISTENER_SERIAL.get();
         LISTENER_SERIAL.set((entered, trapped.wrapping_add(1)));
@@ -1070,7 +1073,7 @@ pub(crate) fn listening(
     listening_matching(hook_id, |_| true)
 }
 
-fn listening_matching<'a>(
+pub(crate) fn listening_matching<'a>(
     hook_id: generated::HookId,
     mut allow: impl FnMut(&str) -> bool + 'a,
 ) -> impl Iterator<Item = (bool, &'static ModEntry)> + 'a {
@@ -1166,7 +1169,45 @@ impl ListenerScope {
     }
 }
 
+/// Scope for hooks that can call their own setter again. Invocation still uses the
+/// standard ownership, panic and journal path.
+#[must_use]
+pub(crate) struct ActiveListener;
+
+impl Drop for ActiveListener {
+    fn drop(&mut self) {
+        ACTIVE_LISTENERS.with_borrow_mut(|active| {
+            active.pop();
+        });
+    }
+}
+
+impl ActiveListener {
+    pub(crate) fn enter(hook: HookId, id: &'static str) -> Self {
+        ACTIVE_LISTENERS.with_borrow_mut(|active| active.push((hook as usize, id)));
+        Self
+    }
+}
+
+/// Filter reentrant callbacks before opening their crash scope or marking them as entered.
+pub(crate) fn listener_is_inactive(hook: HookId, name: &'static str, id: &str) -> bool {
+    let hook = hook as usize;
+    let inactive = ACTIVE_LISTENERS.with_borrow(|active| {
+        !active
+            .iter()
+            .any(|&(active_hook, active_id)| active_hook == hook && active_id == id)
+    });
+    if !inactive {
+        log::warn!("native refusal: {id} hook {name}: this callback is already running");
+    }
+    inactive
+}
+
 thread_local! {
+    /// Only hooks that opt out of reentry touch this stack.
+    static ACTIVE_LISTENERS: std::cell::RefCell<Vec<(usize, &'static str)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
     /// Listener entries (including nested hooks) and abort-signaling isolated traps on this thread.
     static LISTENER_SERIAL: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
 }

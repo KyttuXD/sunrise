@@ -335,8 +335,8 @@ mod tests {
         }
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
-        game.border.set_center([8.0, 8.0]);
-        game.border.set_size(16.0);
+        game.border.set_center([8.0, 8.0]).unwrap();
+        game.border.set_size(16.0).unwrap();
         let registry = game.pack.assets.registry;
         let stone = registry.default_state("minecraft:stone").unwrap();
         let water = registry.default_state("minecraft:water").unwrap();

@@ -3,7 +3,10 @@
 //! its game time every 20 ticks, its clocks when they jump or change rate and its weather as it
 //! changes, the chunks no area covered for [`super::view::LINGER`] ticks forgotten, and `close`
 //! once nothing of it is left. Its entities go in the tracking pass (`entities`).
-use super::super::hub::{Hub, TickCtx, game_event};
+use super::super::{
+    hub::{Hub, TickCtx},
+    weather,
+};
 use super::view::View;
 use crate::{chunk::Chunk, streaming::Streaming, world::World};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -276,23 +279,16 @@ impl Hub {
         let spawn = self.spawn_info(i, 0, ctx.sea_level);
         let mut runs = Runs::new(level);
         runs.push(&self.time_packet(ctx.world, ctx.clock_rate).encode());
-        let w = &ctx.world.weather;
-        if w.raining {
-            for (event, param) in [
-                (game_event::START_RAINING, 0.0),
-                (game_event::RAIN_LEVEL, w.rain_level.1),
-                (game_event::THUNDER_LEVEL, w.thunder_level.1),
-            ] {
-                runs.push(&C::GameEvent(play::GameEvent { event, param }).encode());
-            }
-        }
-        let weather = (w.raining, w.rain_level.1, w.thunder_level.1);
+        let state = weather::state(ctx.world, dimension);
+        weather::send_updates(None, state, |packet| {
+            runs.push(&packet.encode());
+        });
         let clock = Clock::now(self, ctx.world, ctx.clock_rate);
         let dimension = dimension.clone();
         let caps = self.viewed.caps;
         self.guests.update(i, |g| {
             let mut view = View::new(level);
-            view.weather = weather;
+            view.weather = state;
             view.clock = clock;
             g.viewed.views.insert(dimension, view);
             let columns = caps.for_client(g.sender.viewed_levels).loaded_per_player;
@@ -408,6 +404,7 @@ impl Hub {
         let dimension = self.config.dimension.clone();
         let sync_time = self.ticks.is_multiple_of(20);
         let clock = Clock::now(self, world, clock_rate);
+        let state = weather::state(world, &dimension);
         let clocks = (self.guests[i].viewed.view(&dimension))
             .filter(|view| view.clock.changed(&clock))
             .map(|_| self.time_packet(world, clock_rate).encode());
@@ -428,26 +425,10 @@ impl Hub {
                     .encode(),
                 );
             }
-            let w = &world.weather;
-            let (raining, rain, thunder) = view.weather;
-            let mut event = |event, param| {
-                runs.push(&C::GameEvent(play::GameEvent { event, param }).encode());
-            };
-            if w.raining != raining {
-                let start = if w.raining {
-                    game_event::START_RAINING
-                } else {
-                    game_event::STOP_RAINING
-                };
-                event(start, 0.0);
-            }
-            if (w.rain_level.1 - rain).abs() > f32::EPSILON {
-                event(game_event::RAIN_LEVEL, w.rain_level.1);
-            }
-            if (w.thunder_level.1 - thunder).abs() > f32::EPSILON {
-                event(game_event::THUNDER_LEVEL, w.thunder_level.1);
-            }
-            view.weather = (w.raining, w.rain_level.1, w.thunder_level.1);
+            weather::send_updates(Some(view.weather), state, |packet| {
+                runs.push(&packet.encode());
+            });
+            view.weather = state;
             g.sender.send_many(runs.finish());
         });
     }

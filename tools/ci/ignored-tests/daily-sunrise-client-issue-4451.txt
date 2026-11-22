@@ -1550,8 +1550,6 @@ sunrise-client game::native_hooks::render_tooltip_texture::render_tooltip_textur
 sunrise-client game::native_hooks::runtime_environment::tests::native_process_environment_in_registration_and_game_hosts lib daily child-process
 sunrise-client game::native_hooks::runtime_environment_tests::client_host_reads_current_pause_state lib daily resources
 sunrise-client game::native_hooks::runtime_environment_tests::client_host_reads_playing_and_key_mappings lib daily resources
-sunrise-client game::native_hooks::server_tick_rate_changed::server_tick_rate_changed_tests::a_listener_runs_before_the_autosave_wait_is_adjusted lib daily resources
-sunrise-client game::native_hooks::server_tick_rate_changed::server_tick_rate_changed_tests::a_mod_hears_every_route_of_on_tick_rate_changed_once lib daily resources
 sunrise-client game::native_hooks::tests::declared_types_create_tick_and_reload_through_game lib daily resources
 sunrise-client game::native_hooks::tests::generated_fire_matches_dispatch lib daily resources
 sunrise-client game::native_hooks::tests::mod_sign_constructor_prioritizes_templates_over_suffixes lib daily resources
@@ -1629,7 +1627,6 @@ sunrise-client game::native_knockback_tests::the_attack_scope_nests_restores_and
 sunrise-client game::native_knockback_tests::the_bridge_names_the_attacker_and_what_it_holds lib daily resources
 sunrise-client game::native_knockback_tests::the_push_draws_the_same_stream_with_and_without_a_mod_and_a_canceled_one_draws_nothing lib daily resources
 sunrise-client game::native_knockback_tests::thorns_name_the_wearer_not_the_incoming_attacker lib daily resources
-sunrise-client game::native_level_border::tests::border_writes_move_the_shared_border_and_refuse_bad_values lib daily resources
 sunrise-client game::native_level_events::tests::a_global_level_event_reaches_every_player_or_falls_back_to_a_plain_one lib daily resources
 sunrise-client game::native_level_events::tests::a_level_event_in_a_write_hook_joins_the_events_in_order lib daily resources
 sunrise-client game::native_level_events::tests::a_queued_block_event_runs_the_blocks_trigger_once lib daily resources
@@ -1688,10 +1685,7 @@ sunrise-client game::native_level_spawning::tests::a_level_spawns_a_mob_as_its_e
 sunrise-client game::native_level_spawning::tests::a_levels_spawn_policy_changes_what_its_next_pass_spawns lib daily resources
 sunrise-client game::native_level_ticking::tests::ticking_reads_follow_live_tickets_bounds_and_residency lib daily resources
 sunrise-client game::native_level_ticking::tests::ticking_reads_refuse_each_unavailable_handle_independently lib daily resources
-sunrise-client game::native_level_weather::tests::a_listener_calling_its_own_setter_is_refused lib daily resources
-sunrise-client game::native_level_weather::tests::local_difficulty_and_tick_rate_reach_the_game lib daily resources
 sunrise-client game::native_level_weather::tests::local_difficulty_matches_vanilla_values_for_an_unloaded_chunk lib daily resources
-sunrise-client game::native_level_weather::tests::weather_writes_set_the_level_in_place_and_refuse_others lib daily resources
 sunrise-client game::native_level_world::tests::a_game_rule_listener_reads_the_whole_rule_set lib daily resources
 sunrise-client game::native_level_world::tests::a_mod_sets_game_rules_and_the_clock lib daily resources
 sunrise-client game::native_level_world::tests::dimension_shape_reads_current_parked_and_stale_levels lib daily resources

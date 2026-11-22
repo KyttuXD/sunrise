@@ -76,6 +76,10 @@ impl LevelShape {
         self.has_ceiling = has_ceiling;
         self
     }
+    /// `Level.canHaveWeather`: the End is excluded by level key, not dimension type.
+    pub fn can_have_weather(self, is_end: bool) -> bool {
+        self.sky_light && !self.has_ceiling && !is_end
+    }
     /// One above the highest block (`getMaxY() + 1`).
     pub fn max_y(self) -> i32 {
         self.min_y + self.height

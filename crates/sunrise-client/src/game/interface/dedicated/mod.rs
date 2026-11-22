@@ -21,7 +21,9 @@ use std::{
 use sunrise_client::{
     Result,
     lan::{
-        LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig, viewed_levels::areas as viewed,
+        LoginGate, NetConfig, NetLog, OnlineMode,
+        hub::{HubConfig, effective_view_distance},
+        viewed_levels::areas as viewed,
     },
     server::{
         eula, profiles,
@@ -1042,7 +1044,7 @@ impl Game<'_> {
                 self.game_rule_changed("minecraft:show_advancement_messages", value, None);
             }
         }
-        self.settings.render_distance = props.view_distance.clamp(2, 32);
+        self.settings.render_distance = effective_view_distance(props.view_distance);
         self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
         // Nothing is kept around the spawn while nobody is on.
         self.streaming.radius = -1;
@@ -1155,7 +1157,7 @@ impl Game<'_> {
             guest_commands: true,
             force_game_mode: props.force_game_mode,
             hardcore: self.level.hardcore,
-            view_distance: props.view_distance.clamp(2, 32),
+            view_distance: props.view_distance,
             simulation_distance: props.simulation_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
             levels: self.level_shapes,
@@ -1255,7 +1257,7 @@ impl Game<'_> {
             ),
             compression: props.network_compression_threshold,
             view: (
-                props.view_distance.clamp(2, 32) as u32,
+                props.view_distance.max(0) as u32,
                 props.simulation_distance.clamp(2, 32) as u32,
             ),
             max_players: props.max_players.max(0) as usize,
@@ -1481,12 +1483,16 @@ impl Game<'_> {
                 .loading_chunks(|g| super::game_mode::loads_chunks(rule, g.spectator()))
                 .next()
         });
+        // The live setter and startup put the effective ChunkMap radius in settings;
+        // the PlayerList keeps the raw value separately for its packets.
         if self.is_dedicated_server() || self.dim != super::Dim::Overworld || guest.is_some() {
             self.streaming.radius = if guest.is_some() {
                 self.settings.render_distance
             } else {
                 -1
             };
+        } else if self.serving.is_some() {
+            self.streaming.radius = self.settings.render_distance;
         }
         let spawn = self
             .spawn
