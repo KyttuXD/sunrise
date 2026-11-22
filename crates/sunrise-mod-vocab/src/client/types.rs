@@ -935,8 +935,8 @@ pub enum ScreenRegionKind {
     /// The open recipe book's column of category tabs (`RecipeBookTabButton`s at `xPosTab`, 35 x 27 each, 27 apart),
     /// left of its panel; as tall as the tabs the book shows.
     RecipeBookTabs,
-    /// One tab of the creative inventory (`CreativeModeInventoryScreen.getTabX` / `getTabY`, 26 x 32), above or
-    /// below its panel: one region per tab drawn.
+    /// One tab of the creative inventory (`CreativeModeInventoryScreen.extractTabButton`, 26 x 32),
+    /// above or below its panel: one region per tab drawn.
     CreativeTab,
     /// The active effects beside the inventory (`EffectsInInventory`), as wide and tall as they draw (compact or
     /// full rows), after `render_inventory_mob_effects` moved or resized them.
@@ -1009,12 +1009,12 @@ pub struct ScreenView<'a> {
     /// This frame's partial tick (`getGameTimeDeltaPartialTick(false)`, 0 to
     /// 1): what the screen draws animation against.
     pub partial_tick: f32,
-    /// What the screen itself draws outside `rect` this frame, each from the
-    /// same layout that draws it: the recipe book's panel and its tab column
-    /// while the book is open, the creative inventory's tabs, the active
-    /// effects beside the inventory. A region hidden, folded or too narrow to
-    /// show is left out; empty on a screen with none. What other mods draw
-    /// beside their screens is theirs to report (a recipe viewer's own API).
+    /// What the game draws outside `rect`: the book panel and tabs, creative tabs,
+    /// and inventory effects. Render.Post sees the current draw, or an empty slice if
+    /// Pre canceled it. Input and the earlier render phases see the last published draw
+    /// for the screen. Opening, closing, init, screen room and the inventory-effects
+    /// layout hook see an empty slice. Hidden regions and areas drawn by other mods
+    /// are not included.
     pub regions: &'a [ScreenRegion],
 }
 
