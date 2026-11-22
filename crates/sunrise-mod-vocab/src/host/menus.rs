@@ -102,12 +102,13 @@ pub trait MenusBackend {
     /// How many of `stack` menu slot `slot` holds (`Slot.mayPlace`, then `Slot.getMaxStackSize`):
     /// a furnace's fuel slot one bucket, an armour slot one piece that fits it, a crafting result
     /// none. For an owned transient slot, this is the declared limit or the item's own
-    /// limit, whichever is lower; its mod decides what a click moves.
+    /// limit, whichever is lower; its mod decides what a click moves. This
+    /// does not ask menu Parts during `menu_slot_rules`, even on another menu.
 
     fn menu_slot_holds(&self, menu: MenuRef, slot: usize, stack: &ItemStack) -> Option<u32>;
     /// Side: server.
     /// Whether menu slot `slot` gives up what it holds (`Slot.mayPickup`): bound armour stays
-    /// on outside creative.
+    /// on outside creative. Like `slot_holds`, this skips menu Parts during `menu_slot_rules`.
     fn menu_slot_gives(&self, menu: MenuRef, slot: usize) -> Option<bool>;
     /// Side: server.
     /// Ask `Slot.mayPickup` with the stack just read from a backed menu slot's handler.

@@ -78,6 +78,12 @@ impl EntityPart for Counter {
         if self.panicking_on() == Some(entity.id())
             && !self.fired.swap(true, std::sync::atomic::Ordering::Relaxed)
         {
+            assert_eq!(
+                event
+                    .subject
+                    .with_view(|mut view| view.set_velocity([7.0, 8.0, 9.0])),
+                Some(true)
+            );
             panic!("general entity tick boom");
         }
         let action = std::mem::replace(&mut *self.action.lock().unwrap(), OnTick::Nothing);
@@ -671,23 +677,46 @@ fn a_parked_level_holds_the_counter_until_it_returns() {
 #[test]
 #[ignore = "daily"]
 fn a_panicking_row_rolls_back_and_the_next_tick_proceeds() {
-    with_counter(|game, l| {
-        let first = seeded_row(game, [1, 2, 3, 4], 41);
-        let second = seeded_row(game, [5, 6, 7, 8], 7);
-        l.panic_on
-            .store(first, std::sync::atomic::Ordering::Relaxed);
-        tick(game);
-        assert!(
-            l.trace.lock().unwrap().is_empty(),
-            "the panicking mod's general_entity_tick is disabled after its first panic"
-        );
-        assert_eq!(counter(game, first), 41, "the panic rolled the write back");
-        assert_eq!(counter(game, second), 7);
-        tick(game);
-        assert!(l.trace.lock().unwrap().is_empty());
-        assert_eq!(counter(game, first), 41);
-        assert_eq!(counter(game, second), 7);
-    });
+    crate::game::in_own_process(
+        "game::general::tick_tests::a_panicking_row_rolls_back_and_the_next_tick_proceeds",
+        || {
+            with_counter(|game, l| {
+                let _world =
+                    mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+                let first = seeded_row(game, [1, 2, 3, 4], 41);
+                let second = seeded_row(game, [5, 6, 7, 8], 7);
+                l.panic_on
+                    .store(first, std::sync::atomic::Ordering::Relaxed);
+                tick(game);
+                assert_eq!(
+                    mod_api::__private::take_hook_panics(),
+                    [mod_api::__private::HookPanicReport {
+                        mod_id: "mymod",
+                        hook: "general_entity_tick",
+                    }]
+                );
+                assert!(
+                    l.trace.lock().unwrap().is_empty(),
+                    "the panicking mod's general_entity_tick is disabled after its first panic"
+                );
+                assert_eq!(
+                    counter(game, first),
+                    41,
+                    "the panic rolled the Host write back"
+                );
+                assert_eq!(
+                    game.resident_entities.general.row(first).unwrap().velocity,
+                    sunrise_core::geometry::Vec3::ZERO,
+                    "the panic rolled the scoped subject write back"
+                );
+                assert_eq!(counter(game, second), 7);
+                tick(game);
+                assert!(l.trace.lock().unwrap().is_empty());
+                assert_eq!(counter(game, first), 41);
+                assert_eq!(counter(game, second), 7);
+            });
+        },
+    );
 }
 
 /// The ruling's flat order: the vehicle's Pre, tick and Post, then each

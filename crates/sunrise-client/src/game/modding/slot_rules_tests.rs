@@ -397,3 +397,92 @@ fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
         });
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn nested_menu_reads_use_base_slot_rules() {
+    use crate::game::api_values::test_snapshot;
+    use sunrise_client::{chunk::Chunk, containers::BlockEntity, lan::menu::Slots};
+
+    thread_local! {
+        static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    struct ReadsOwnMenu;
+    #[mod_api::sunrise_part]
+    impl MenuPart for ReadsOwnMenu {
+        fn menu_slot_rules(&self, host: &dyn mod_api::Host, event: &mut MenuSlotRulesEvent<'_>) {
+            let calls = CALLS.get() + 1;
+            CALLS.set(calls);
+            // Without the guard, make reentry fail the assertions rather than overflow.
+            if calls > 2 {
+                event.max_stack = 1;
+                return;
+            }
+            let Some(menu) = event
+                .context
+                .player
+                .and_then(|uuid| host.player(uuid))
+                .and_then(|player| player.container_menu(host))
+            else {
+                return;
+            };
+            if matches!(menu.slot(host, 0), Some(None))
+                && menu.carried(host).flatten().map(|stack| stack.count()) == Some(8)
+                && menu.slot_holds(host, 0, event.stack) == Some(64)
+                && menu.slot_holds(host, 1, event.stack) == Some(64)
+            {
+                event.max_stack = 3;
+            }
+        }
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for ReadsOwnMenu {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            r.menu_part("minecraft:generic_9x3", ReadsOwnMenu);
+        }
+    }
+
+    crate::game::in_own_process(
+        "game::slot_rules_tests::nested_menu_reads_use_base_slot_rules",
+        || {
+            with_mods(vec![ModEntry::new("rules", Box::new(ReadsOwnMenu))], || {
+                with_guests(|game| {
+                    let pos = (1, 64, 1);
+                    game.world
+                        .chunks
+                        .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+                    let state = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:chest")
+                        .unwrap();
+                    game.world.set(pos.0, pos.1, pos.2, state).unwrap();
+                    game.world
+                        .block_entities
+                        .insert(pos, BlockEntity::Chest(vec![None; 27]));
+                    let host = game.lan.as_mut().unwrap();
+                    host.hub.open_container(
+                        12,
+                        "minecraft:generic_9x3",
+                        sunrise_core::nbt::Tag::String("test".into()),
+                        pos,
+                        Slots::Block(pos),
+                        vec![None; 27],
+                        None,
+                    );
+                    host.hub.guests.update(0, |guest| {
+                        guest.carried = Some(ItemStack::new("minecraft:stone", 8));
+                    });
+                    let player = game.player(12).unwrap();
+                    let menu = player.container_menu(game).unwrap();
+                    let stone = test_snapshot(&ItemStack::new("minecraft:stone", 8));
+                    CALLS.set(0);
+                    assert_eq!(menu.slot_holds(game, 0, &stone), Some(3));
+                    // One live placement check and one live capacity check.
+                    assert_eq!(CALLS.get(), 2);
+                });
+            });
+        },
+    );
+}

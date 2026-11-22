@@ -15,6 +15,9 @@ pub trait Hooks {
     /// vanilla `AbstractContainerMenu.doClick` and `Slot`). Permission and
     /// capacity are separate checks. During shift-click a later destination
     /// sees the source remainder and the earlier destinations' updates.
+    /// A nested `MenuRef::slot_holds` or `MenuRef::slot_gives` read uses the
+    /// slot's own rules without asking menu Parts again, even for another slot
+    /// or menu. `context.slot` still reads the slots of the ongoing click.
     /// A panicking part's answers are discarded and its callback is disabled
     /// for the session, with the mod named in the log and error toast. The
     /// other parts still answer the check.
@@ -61,7 +64,7 @@ pub trait Hooks {
         key = "menu",
         host = "read",
         cancellable = false,
-        version = 7,
+        version = 8,
         neoforge = "none (vanilla Slot.mayPlace and mayPickup; NeoForge adds no event or extension for it)"
     )]
     fn menu_slot_rules(

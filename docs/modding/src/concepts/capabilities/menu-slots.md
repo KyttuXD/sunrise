@@ -107,6 +107,9 @@ to `0..=99` and the item's stack limit (matching vanilla `Slot.getMaxStackSize` 
 `Container.getMaxStackSize`): setting `0` allows no items to be placed into the slot. Each live
 `mayPlace`, `mayPickup` and `getMaxStackSize` check during a click queries the parts directly
 against the current menu slots, matching vanilla `AbstractContainerMenu.doClick` and `Slot`.
+Inside `menu_slot_rules`, `MenuRef::slot_holds` and `slot_gives` use the slot's own rules
+without asking menu Parts again, even on another slot or menu. `context.slot` still reads
+the slots of the ongoing click. Ask for an answer that includes Parts outside the callback.
 If a part panics, its answers are discarded and that callback is disabled for the session.
 The log and error toast name the mod; other parts still answer the check.
 
