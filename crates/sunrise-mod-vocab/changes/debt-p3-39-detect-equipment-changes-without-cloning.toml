@@ -19,5 +19,6 @@ migrate = '''
   - `event.entity` is now `LivingRef` instead of `u32` (and `event.kind` is removed): read the id with `event.entity.id()`, the type key with `event.entity.entity().kind(host)` (and `kind.id(host)` if a canonical string is needed), or mutate equipment directly via `event.entity.set_equipment(host, ...)`.
   - `event.slot` is now `EquipmentSlot` (`MainHand`, `OffHand`, `Feet`, `Legs`, `Chest`, `Head`, `Body`, `Saddle`) instead of `&str`. Connected players now report all eight slots, including `Body` and `Saddle`, matching vanilla `PlayerEquipment`.
   - `event.from` and `event.to` are now `Option<ItemStackView<'_>>` instead of `Option<&ItemStack>`: read scalars directly with `stack.item()`, `stack.count()`, `stack.damage()` and `stack.damage_component()`, or call `stack.project()` when you need an owned `ItemStack` or its components.
+  - Read `event.from` as the value detected by the previous equipment check, not the last value reported to a listener. Mobs and connected players do not replay changes detected while notification was off.
 - Rebuild against the new SDK so the package's `uses` list records `living_equipment_change` version `2`.
 '''

@@ -1307,6 +1307,15 @@ impl<'a> EquipmentRead<'a> {
         }
     }
 
+    /// `LivingEntity.equipmentHasChanged` negated, for a possibly empty slot.
+    pub fn matches_previous(now: Option<&Self>, previous: Option<&ItemStack>) -> bool {
+        match (now, previous) {
+            (Some(now), Some(previous)) => now.matches_stack(previous),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     /// Encode selected extra components with the same gear overlay as a full projection.
     /// Encode only the selected gear values over the resident patch, without cloning the slot.
     pub fn extra_components_matching(

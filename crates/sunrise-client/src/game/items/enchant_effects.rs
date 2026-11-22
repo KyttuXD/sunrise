@@ -45,7 +45,7 @@ fn stand_by_hint(
 }
 
 fn stand_by_hint_mut(
-    stands: &mut [sunrise_client::entities::ArmorStand],
+    stands: &mut sunrise_client::join_seq::JoinList<sunrise_client::entities::ArmorStand>,
     hint: usize,
     id: u32,
 ) -> Option<&mut sunrise_client::entities::ArmorStand> {

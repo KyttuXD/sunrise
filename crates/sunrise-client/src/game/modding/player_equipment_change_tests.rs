@@ -2,7 +2,10 @@
 //! borrow-based comparison without blanket equipment cloning, all eight
 //! `EquipmentSlot`s matching vanilla `LivingEntity.collectEquipmentChanges` and
 //! `PlayerEquipment`, lazy `ItemStackView` delivery, and minimal history retention.
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use mod_api::{
     self, EquipmentSlot, Hooks, LivingEquipmentChangeEvent, LivingEquipmentListenedEvent,
@@ -31,7 +34,7 @@ type Heard = Vec<(
 
 struct Counter {
     heard: Arc<Mutex<Heard>>,
-    listens: bool,
+    listens: Arc<AtomicBool>,
 }
 #[mod_api::__subscriptions]
 impl Hooks for Counter {
@@ -40,7 +43,7 @@ impl Hooks for Counter {
         _: &mut dyn ServerHost,
         event: &mut LivingEquipmentListenedEvent,
     ) {
-        event.listened |= self.listens;
+        event.listened |= self.listens.load(Ordering::Relaxed);
     }
     fn living_equipment_change(
         &self,
@@ -62,11 +65,15 @@ impl Hooks for Counter {
     }
 }
 
-fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>)) {
+fn with_counter(
+    listens: bool,
+    test: impl FnOnce(&mut crate::game::Game<'_>, &Mutex<Heard>, &AtomicBool),
+) {
     let heard = Arc::new(Mutex::new(Heard::new()));
+    let listens = Arc::new(AtomicBool::new(listens));
     let counter = Counter {
         heard: heard.clone(),
-        listens,
+        listens: listens.clone(),
     };
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("counter", Box::new(counter))].into();
     mod_platform::testing::with_mods(mods, || {
@@ -79,7 +86,7 @@ fn with_counter(listens: bool, test: impl FnOnce(&mut crate::game::Game<'_>, &Mu
             for conn in [12, 13] {
                 host.play.entry(conn).or_default();
             }
-            test(game, &heard)
+            test(game, &heard, &listens)
         })
     });
 }
@@ -103,7 +110,7 @@ fn player(
 #[test]
 #[ignore = "daily"]
 fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
-    with_counter(true, |game, heard| {
+    with_counter(true, |game, heard, _| {
         let sword = ItemStack::new("minecraft:iron_sword", 1);
         let stone = ItemStack::new("minecraft:stone", 1);
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
@@ -195,7 +202,7 @@ fn a_players_hotbar_selection_pickup_and_helmet_are_each_one_change() {
 #[test]
 #[ignore = "daily"]
 fn item_use_completion_reports_equipment_change_in_same_server_tick() {
-    with_counter(true, |game, heard| {
+    with_counter(true, |game, heard, _| {
         let apple = ItemStack::new("minecraft:golden_apple", 1);
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
@@ -245,7 +252,7 @@ fn item_use_completion_reports_equipment_change_in_same_server_tick() {
 #[test]
 #[ignore = "daily"]
 fn spectator_touching_unloaded_chunk_skips_equipment_change_hook() {
-    with_counter(true, |game, heard| {
+    with_counter(true, |game, heard, _| {
         let helmet = ItemStack::new("minecraft:iron_helmet", 1);
         game.world.chunks.clear();
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
@@ -282,7 +289,7 @@ fn spectator_touching_unloaded_chunk_skips_equipment_change_hook() {
 #[test]
 #[ignore = "daily"]
 fn players_are_not_told_without_the_listened_opt_in() {
-    with_counter(false, |game, heard| {
+    with_counter(false, |game, heard, _| {
         let guests = &mut game.lan.as_mut().unwrap().hub.guests;
         guests.update(0, |g| {
             g.inventory[1] = Some(ItemStack::new("minecraft:iron_sword", 1));
@@ -297,7 +304,9 @@ fn players_are_not_told_without_the_listened_opt_in() {
 #[test]
 #[ignore = "daily"]
 fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
-    with_counter(true, |game, heard| {
+    with_counter(true, |game, heard, listens| {
+        use sunrise_client::mobs::armor;
+
         let zombie = game
             .res
             .mob_types()
@@ -311,8 +320,9 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         // Naked mobs emit nothing and allocate no equipment history.
         game.tick_equipment_attributes();
         assert_eq!(take(heard), Heard::new());
-        assert!(game.mobs[0].extra.last_equipment.is_none());
-        assert!(game.mobs[1].extra.last_equipment.is_none());
+        assert!(!game.mobs[0].extra.live.has_worn());
+        assert!(!game.mobs[1].extra.live.has_worn());
+        let bare = armor::values(&game.mobs[1]);
 
         // Equip mob 42 with a damaged enchanted chestplate (gear overlay on stored stack).
         let mut chest = ItemStack::new("minecraft:iron_chestplate", 1);
@@ -332,15 +342,32 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
             )]
         );
         // Unchanged mob 41 still allocates no history; mob 42 retains only chest.
-        assert!(game.mobs[0].extra.last_equipment.is_none());
-        assert!(game.mobs[1].extra.last_equipment.is_some());
+        assert!(!game.mobs[0].extra.live.has_worn());
+        assert!(game.mobs[1].extra.live.has_worn());
+        let wearing_iron = armor::values(&game.mobs[1]);
+        assert!(wearing_iron.0 > bare.0);
 
         // An unchanged tick with overlaid gear reports nothing.
         game.tick_equipment_attributes();
         assert_eq!(take(heard), Heard::new());
 
-        // Clearing the chestplate reports the removal and drops the empty history box.
-        game.mobs[1].set_equipment_stack(CHEST, None);
+        // The same comparison still refreshes armor and advances history
+        // when the listener opts out. Opting in does not replay that change.
+        let diamond = ItemStack::new("minecraft:diamond_chestplate", 1);
+        listens.store(false, Ordering::Relaxed);
+        game.mobs[1].set_equipment_stack(CHEST, Some(diamond.clone()));
+        game.tick_equipment_attributes();
+        assert_eq!(take(heard), Heard::new());
+        assert!(armor::values(&game.mobs[1]).0 > wearing_iron.0);
+        listens.store(true, Ordering::Relaxed);
+        game.tick_equipment_attributes();
+        assert_eq!(take(heard), Heard::new());
+
+        // A handle write applies armor immediately without consuming the
+        // body's next notification; its previous value is the silent change.
+        let mob = game.living(game.entity(42).unwrap()).unwrap();
+        assert!(game.living_set_equipment(mob, EquipmentSlot::Chest, None));
+        assert_eq!(armor::values(&game.mobs[1]), bare);
         game.tick_equipment_attributes();
         assert_eq!(
             take(heard),
@@ -348,10 +375,10 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
                 42,
                 Some("minecraft:zombie".into()),
                 EquipmentSlot::Chest,
-                api(&chest),
+                api(&diamond),
                 None,
             )]
         );
-        assert!(game.mobs[1].extra.last_equipment.is_none());
+        assert!(!game.mobs[1].extra.live.has_worn());
     });
 }

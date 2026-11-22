@@ -10,10 +10,7 @@ use super::{Game, commands::Target};
 use mod_api::{EquipmentSlot, HookId, ItemStackView, LivingRef, WorldEpoch};
 use sunrise_client::items::ItemStack;
 use sunrise_client::lan::guest::Guest;
-use sunrise_client::mobs::{
-    Mob,
-    finalize::{self, EquipmentRead},
-};
+use sunrise_client::mobs::Mob;
 use sunrise_items::equipment::{BODY, Equipment, SADDLE};
 
 /// `LivingEntity.equipmentHasChanged` negated (`ItemStack.matches`).
@@ -25,34 +22,11 @@ pub(super) fn equipment_stack_matches(now: Option<&ItemStack>, prev: Option<&Ite
     }
 }
 
-pub(super) fn equipment_read_matches(
-    now: Option<&EquipmentRead<'_>>,
-    prev: Option<&ItemStack>,
-) -> bool {
-    match (now, prev) {
-        (None, None) => true,
-        (Some(now), Some(prev)) => now.matches_stack(prev),
-        _ => false,
-    }
-}
-
-pub(super) fn mob_equipment_changed(m: &Mob) -> bool {
-    if m.extra.equipment.is_empty() && m.extra.last_equipment.is_none() {
-        return false;
-    }
-    let last = m.extra.last_equipment.as_deref();
-    EquipmentSlot::ALL.into_iter().any(|slot| {
-        let current = finalize::equipment_slot(m, slot);
-        let prev = last.and_then(|last| last[slot as usize].as_ref());
-        !equipment_read_matches(current.as_ref(), prev)
-    })
-}
-
-pub(super) fn mob_by_hint_mut(mobs: &mut [Mob], hint: usize, id: u32) -> Option<&mut Mob> {
+pub(super) fn mob_index_by_hint(mobs: &[Mob], hint: usize, id: u32) -> Option<usize> {
     if mobs.get(hint).is_some_and(|m| m.id == id) {
-        return mobs.get_mut(hint);
+        return Some(hint);
     }
-    mobs.iter_mut().find(|m| m.id == id)
+    mobs.iter().position(|m| m.id == id)
 }
 
 pub(super) fn guest_equipment_slot(g: &Guest, slot: EquipmentSlot) -> Option<&ItemStack> {

@@ -3634,8 +3634,8 @@ impl Game<'_> {
     /// different stack (NeoForge's `LivingEquipmentChangeEvent`,
     /// `LivingEntity.collectEquipmentChanges` / `detectEquipmentUpdates`):
     /// `entity` its `LivingRef`, `slot` the `EquipmentSlot`, `from` a lazy
-    /// `ItemStackView` of what the slot held when last heard and `to` a lazy
-    /// `ItemStackView` of what it holds now. Once per changed slot across all
+    /// `ItemStackView` of what the slot held at the previous equipment check and
+    /// `to` a lazy `ItemStackView` of what it holds now. Once per changed slot across all
     /// eight `EquipmentSlot`s, after the mobs' tick; one new to the level
     /// counts from empty. A player's `MainHand` is the selected hotbar slot.
     /// The world host's own player is heard by `native_on_equip`. It only

@@ -9,7 +9,7 @@ pub trait Hooks {
     /// type or `entity.set_equipment(...)` to edit it), `slot` the
     /// [`EquipmentSlot`] (`MainHand`, `OffHand`, `Feet`, `Legs`, `Chest`,
     /// `Head`, `Body`, `Saddle`), `from` a lazy [`ItemStackView`] of what the
-    /// slot held when last heard (none for empty) and `to` a lazy
+    /// slot held at the previous equipment check (none for empty) and `to` a lazy
     /// [`ItemStackView`] of what it holds now (call [`ItemStackView::project`]
     /// on demand for components or an owned copy). Once for each slot that
     /// changed, in `EquipmentSlot` order, after the mobs' tick, so an entity
@@ -25,7 +25,8 @@ pub trait Hooks {
     /// tick (and therefore this check), and `MainHand` is the selected hotbar
     /// slot, so a hotbar selection, a pickup into the selected slot or a
     /// finished item use is a `MainHand` change. Mobs and players are told only
-    /// while a mod sets `living_equipment_listened`. The world host's own
+    /// while a mod sets `living_equipment_listened`; opting in does not replay
+    /// changes already detected. The world host's own
     /// player, in single player or hosting a LAN world, isn't told here:
     /// `on_equip` hears it. Server-side.
     #[hook(
