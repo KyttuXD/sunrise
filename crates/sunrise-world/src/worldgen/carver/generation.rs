@@ -89,42 +89,37 @@ impl CarverCatalog {
         self.definitions.keys().map(String::as_str)
     }
     pub fn decode_set(&self, json: &str) -> Result<Vec<Arc<WorldCarver>>, DecodeError> {
-        use serde_json::value::RawValue;
-        let raw: Box<RawValue> = serde_json::from_str(json)?;
-        if let Ok(name) = serde_json::from_str::<String>(raw.get())
-            && let Some(tag) = name.strip_prefix('#')
-        {
-            let tag = crate::worldgen::tags::identifier(tag)?;
-            let members = self
-                .tags
-                .get(&tag)
-                .ok_or_else(|| DecodeError::Registry(format!("unknown carver tag {tag}")))?;
-            return Ok(members
-                .iter()
-                .map(|id| self.definitions[id].clone())
-                .collect());
-        }
-        let entries: Vec<Box<RawValue>> = if raw.get().starts_with('[') {
-            serde_json::from_str(raw.get())?
-        } else {
-            vec![raw]
+        use crate::holder_set::{StringLookup, resolve_with_inline};
+        let value = serde_json::from_str(json)?;
+        let lookup = StringLookup {
+            what: "carver",
+            ids: Some(&|| self.definitions.keys().cloned().collect()),
+            entry: &|id| {
+                let id = identifier(id).map_err(|error| error.to_string())?;
+                self.contains(&id)
+                    .then(|| vec![id.clone()])
+                    .ok_or_else(|| format!("unknown carver {id}"))
+            },
+            tag: &|tag| {
+                let tag =
+                    crate::worldgen::tags::identifier(tag).map_err(|error| error.to_string())?;
+                self.tags
+                    .get(&tag)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown carver tag {tag}"))
+            },
         };
-        entries
+        resolve_with_inline(&value, &lookup, false, &|holder| Ok(holder.to_string()))
+            .map_err(DecodeError::Registry)?
             .iter()
-            .map(|raw| {
-                if let Ok(name) = serde_json::from_str::<String>(raw.get()) {
-                    let name = identifier(&name)?;
-                    self.definitions
-                        .get(&name)
-                        .cloned()
-                        .ok_or_else(|| DecodeError::Registry(format!("unknown carver {name}")))
-                } else {
-                    Ok(Arc::new(WorldCarver::from_json(raw.get())?))
-                }
+            .map(|holder| match self.definitions.get(holder) {
+                Some(carver) => Ok(carver.clone()),
+                None => Ok(Arc::new(WorldCarver::from_json(holder)?)),
             })
             .collect()
     }
 }
+
 #[derive(Debug)]
 pub enum MaskGenerationError<E> {
     Source(E),

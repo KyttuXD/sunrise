@@ -473,6 +473,7 @@ pub(in crate::game) struct SyncPreload {
 pub(in crate::game) fn preload_sync_data(
     item_data: &Arc<ItemData>,
     items: Arc<Items>,
+    biomes: &Arc<sunrise_client::biome::Biomes>,
 ) -> Option<SyncPreload> {
     let generation = item_data.defaults().generation();
     if !SYNC.try_lock().is_ok_and(|sync| {
@@ -485,6 +486,18 @@ pub(in crate::game) fn preload_sync_data(
         return None;
     }
     let root = item_data.root().to_owned();
+    // Only the prepared vanilla table can be sent before world registry admission.
+    if !sunrise_client::mod_content::biomes::modified(&root).is_empty()
+        || biomes.registry_order().into_iter().any(|name| {
+            biomes.pack_file(name).is_some()
+                || biomes
+                    .builtin_file(name)
+                    .is_some_and(|file| file.get("neoforge:conditions").is_some())
+        })
+    {
+        return None;
+    }
+    let biomes = biomes.clone();
     let item_data = Arc::clone(item_data);
     // Loading recipes asks mods' ingredient and recipe property set hooks.
     std::thread::Builder::new()
@@ -492,9 +505,10 @@ pub(in crate::game) fn preload_sync_data(
         .name("Server data preload".into())
         .spawn(move || {
             let none = sunrise_world::loot::PackOverlay::NONE;
-            SyncData::load(
+            SyncData::load_with(
                 item_data.root(),
                 &none,
+                Some(&biomes),
                 item_data.defaults(),
                 server_sources(item_data.root(), &item_data, &items, &none)
                     .map_err(|error| error.to_string())?

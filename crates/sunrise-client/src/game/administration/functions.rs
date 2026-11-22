@@ -327,7 +327,6 @@ impl Game<'_> {
                             &pack,
                             &options,
                             &self.settings,
-                            &stack,
                             biomes.expect("opening stages the biome registry"),
                         )
                         .map_err(|error| ReloadStageError::DataSource(error.to_string()))?,

@@ -54,7 +54,15 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let base = write_base(&root);
     let mut pack: Value = serde_json::from_str(BASE_BIOME).unwrap();
     pack["effects"]["grass_color"] = "#123456".into();
-    let world = base.with_packs([("minecraft:tundra_x", &pack)]);
+    let particle = serde_json::json!([{"particle":{"type":"minecraft:ash"},"probability":1}]);
+    pack["attributes"]["minecraft:visual/ambient_particles"] = particle.clone();
+    let mut append = pack.clone();
+    append["attributes"]["minecraft:visual/ambient_particles"] =
+        serde_json::json!({"modifier":"append", "argument":particle});
+    let world = base.with_packs([
+        ("minecraft:tundra_x", &pack),
+        ("minecraft:zz_append", &append),
+    ]);
     let defaults = sunrise_world::item_defaults::read(&root).unwrap();
     let items = sunrise_client::items::Items::catalog(
         &root,
@@ -83,13 +91,29 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let names: Vec<_> = registry.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(
         names,
-        ["minecraft:plains", "minecraft:river", "minecraft:tundra_x"]
+        [
+            "minecraft:plains",
+            "minecraft:river",
+            "minecraft:tundra_x",
+            "minecraft:zz_append"
+        ]
     );
     assert!(world.list.iter().all(|b| names.contains(&b.name.as_str())));
 
     // A client that knows the vanilla pack still gets the pack biome's data.
     let sent = sync.registry_packets(true, &LevelShapes::VANILLA);
-    let biomes = sent.iter().find(|r| r.registry == BIOME_REGISTRY).unwrap();
+    use sunrise_protocol::{buf::Reader, packets::configuration::Clientbound};
+    let biomes = sent
+        .into_iter()
+        .find(|r| r.registry == BIOME_REGISTRY)
+        .unwrap();
+    let bytes = Clientbound::RegistryData(biomes).encode();
+    let mut reader = Reader::new(&bytes);
+    let packet_id = reader.varint().unwrap();
+    let Clientbound::RegistryData(biomes) = Clientbound::decode_reader(packet_id, reader).unwrap()
+    else {
+        panic!("expected the biome registry packet");
+    };
     assert!(biomes.entries[0].data.is_none(), "a known one is not sent");
     assert!(biomes.entries[2].data.is_some(), "the pack's biome is sent");
 
@@ -108,6 +132,13 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         client.get(id).grass,
         client.get(client.id("minecraft:plains")).grass
     );
+
+    for name in ["minecraft:tundra_x", "minecraft:zz_append"] {
+        let particles = &client.get(client.id(name)).ambient_particles;
+        assert_eq!(particles.len(), 1, "{name}");
+        assert_eq!(particles[0].0.name(), "ash");
+        assert_eq!(particles[0].1.to_bits(), 1.0_f32.to_bits(), "{name}");
+    }
 
     // Data a client already has in its own file is nothing new, sent or not.
     let same: Vec<_> = sync
@@ -144,6 +175,48 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     assert_ne!(plains, 0x654321);
     assert_eq!(client.get(client.id("minecraft:plains")).grass, 0x654321);
     assert_eq!(client.get(client.id("minecraft:tundra_x")).grass, 0x123456);
+}
+
+#[test]
+fn wire_load_without_a_world_table_uses_only_prepared_vanilla_biomes() {
+    use sunrise_world::loot::PackOverlay;
+    let root =
+        std::env::temp_dir().join(format!("sunrise-base-wire-biomes-{}", std::process::id()));
+    let _scratch = Scratch(root.clone());
+    write_base(&root);
+    let mut invalid: Value = serde_json::from_str(BASE_BIOME).unwrap();
+    invalid["carvers"] = serde_json::json!({});
+    let wrapped = serde_json::json!({"neoforge:conditions":[{"type":"neoforge:always"}], "neoforge:value":invalid});
+    std::fs::create_dir_all(root.join("worldgen")).unwrap();
+    std::fs::write(
+        root.join("worldgen/biomes.json"),
+        serde_json::json!({"demo:prepared":wrapped.to_string()}).to_string(),
+    )
+    .unwrap();
+    let files = [(
+        "worldgen/biome/demo:overlay".into(),
+        vec![wrapped.to_string().into_bytes()],
+    )];
+    let overlay = PackOverlay::new(&files);
+    let defaults = sunrise_world::item_defaults::read(&root).unwrap();
+    let items = sunrise_client::items::Items::catalog(&root, &overlay, &defaults).unwrap();
+    let sources =
+        sunrise_client::crafting::ResolvedSources::load(&root, &items, &overlay, &server_load())
+            .unwrap();
+    let wire = SyncData::load(&root, &overlay, &defaults, &sources).unwrap();
+    let network_biomes = wire
+        .registry_packets(false, &LevelShapes::VANILLA)
+        .into_iter()
+        .find(|registry| registry.registry == BIOME_REGISTRY)
+        .unwrap();
+    assert_eq!(
+        network_biomes
+            .entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        ["minecraft:plains", "minecraft:river"]
+    );
 }
 
 #[test]
@@ -196,9 +269,15 @@ fn a_biome_the_mods_modifiers_changed_is_sent_to_a_client_that_knows_the_vanilla
         &defaults,
     )
     .unwrap();
-    let sync = SyncData::load(
+    let sync = SyncData::load_with(
         &root,
         &sunrise_world::loot::PackOverlay::NONE,
+        Some(
+            &Biomes::load_for_server(&sunrise_assets::resource_source::ResourceRoot::directory(
+                root.clone(),
+            ))
+            .unwrap(),
+        ),
         &defaults,
         &sunrise_client::crafting::ResolvedSources::load(
             &root,

@@ -872,10 +872,7 @@ impl Game<'_> {
             .as_ref()
             .unwrap_or_else(|| self.res.biomes());
         let overrides = match &self.world_tables {
-            Some(tables) => super::world_loading::world_worldgen_overrides(
-                self.fns.enabled_packs(),
-                &tables.biomes,
-            ),
+            Some(tables) => tables.biomes.overrides.clone(),
             None => {
                 sunrise_client::datapack::worldgen_overrides(
                     &self.fns.enabled_packs().collect::<Vec<_>>(),

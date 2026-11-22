@@ -3,16 +3,20 @@ use super::{
     DecodeError,
     biome_temperature::BiomeTemperatureSettings,
     block_feature::{FeatureBlockBindings, integer_properties},
-    carver::CarverCatalog,
+    carver::{CarverCatalog, WorldCarver},
     climate::{
         ClimateIndex, ClimateSampler, ClimateSearch, ClimateVolume, IndexError, Parameter,
         ParameterPoint,
     },
     density::identifier,
     feature_catalog::{BiomePlacedFeature, FeatureCatalog},
+    feature_graph::PlacedFeatureDefinition,
     generator::{
         GeneratorError,
-        data::{build_tags, load_carvers, read_registry_bundle, registry_tag_definitions},
+        data::{
+            FeatureCodecContext, build_tags, load_biome_tags, load_carvers, load_fluid_tags,
+            load_structure_resources, read_registry_bundle, registry_tag_definitions,
+        },
     },
     overrides::WorldgenOverrides,
 };
@@ -21,7 +25,12 @@ use crate::{
     registry::BlockRegistry,
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
+    path::Path,
+    sync::Arc,
+};
 use sunrise_core::{
     density::{SampleError, SamplerContext},
     nbt::{Compound, Tag},
@@ -33,15 +42,18 @@ pub struct BiomeGenerationRegistries<'a> {
     features: FeatureCatalog,
     dir: &'a Path,
     packs: &'a WorldgenOverrides,
-    blocks: &'a BlockRegistry,
-    bindings: Option<FeatureBlockBindings<'a>>,
+    blocks: &'static BlockRegistry,
+    biome_ids: BTreeMap<String, BiomeId>,
+    bindings: Option<FeatureBlockBindings<'static>>,
+    named: BTreeMap<String, Arc<PlacedFeatureDefinition>>,
 }
 
 impl<'a> BiomeGenerationRegistries<'a> {
     pub fn load(
         dir: &'a Path,
         packs: &'a WorldgenOverrides,
-        blocks: &'a BlockRegistry,
+        blocks: &'static BlockRegistry,
+        candidates: BTreeSet<String>,
     ) -> Result<Self, GeneratorError> {
         let carvers = load_carvers(dir, packs)?;
         let features = FeatureCatalog::from_resources(
@@ -49,20 +61,174 @@ impl<'a> BiomeGenerationRegistries<'a> {
             &read_registry_bundle(dir, packs, "placed_features")?.unwrap_or_default(),
             &registry_tag_definitions(dir, packs, "placed_feature", "placed_feature_tags")?,
         )?;
+        // RegistryOps has holders for candidate biome keys before their codecs run.
+        // These are separate from the registered-condition view, which sees only
+        // holders the owning loader has published.
+        let biome_ids = candidates
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| (name, BiomeId(id as u32)))
+            .collect();
         Ok(Self {
             carvers,
             features,
             dir,
             packs,
             blocks,
+            biome_ids,
             bindings: None,
+            named: BTreeMap::new(),
         })
+    }
+
+    fn bind_features(&self) -> Result<FeatureBlockBindings<'static>, GeneratorError> {
+        let mut warnings = Vec::new();
+        let block_tags = build_tags(
+            &read_registry_bundle(self.dir, self.packs, "block_tags")?.unwrap_or_default(),
+            self.packs,
+            "block_tags",
+            &mut warnings,
+            |id| self.blocks.default_state(id).is_some(),
+        )?;
+        let fluid_tags = load_fluid_tags(self.dir, self.packs, &mut warnings)?;
+        for warning in warnings {
+            log::warn!("{warning}");
+        }
+        let biome_tags =
+            load_biome_tags(self.dir, self.packs, |id| self.biome_ids.contains_key(id))?;
+        let integers = integer_properties(self.blocks);
+        let blocks = super::generator_blocks::BlockBehavior::load(
+            &self.dir.join("blocks"),
+            self.blocks,
+            &block_tags,
+            &fluid_tags,
+        )?;
+        let structures = load_structure_resources(self.dir, self.blocks, &block_tags, self.packs)?;
+        let state_providers =
+            read_registry_bundle(self.dir, self.packs, "state_providers")?.unwrap_or_default();
+        let base = FeatureBlockBindings::with_tags(self.blocks, integers.clone(), &block_tags)?;
+        Ok(FeatureCodecContext {
+            registry: self.blocks,
+            integers: &integers,
+            block_tags: &block_tags,
+            fluid_tags: &fluid_tags,
+            biome_ids: &self.biome_ids,
+            biome_tags: &biome_tags,
+            structures: structures.as_ref(),
+            blocks: blocks.as_ref(),
+            state_providers: &state_providers,
+        }
+        .bind(base)?)
+    }
+
+    fn decode_steps(
+        &mut self,
+        value: &Value,
+    ) -> Result<Vec<Vec<ResolvedBiomeFeature>>, DecodeError> {
+        let steps = self.features.biome_steps(value)?;
+        if steps.iter().all(Vec::is_empty) {
+            return Ok(steps.into_iter().map(|_| Vec::new()).collect());
+        }
+        if self.bindings.is_none() {
+            self.bindings = Some(
+                self.bind_features()
+                    .map_err(|error| DecodeError::Registry(error.to_string()))?,
+            );
+        }
+        let bindings = self
+            .bindings
+            .as_ref()
+            .expect("feature codec context was bound");
+        steps
+            .into_iter()
+            .map(|step| {
+                step.into_iter()
+                    .map(|holder| {
+                        let definition = match &holder {
+                            BiomePlacedFeature::Named(name) => {
+                                if let Some(definition) = self.named.get(name) {
+                                    definition.clone()
+                                } else {
+                                    let definition = self
+                                        .features
+                                        .placed_feature_with_blocks(
+                                            &Value::from(name.as_str()).to_string(),
+                                            bindings,
+                                        )
+                                        .map_err(|error| {
+                                            DecodeError::Registry(format!(
+                                                "placed feature {name}: {error}"
+                                            ))
+                                        })?;
+                                    let definition = Arc::new(definition);
+                                    self.named.insert(name.clone(), definition.clone());
+                                    definition
+                                }
+                            }
+                            BiomePlacedFeature::Direct(json) => {
+                                Arc::new(self.features.placed_feature_with_blocks(json, bindings)?)
+                            }
+                        };
+                        Ok(ResolvedBiomeFeature { holder, definition })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedBiomeFeature {
+    pub holder: BiomePlacedFeature,
+    pub definition: Arc<PlacedFeatureDefinition>,
+}
+
+/// A biome's carvers and placed-feature holders, bound before publishing its ID.
+#[derive(Debug)]
+pub struct ResolvedBiomeGeneration {
+    pub(super) carvers: Vec<Arc<WorldCarver>>,
+    pub(super) features: Vec<Vec<ResolvedBiomeFeature>>,
+}
+
+/// Immutable settings keyed by biome ID. Clones share the same registry
+/// generation (including numeric IDs in bound feature predicates).
+#[derive(Clone, Debug)]
+pub struct AdmittedBiomeGeneration(Arc<BTreeMap<String, ResolvedBiomeGeneration>>);
+
+impl AdmittedBiomeGeneration {
+    pub fn new(biomes: BTreeMap<String, ResolvedBiomeGeneration>) -> Self {
+        Self(Arc::new(biomes))
+    }
+
+    pub(super) fn has_features(&self) -> bool {
+        self.0
+            .values()
+            .any(|biome| biome.features.iter().any(|step| !step.is_empty()))
+    }
+
+    pub(super) fn get(&self, name: &str) -> Option<&ResolvedBiomeGeneration> {
+        self.0.get(name)
+    }
+}
+
+impl PartialEq for AdmittedBiomeGeneration {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for AdmittedBiomeGeneration {}
+impl Hash for AdmittedBiomeGeneration {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
     }
 }
 
 /// A biome admitted by `Biome.DIRECT_CODEC`. Its local data retains the
 /// generation settings and attributes that never go to joining clients.
-pub struct BiomeDefinition(Value);
+pub struct BiomeDefinition {
+    value: Value,
+    generation: ResolvedBiomeGeneration,
+}
 
 impl BiomeDefinition {
     pub fn decode(
@@ -83,52 +249,15 @@ impl BiomeDefinition {
         }
         let record = value.as_object_mut().ok_or(DecodeError::Field("biome"))?;
         let carvers = record.get("carvers").ok_or(DecodeError::Field("carvers"))?;
-        generation
+        let carvers = generation
             .carvers
             .decode_set(&carvers.to_string())
             .map_err(|error| DecodeError::Registry(format!("carvers: {error}")))?;
-        let features = record
-            .get("features")
-            .ok_or(DecodeError::Field("features"))?;
-        for holder in generation
-            .features
-            .biome_steps(features)?
-            .into_iter()
-            .flatten()
-        {
-            if let BiomePlacedFeature::Direct(json) = holder {
-                let bindings = match &mut generation.bindings {
-                    Some(bindings) => bindings,
-                    slot @ None => {
-                        let tags =
-                            read_registry_bundle(generation.dir, generation.packs, "block_tags")
-                                .and_then(|base| {
-                                    let mut warnings = Vec::new();
-                                    let tags = build_tags(
-                                        &base.unwrap_or_default(),
-                                        generation.packs,
-                                        "block_tags",
-                                        &mut warnings,
-                                        |id| generation.blocks.default_state(id).is_some(),
-                                    )?;
-                                    for warning in warnings {
-                                        log::warn!("{warning}");
-                                    }
-                                    Ok(tags)
-                                })
-                                .map_err(|error| DecodeError::Registry(error.to_string()))?;
-                        slot.insert(FeatureBlockBindings::with_tags(
-                            generation.blocks,
-                            integer_properties(generation.blocks),
-                            &tags,
-                        )?)
-                    }
-                };
-                generation
-                    .features
-                    .placed_feature_with_blocks(&json, bindings)?;
-            }
-        }
+        let features = generation.decode_steps(
+            record
+                .get("features")
+                .ok_or(DecodeError::Field("features"))?,
+        )?;
         // Use the decoded special effects for the local readers too, including RGB vectors.
         record.insert(
             "effects".into(),
@@ -140,11 +269,14 @@ impl BiomeDefinition {
                     .collect(),
             ),
         );
-        Ok(Self(value))
+        Ok(Self {
+            value,
+            generation: ResolvedBiomeGeneration { carvers, features },
+        })
     }
 
-    pub fn into_json(self) -> Value {
-        self.0
+    pub fn into_parts(self) -> (Value, ResolvedBiomeGeneration) {
+        (self.value, self.generation)
     }
 
     /// `Biome.NETWORK_CODEC` as used by `RegistrySynchronization.packRegistry`.

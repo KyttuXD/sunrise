@@ -988,8 +988,11 @@ impl Game<'_> {
         self.native_server_about_to_start(true);
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
-        let sync =
-            super::lan::sync::preload_sync_data(&self.res.core.item_data, self.res.shared_items());
+        let sync = super::lan::sync::preload_sync_data(
+            &self.res.core.item_data,
+            self.res.shared_items(),
+            self.res.biomes(),
+        );
         let opened_packs = self.finish_open_world(prepared)?;
         // WorldLoader: the world's packs must load before the server starts. The data store is read
         // now rather than at the first tick (reading parses functions; it runs none), and a broken
