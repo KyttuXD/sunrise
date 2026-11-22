@@ -275,6 +275,37 @@ impl BlockStatesBackend for NoBlockTables {
     ) -> Option<Result<bool, StateMatchError>> {
         None
     }
+    fn block_state_outline(&self, _: BlockState) -> Result<Option<Vec<[f64; 6]>>, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
+    fn block_state_fluid_state(
+        &self,
+        _: BlockState,
+    ) -> Result<Option<crate::FluidState>, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
+    fn fluid_is_same(
+        &self,
+        _: crate::FluidKey,
+        _: crate::FluidKey,
+    ) -> Result<bool, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
+    fn fluid_bucket(&self, _: crate::FluidKey) -> Result<Option<crate::ItemKey>, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
+    fn fluid_pickup_sound(
+        &self,
+        _: crate::FluidKey,
+    ) -> Result<Option<&'static str>, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
+    fn fluid_empty_sound(
+        &self,
+        _: crate::FluidKey,
+    ) -> Result<Option<&'static str>, LevelReadError> {
+        Err(LevelReadError::Unavailable)
+    }
     fn fluid_state_definition(&self, _: crate::FluidKey) -> Option<crate::FluidDefinition<'_>> {
         None
     }
@@ -501,5 +532,12 @@ mod tests {
         assert_eq!(facts.map_color_rgba(6), None);
         assert_eq!(facts.states_of(crate::BlockKey(0)), None);
         assert_eq!(facts.definition(crate::BlockKey(0)), None);
+        assert_eq!(state.outline(&facts), None);
+        assert_eq!(state.fluid_state(&facts), None);
+        let fluid = crate::FluidKey(0);
+        assert!(!fluid.is_same(&facts, fluid));
+        assert_eq!(fluid.bucket(&facts), None);
+        assert_eq!(fluid.pickup_sound(&facts), None);
+        assert_eq!(fluid.empty_sound(&facts), None);
     }
 }

@@ -33,6 +33,82 @@ impl<'a> BlockTables<'a> {
         self.res.items()
     }
 
+    /// `BlockState.getShape` with an empty getter at the origin (`EmptyBlockGetter.INSTANCE`,
+    /// `BlockPos.ZERO`): the state's outline boxes in block-local space. Empty for a state with
+    /// no outline (air); None for an unknown state.
+    pub(in crate::game) fn block_state_outline(
+        &self,
+        state: BlockStateId,
+    ) -> Result<Option<Vec<[f64; 6]>>, mod_api::LevelReadError> {
+        Ok(self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .map(|_| self.res.facts().get(state).outline.to_vec()))
+    }
+
+    /// `BlockState.getFluidState`: the fluid state `state` holds (water for a waterlogged state,
+    /// the empty fluid for most). None for an unknown state.
+    pub(in crate::game) fn block_state_fluid_state(
+        &self,
+        state: BlockStateId,
+    ) -> Result<Option<FluidState>, mod_api::LevelReadError> {
+        Ok(super::native_world_read::state_fluid(
+            self.res.behaviours(),
+            self.pack.assets.registry,
+            state,
+        ))
+    }
+
+    /// `Fluid.isSame`: whether `fluid` and `other` are the same fluid family. False when either
+    /// key has no world fluid.
+    pub(in crate::game) fn fluid_is_same(
+        &self,
+        fluid: FluidKey,
+        other: FluidKey,
+    ) -> Result<bool, mod_api::LevelReadError> {
+        Ok(
+            match (
+                super::native_world_read::engine_fluid_kind(fluid),
+                super::native_world_read::engine_fluid_kind(other),
+            ) {
+                (Some(fluid), Some(other)) => fluid.same_family(other),
+                _ => false,
+            },
+        )
+    }
+
+    /// `Fluid.getBucket`: the bucket item that picks `fluid` up. None for `minecraft:empty`
+    /// and for fluids without a bucket.
+    pub(in crate::game) fn fluid_bucket(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<mod_api::ItemKey>, mod_api::LevelReadError> {
+        Ok(super::native_world_read::engine_fluid_kind(fluid)
+            .and_then(sunrise_world::level::fluid_bucket)
+            .and_then(mod_api::__private::item_key))
+    }
+
+    /// `Fluid.getPickupSound`: the sound event a bucket plays as it picks `fluid` up.
+    pub(in crate::game) fn fluid_pickup_sound(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<&'static str>, mod_api::LevelReadError> {
+        Ok(super::native_world_read::engine_fluid_kind(fluid)
+            .and_then(sunrise_world::level::fluid_pickup_sound))
+    }
+
+    /// `BucketItem.playEmptySound` / NeoForge `FluidType.getSound(BUCKET_EMPTY)`:
+    /// the sound event a bucket plays as it empties `fluid`.
+    pub(in crate::game) fn fluid_empty_sound(
+        &self,
+        fluid: FluidKey,
+    ) -> Result<Option<&'static str>, mod_api::LevelReadError> {
+        Ok(super::native_world_read::engine_fluid_kind(fluid)
+            .and_then(sunrise_world::level::fluid_empty_sound))
+    }
+
     /// The exported definition of a world fluid, or a tank-only identity.
     pub(in crate::game) fn fluid_state_definition(
         &self,

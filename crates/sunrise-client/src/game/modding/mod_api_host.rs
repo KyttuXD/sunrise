@@ -451,7 +451,6 @@ impl mod_api::LevelHost for FireOddsLevel<'_> {
         fn min_y() -> i32;
         fn height() -> i32;
         fn tags() -> &dyn mod_api::Tags;
-        fn state_fluid_state(state: mod_api::BlockState) -> Option<mod_api::FluidState>;
         fn state_with_property(state: mod_api::BlockState, key: &str, value: &str) -> Option<mod_api::BlockState>;
         fn brightness(layer: mod_api::LightLayer, pos: [i32; 3]) -> i32;
         fn raw_brightness(pos: [i32; 3], sky_darken: i32) -> i32;
@@ -496,11 +495,11 @@ impl mod_api::LevelHost for FireOddsLevel<'_> {
         if !self.is_loaded(pos) {
             return None;
         }
-        super::native_world_read::state_fluid(
-            self.base.behaviours,
-            self.base.registry,
-            self.block(pos),
-        )
+        self.base
+            .tables
+            .block_state_fluid_state(self.block(pos))
+            .ok()
+            .flatten()
     }
     fn collision_shape(&self, pos: [i32; 3]) -> Option<Vec<[f64; 6]>> {
         if !self.is_loaded(pos) {
@@ -676,18 +675,10 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
         if !(self.world.shape.contains_y(y) && self.world.loaded(x, z)) {
             return None;
         }
-        super::native_world_read::state_fluid(
-            self.behaviours,
-            self.registry,
-            self.world.block(x, y, z),
-        )
-    }
-    fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
-        super::native_world_read::state_fluid(
-            self.behaviours,
-            self.registry,
-            state.try_into_engine(&()).ok()?,
-        )
+        self.tables
+            .block_state_fluid_state(self.world.block(x, y, z))
+            .ok()
+            .flatten()
     }
     fn collision_shape(&self, pos: [i32; 3]) -> Option<Vec<[f64; 6]>> {
         let [x, y, z] = pos;
@@ -1079,12 +1070,14 @@ impl<
     }
     fn fluid_state(&self, pos: [i32; 3]) -> Option<mod_api::FluidState> {
         match self.previewed(BlockPos::new(pos[0], pos[1], pos[2])) {
-            Some(state) => self.state_fluid_state(state.try_into_api().ok()?),
+            Some(state) => self
+                .level
+                .tables
+                .block_state_fluid_state(state)
+                .ok()
+                .flatten(),
             None => mod_api::LevelHost::fluid_state(&*self.level, pos),
         }
-    }
-    fn state_fluid_state(&self, state: mod_api::BlockState) -> Option<mod_api::FluidState> {
-        mod_api::LevelHost::state_fluid_state(&*self.level, state)
     }
     fn state_with_property(
         &self,

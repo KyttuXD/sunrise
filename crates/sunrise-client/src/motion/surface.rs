@@ -27,6 +27,10 @@ pub trait SideLevel {
         registry: &BlockRegistry,
         entity: mod_api::BlockEntityRef,
     ) -> Option<mod_api::Compound>;
+    /// The read-only block-state and fluid fact tables of this side, if available.
+    fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
+        None
+    }
 }
 
 /// The level data of a side with no weather, features, tags or block entities. Only for tests and
@@ -53,6 +57,9 @@ pub fn dry_side() -> &'static dyn SideLevel {
             _: &BlockRegistry,
             _: mod_api::BlockEntityRef,
         ) -> Option<mod_api::Compound> {
+            None
+        }
+        fn block_states(&self) -> Option<mod_api::BlockStates<'_>> {
             None
         }
     }

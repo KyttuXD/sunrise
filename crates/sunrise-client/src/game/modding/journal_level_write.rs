@@ -94,7 +94,6 @@ impl LevelHost for JournalLevelWrite<'_, '_> {
         fn min_y(&self) -> i32;
         fn height(&self) -> i32;
         fn fluid_state(&self, pos: [i32; 3]) -> Option<FluidState>;
-        fn state_fluid_state(&self, state: BlockState) -> Option<FluidState>;
         fn state_with_property(&self, state: BlockState, key: &str, value: &str) -> Option<BlockState>;
         fn brightness(&self, layer: LightLayer, pos: [i32; 3]) -> i32;
         fn raw_brightness(&self, pos: [i32; 3], sky_darken: i32) -> i32;

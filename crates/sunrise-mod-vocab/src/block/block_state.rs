@@ -1,5 +1,8 @@
 //! Process-local block values, independent of the game's numeric registry.
-use crate::{BlockKey, BlockMetadata, BlockStateError, StateConstraint, TagKey, Tags};
+use crate::{
+    BlockKey, BlockMetadata, BlockStateError, BlockStates, FluidState, StateConstraint, TagKey,
+    Tags,
+};
 
 /// A copyable block key and local state ordinal. Persist canonical names and properties, not this value.
 #[derive(sunrise_mod_api_macros::Wire, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +25,23 @@ impl BlockState {
     /// or mappings return `None`.
     pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
         self.block().is_in_tag(tags, tag)
+    }
+    /// The outline of this state (`BlockBehaviour.BlockStateBase.getShape` with
+    /// `EmptyBlockGetter.INSTANCE` at `BlockPos.ZERO`): its boxes, each `[min x, y, z, max x, y, z]`
+    /// in the block's own space, with no random offset and none of a world's context. Empty for a
+    /// state with no outline, such as air; `None` for an unknown state or unavailable tables.
+    pub fn outline(self, states: &BlockStates<'_>) -> Option<Vec<[f64; 6]>> {
+        states.backend().block_state_outline(self).ok().flatten()
+    }
+    /// The fluid state this state holds (`BlockBehaviour.BlockStateBase.getFluidState`): water
+    /// for a waterlogged state, the empty fluid for most. `None` for an unknown state or
+    /// unavailable tables.
+    pub fn fluid_state(self, states: &BlockStates<'_>) -> Option<FluidState> {
+        states
+            .backend()
+            .block_state_fluid_state(self)
+            .ok()
+            .flatten()
     }
     /// Borrow the serialized property value from the supplied immutable metadata. For a known
     /// state with no such property, return `Ok(None)`.

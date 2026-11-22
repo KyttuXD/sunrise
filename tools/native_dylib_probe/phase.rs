@@ -18,12 +18,12 @@ static LOG: Capture = Capture(Mutex::new(Vec::new()));
 
 struct NoHost;
 impl Host for NoHost {}
-mod_api::impl_host_areas!(NoHost, except(tags));
+mod_api::impl_host_areas!(NoHost, except(config));
 // The one Host method the probe's mod calls that its phase permits: a Metadata read with a known answer.
-impl mod_api::prelude::TagsHost for NoHost {
-    fn fluid_is_same(&self, fluid: &str, other: &str) -> bool {
-        mod_api::__private::check_access("fluid_is_same", mod_api::__private::LoadAccess::Metadata);
-        fluid == other
+impl mod_api::prelude::ConfigHost for NoHost {
+    fn on(&self, mod_id: &str) -> bool {
+        mod_api::__private::check_access("on", mod_api::__private::LoadAccess::Metadata);
+        mod_id == "phase_probe"
     }
 }
 impl ServerHost for NoHost {}

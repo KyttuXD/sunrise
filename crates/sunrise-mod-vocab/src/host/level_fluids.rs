@@ -1,6 +1,14 @@
 //! The `level_fluids` area: fluid states, shapes, heights and their flow step. Host method declarations; access defaults and game forwarders are generated.
 #![allow(unused_variables)]
 use crate::*;
+/// The host's methods both sides share of the `level_fluids` area, implemented by the game and reached through [`Host`].
+#[sunrise_mod_api_macros::host_area]
+pub trait LevelFluidsHost {
+    /// Side: both.
+    /// The saved name for an engine-issued unresolved fluid.
+    #[access(WorldOnly)]
+    fn unresolved_fluid_id(&self, fluid: UnresolvedFluid) -> Result<String, LevelReadError>;
+}
 /// The handles' reads of the `level_fluids` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
 #[doc(hidden)]

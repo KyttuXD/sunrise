@@ -1,5 +1,5 @@
 //! Opaque identities for fluid names retained from unavailable content.
-use crate::{FluidKey, Host, UnresolvedFluid};
+use crate::{FluidKey, Host, LevelReadError, UnresolvedFluid};
 /// A registered fluid, or an opaque retained name from unavailable content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -30,7 +30,7 @@ impl UnresolvedFluid {
     }
 
     /// The original stored name, read from the host's process-lifetime table.
-    pub fn id(self, host: &dyn Host) -> String {
+    pub fn id(self, host: &dyn Host) -> Result<String, LevelReadError> {
         host.unresolved_fluid_id(self)
     }
 }

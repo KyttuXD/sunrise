@@ -261,6 +261,50 @@ pub trait BlockStatesBackend {
     #[access(Metadata)]
     fn fluid_legacy_block(&self, state: FluidState) -> Option<BlockState>;
     /// Side: both.
+    /// The outline of `state` as `BlockState.getShape` answers it with an empty getter at the
+    /// origin (`EmptyBlockGetter.INSTANCE`, `BlockPos.ZERO`): its boxes, each `[min x, y, z,
+    /// max x, y, z]` in the block's own space, with no random offset and none of a world's
+    /// context (a state that reads its neighbours or block entity answers what its state alone
+    /// gives). Empty for a state with no outline, such as air. None for an id no state has.
+    #[access(Metadata)]
+    fn block_state_outline(
+        &self,
+        state: BlockState,
+    ) -> Result<Option<Vec<[f64; 6]>>, LevelReadError>;
+    /// Side: both.
+    /// The fluid state `state` holds (`BlockState.getFluidState`): water for a waterlogged state,
+    /// the empty fluid for most. None for an id no state has.
+    #[access(Metadata)]
+    fn block_state_fluid_state(
+        &self,
+        state: BlockState,
+    ) -> Result<Option<FluidState>, LevelReadError>;
+    /// Side: both.
+    /// Whether `fluid` and `other` are the same fluid (`Fluid.isSame`): a source and its
+    /// flowing form are, so `minecraft:water` and `minecraft:flowing_water` are the same, water
+    /// and lava not. False when either key has no world fluid.
+    #[access(Metadata)]
+    fn fluid_is_same(&self, fluid: FluidKey, other: FluidKey) -> Result<bool, LevelReadError>;
+    /// Side: both.
+    /// The bucket item that picks `fluid` up (`Fluid.getBucket`), `minecraft:water_bucket` for
+    /// water and flowing water. None for `minecraft:empty`, whose bucket is air, and for a key
+    /// with no bucket.
+    #[access(Metadata)]
+    fn fluid_bucket(&self, fluid: FluidKey) -> Result<Option<ItemKey>, LevelReadError>;
+    /// Side: both.
+    /// The sound event a bucket plays as it picks `fluid` up (`Fluid.getPickupSound`),
+    /// `minecraft:item.bucket.fill_lava` for lava and flowing lava. None for
+    /// `minecraft:empty`, which has none, and for a key with no pickup sound.
+    #[access(Metadata)]
+    fn fluid_pickup_sound(&self, fluid: FluidKey) -> Result<Option<&'static str>, LevelReadError>;
+    /// Side: both.
+    /// The sound event a bucket plays as it empties `fluid` (`BucketItem.playEmptySound`, the
+    /// `BUCKET_EMPTY` sound of NeoForge's `FluidType`), `minecraft:item.bucket.empty_lava` for
+    /// lava and flowing lava and `minecraft:item.bucket.empty` for water and a mod's world
+    /// fluid. None for `minecraft:empty` and for a tank-only fluid, which has no world form.
+    #[access(Metadata)]
+    fn fluid_empty_sound(&self, fluid: FluidKey) -> Result<Option<&'static str>, LevelReadError>;
+    /// Side: both.
     /// Validate partial property constraints in input order with indexed errors.
     /// An unavailable or tank-only definition returns NoWorldState.
     #[access(Metadata)]

@@ -18,7 +18,7 @@ impl Hooks for Mod {
         // Positive control: the Setup phase permits this Metadata read, which answers before any
         // refusal (a panic here is no refusal and fails the probe); the same call refused later can
         // only be the latch.
-        let answered = host.fluid_is_same("minecraft:water", "minecraft:water");
+        let answered = host.on("phase_probe");
         let refusal = |call: &mut dyn FnMut()| {
             catch_unwind(AssertUnwindSafe(call))
                 .err()
@@ -29,7 +29,7 @@ impl Hooks for Mod {
         });
         // The mod's own catch does not undo the refusal: the permitted call now refuses too.
         let latched = refusal(&mut || {
-            host.fluid_is_same("minecraft:water", "minecraft:water");
+            host.on("phase_probe");
         });
         mod_api::content::crash::set_detail(
             "phase probe",

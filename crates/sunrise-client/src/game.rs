@@ -69,6 +69,7 @@ macro_rules! game_side {
                 ))
             }),
             facts: $s.res.facts(),
+            tables: $crate::game::native_block_tables::BlockTables::new(&$s.res, &$s.pack),
             biomes: world_biomes!($s),
             behaviours: $s.res.behaviours(),
             features: $s

@@ -60,8 +60,9 @@ impl FakeRegistries {
         self
     }
     /// Gives fluid `fluid` the sounds a bucket plays as it fills with it (`pickup`) and empties
-    /// it (`empty`), as `fluid_pickup_sound` and `fluid_empty_sound` answer; a fluid not given
-    /// any has none, as a tank-only fluid has none in the game.
+    /// it (`empty`), as [`FluidKey::pickup_sound`](crate::FluidKey::pickup_sound) and
+    /// [`FluidKey::empty_sound`](crate::FluidKey::empty_sound) answer; a fluid not given any has
+    /// none, as a tank-only fluid has none in the game.
     pub fn fluid_sounds(
         &mut self,
         fluid: &str,

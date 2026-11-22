@@ -71,8 +71,8 @@ block's centre:
 
 | Operation | Game event | Fluid sound |
 | --- | --- | --- |
-| Fill the item | `minecraft:fluid_pickup` | `fluid_pickup_sound` |
-| Empty the item | `minecraft:fluid_place` | `fluid_empty_sound` |
+| Fill the item | `minecraft:fluid_pickup` | `FluidKey::pickup_sound` |
+| Empty the item | `minecraft:fluid_place` | `FluidKey::empty_sound` |
 
 A tank-only fluid emits the event without a sound.
 `fluid_util::interact_with_handler` performs the interaction against a handler you

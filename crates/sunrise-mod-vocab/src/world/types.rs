@@ -56,6 +56,32 @@ impl FluidKey {
     pub fn is_in_tag(self, tags: &dyn Tags, tag: TagKey) -> Option<bool> {
         tags.fluid_in_tag(self, tag)
     }
+    /// Whether this fluid and `other` are the same fluid (`Fluid.isSame`): a source and its
+    /// flowing form are, so `minecraft:water` and `minecraft:flowing_water` are the same, water
+    /// and lava not. False when either key has no world fluid or tables are unavailable.
+    pub fn is_same(self, states: &BlockStates<'_>, other: FluidKey) -> bool {
+        states.backend().fluid_is_same(self, other).unwrap_or(false)
+    }
+    /// The bucket item that picks this fluid up (`Fluid.getBucket`), `minecraft:water_bucket`
+    /// for water and flowing water. `None` for `minecraft:empty` (whose bucket is air), for a
+    /// tank-only fluid, or when tables are unavailable.
+    pub fn bucket(self, states: &BlockStates<'_>) -> Option<ItemKey> {
+        states.backend().fluid_bucket(self).ok().flatten()
+    }
+    /// The sound event a bucket plays as it picks this fluid up (`Fluid.getPickupSound`),
+    /// `minecraft:item.bucket.fill_lava` for lava and flowing lava. `None` for
+    /// `minecraft:empty`, for a tank-only fluid, or when tables are unavailable.
+    pub fn pickup_sound(self, states: &BlockStates<'_>) -> Option<&'static str> {
+        states.backend().fluid_pickup_sound(self).ok().flatten()
+    }
+    /// The sound event a bucket plays as it empties this fluid (`BucketItem.playEmptySound`,
+    /// NeoForge's `FluidType.getSound(SoundActions.BUCKET_EMPTY)`),
+    /// `minecraft:item.bucket.empty_lava` for lava and flowing lava and
+    /// `minecraft:item.bucket.empty` for water and a mod's world fluid. `None` for
+    /// `minecraft:empty`, for a tank-only fluid, or when tables are unavailable.
+    pub fn empty_sound(self, states: &BlockStates<'_>) -> Option<&'static str> {
+        states.backend().fluid_empty_sound(self).ok().flatten()
+    }
 }
 
 /// Sampling parameters for `LevelRef::find_closest_biome`, in blocks.
@@ -1581,11 +1607,6 @@ pub trait LevelHost {
     /// None where the position is not loaded or outside the build height; it never loads a chunk.
     fn fluid_state(&self, _pos: [i32; 3]) -> Option<FluidState> {
         unimplemented!("LevelHost::fluid_state")
-    }
-    /// `BlockState.getFluidState`: the fluid a state holds (water for a waterlogged one). None
-    /// for an id no state has.
-    fn state_fluid_state(&self, _state: BlockState) -> Option<FluidState> {
-        unimplemented!("LevelHost::state_fluid_state")
     }
     /// `BlockState.setValue`, through `native_state_with_property`; None if invalid.
     fn state_with_property(
