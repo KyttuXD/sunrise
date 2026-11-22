@@ -2977,14 +2977,41 @@ impl Hub {
             })
             .collect();
         self.encoder.warm(&columns.chunks);
-        let mut encoded = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
+        let encoded_results = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
             ctx.streaming.and_then(|s| s.proto_sections(x, z))
         });
+        let mut encoded: Vec<Option<Vec<u8>>> = encoded_results
+            .into_iter()
+            .enumerate()
+            .map(|(j, result)| match result {
+                Ok(body) => Some(body),
+                Err(error) => {
+                    let chunk = columns.chunks[j];
+                    log::warn!(
+                        "[lan] chunk ({}, {}) could not be encoded for streaming: {error}",
+                        chunk.x,
+                        chunk.z
+                    );
+                    None
+                }
+            })
+            .collect();
         let uses = &mut columns.uses;
         let chunks = &columns.chunks;
         for (i, taken, batch) in batches {
+            let mut sent_taken = Vec::with_capacity(taken.len());
+            let mut sent_batch = Vec::with_capacity(batch.len());
+            let mut failed_taken = Vec::new();
+            for (idx, j) in taken.into_iter().zip(batch) {
+                if encoded[j].is_some() {
+                    sent_taken.push(idx);
+                    sent_batch.push(j);
+                } else {
+                    failed_taken.push(idx);
+                }
+            }
             self.guests.update(i, |g| {
-                let size = batch.len();
+                let size = sent_batch.len();
                 // The single-player window shares the sections it is sent (handoff.rs).
                 let memory = g.address() == super::conn::MEMORY_ADDRESS;
                 let sync_groups = g.negotiated_connection_groups();
@@ -2992,10 +3019,10 @@ impl Hub {
                     g.batch_quota -= size as f32;
                     g.send(&C::ChunkBatchStart(sunrise_protocol::packets::Empty));
                     let grouped = sync_groups
-                        && batch
+                        && sent_batch
                             .iter()
                             .any(|&j| !chunks[j].connection_groups.is_empty());
-                    let bodies = batch.into_iter().flat_map(|j| {
+                    let bodies = sent_batch.into_iter().flat_map(|j| {
                         let chunk = chunks[j];
                         if memory {
                             super::handoff::offer(chunk);
@@ -3007,9 +3034,9 @@ impl Hub {
                         };
                         uses[j] -= 1;
                         let body = if uses[j] == 0 {
-                            std::mem::take(&mut encoded[j])
+                            encoded[j].take().expect("valid chunk body")
                         } else {
-                            encoded[j].clone()
+                            encoded[j].as_ref().expect("valid chunk body").clone()
                         };
                         block_changes::group_bundle(body, groups)
                     });
@@ -3026,23 +3053,31 @@ impl Hub {
                 if watching {
                     // ChunkMap.markChunkPendingToSend, then PlayerChunkSender.sendChunk's end:
                     // Sunrise picks a chunk only as it sends it.
-                    for &idx in &taken {
+                    for &idx in &sent_taken {
                         let key = g.chunk_queue[idx];
                         if g.watched.insert(key) {
                             self.chunk_watches.push(g, ChunkWatchKind::Watch, key);
                         }
                     }
-                    for &idx in &taken {
+                    for &idx in &sent_taken {
                         let key = g.chunk_queue[idx];
                         self.chunk_watches.push(g, ChunkWatchKind::Sent, key);
                     }
                 }
-                let seen: Vec<_> = taken
+                let mut remove: Vec<(usize, bool)> = sent_taken
                     .into_iter()
-                    .rev()
-                    .map(|idx| g.chunk_queue.remove(idx))
+                    .map(|idx| (idx, true))
+                    .chain(failed_taken.into_iter().map(|idx| (idx, false)))
                     .collect();
-                if self.sync_attachments {
+                remove.sort_unstable_by_key(|&(idx, _)| idx);
+                let mut seen = Vec::with_capacity(remove.len());
+                for (idx, sent) in remove.into_iter().rev() {
+                    let key = g.chunk_queue.remove(idx);
+                    if sent {
+                        seen.push(key);
+                    }
+                }
+                if self.sync_attachments && !seen.is_empty() {
                     queue_snapshots(
                         &mut self.attachment_snapshots,
                         g.uuid,
@@ -5525,6 +5560,164 @@ mod tests {
         };
         assert_eq!(machine.revision(), revision);
         assert_eq!(machine.nbt, Compound::from([progress]));
+    }
+
+    #[test]
+    fn unencodable_block_entity_nbt_is_skipped_without_forging_end_tag() {
+        use crate::{
+            containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
+            lan::chunks::ChunkEncoder,
+            mod_content::BlockEntityTypes,
+        };
+        use sunrise_core::nbt::{Compound, JavaString, Tag};
+
+        let mut deep = Tag::Byte(1);
+        for _ in 0..515 {
+            deep = Tag::Compound(Compound::from([("child".into(), deep)]));
+        }
+        let deep_compound = Compound::from([("nested".into(), deep)]);
+        let ok_compound = Compound::from([(JavaString::from("ok"), Tag::Int(5))]);
+
+        let (mut hub, rx) = hub_with_a_guest();
+        let builtin = sunrise_protocol::registry::Builtin::parse(
+            r#"{"minecraft:block_entity_type":{"entries":{"test:machine":{"protocol_id":49}}}}"#,
+        )
+        .unwrap();
+        let types = BlockEntityTypes::new(
+            [("test:machine".into(), "test:machine".into())].into(),
+            builtin
+                .get("minecraft:block_entity_type")
+                .unwrap()
+                .names
+                .clone(),
+        );
+        let states = ["minecraft:air", "test:machine"].map(|n| (Arc::<str>::from(n), false, None));
+        hub.encoder =
+            ChunkEncoder::with_types(states, &builtin, &[], &[], Some(&types), Default::default());
+        hub.encoder.mod_update_tag = Some(|_, entity| Some(entity.nbt.clone()));
+
+        let mut world = World::new(sunrise_world::registry::BlockStateId(0), 0);
+        let bad_pos = (1, 64, 3);
+        let ok_pos = (17, 64, 3);
+        let mut bad_chunk = Chunk::empty(0, 0);
+        bad_chunk.lit = true;
+        bad_chunk.set(1, 64, 3, 1);
+        let mut ok_chunk = Chunk::empty(1, 0);
+        ok_chunk.lit = true;
+        ok_chunk.set(1, 64, 3, 1);
+        world.chunks.insert((0, 0), Arc::new(bad_chunk));
+        world.chunks.insert((1, 0), Arc::new(ok_chunk));
+        world.block_entities.insert(
+            bad_pos,
+            BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                "test:machine".into(),
+                ModBlockEntityFields {
+                    nbt: deep_compound,
+                    ..Default::default()
+                },
+            ))),
+        );
+        world.block_entities.insert(
+            ok_pos,
+            BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                "test:machine".into(),
+                ModBlockEntityFields {
+                    nbt: ok_compound.clone(),
+                    ..Default::default()
+                },
+            ))),
+        );
+
+        // 1. Chunk streaming: bad chunk is skipped, valid sibling streams with matching batch size.
+        hub.guests.update(0, |g| {
+            g.center = Some((0, 0));
+            g.chunk_queue = vec![(0, 0), (1, 0)];
+            g.batch_quota = 4.0;
+        });
+        send_chunks(&mut hub, &mut world);
+        let mut sent_chunks = Vec::new();
+        let mut batch_sizes = Vec::new();
+        while let Ok(out) = rx.try_recv() {
+            let crate::lan::Out::Packet(body) = out else {
+                continue;
+            };
+            let mut r = sunrise_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            match C::decode(id, r.rest()).unwrap() {
+                C::LevelChunkWithLight(p) => sent_chunks.push((p.x, p.z)),
+                C::ChunkBatchFinished(p) => batch_sizes.push(p.size),
+                _ => {}
+            }
+        }
+        assert_eq!(sent_chunks, [(1, 0)]);
+        assert_eq!(batch_sizes, [1]);
+        assert!(hub.guests[0].chunk_queue.is_empty());
+        assert!(!hub.guests[0].sent_chunks.contains(&(0, 0)));
+        assert!(hub.guests[0].sent_chunks.contains(&(1, 0)));
+
+        // 2. Block-change broadcast: bad update is dropped; valid update still reaches viewers.
+        hub.guests.update(0, |g| {
+            g.sent_chunks.insert((0, 0));
+        });
+        world.block_log = Some(vec![bad_pos, ok_pos]);
+        hub.broadcast_block_changes(&mut world);
+        let mut updates = Vec::new();
+        while let Ok(out) = rx.try_recv() {
+            let crate::lan::Out::Packet(body) = out else {
+                continue;
+            };
+            let mut r = sunrise_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            if let C::BlockEntityData(p) = C::decode(id, r.rest()).unwrap() {
+                updates.push((p.pos, p.tag));
+            }
+        }
+        assert_eq!(updates, [([17, 64, 3], Tag::Compound(ok_compound))]);
+
+        // 3. Single-connection support-block resend: BlockUpdate sends, bad BlockEntityData does not.
+        hub.ticks = 300;
+        hub.guests.update(0, |g| {
+            g.joined_tick = 0;
+            g.support_blocks_sent = 0;
+            g.position = [1.5, 65.0, 3.5];
+        });
+        let mut next_entity = 100;
+        let border = crate::worldborder::WorldBorder::default();
+        let ctx = TickCtx {
+            sea_level: 63,
+            world: &mut world,
+            entities: &[],
+            next_entity: &mut next_entity,
+            spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
+            difficulty: 2,
+            difficulty_locked: false,
+            clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
+            tick_steps: Default::default(),
+            collision: None,
+            border: &border,
+            streaming: None,
+        };
+        hub.force_send_player_support_blocks(0, &ctx);
+        let mut saw_block_update = false;
+        let mut saw_entity_data = false;
+        while let Ok(out) = rx.try_recv() {
+            let crate::lan::Out::Packet(body) = out else {
+                continue;
+            };
+            let mut r = sunrise_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            match C::decode(id, r.rest()).unwrap() {
+                C::BlockUpdate(p) if p.pos == [1, 64, 3] => saw_block_update = true,
+                C::BlockEntityData(_) => saw_entity_data = true,
+                _ => {}
+            }
+        }
+        assert!(saw_block_update);
+        assert!(!saw_entity_data);
     }
 
     #[test]

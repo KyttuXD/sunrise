@@ -13,6 +13,13 @@ pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
 /// The most tags one network NBT value can hold within [`NBT_QUOTA`], using
 /// vanilla's minimum eight-byte per-tag heap charge.
 pub const NBT_MAX_TAGS: usize = nbt::Limits::network().max_nodes;
+/// Vanilla's `NbtAccounter.unlimitedHeap()`: unlimited bytes and tag count,
+/// still bounded by the 512-level NBT depth limit.
+pub const TRUSTED_NBT_LIMITS: nbt::Limits = nbt::Limits {
+    max_bytes: usize::MAX,
+    max_nodes: usize::MAX,
+    max_depth: nbt::Limits::network().max_depth,
+};
 
 /// Whether a peer can read `tag` as network NBT: written within [`NBT_QUOTA`], then read back by
 /// [`Reader::nbt`] under the receiver's own limits (`NbtAccounter.defaultQuota` and its tag count).
@@ -454,6 +461,69 @@ impl Codec<Tag> for Nbt {
         w.nbt(v)
     }
 }
+/// ByteBufCodecs.OPTIONAL_COMPOUND_TAG (`Tag::End` when absent; 2 MiB / 262,144 tags / depth 512).
+pub struct OptionalCompoundTag;
+impl Codec<Tag> for OptionalCompoundTag {
+    fn read(r: &mut Reader) -> Result<Tag> {
+        let tag = r.nbt()?;
+        match tag {
+            Tag::End | Tag::Compound(_) => Ok(tag),
+            _ => Err(Error::new("NBT: expected compound tag or end")),
+        }
+    }
+    fn validate(v: &Tag) -> Result<()> {
+        match v {
+            Tag::End => Ok(()),
+            Tag::Compound(_) => check_network_nbt(v),
+            _ => Err(Error::new("NBT: expected compound tag or end")),
+        }
+    }
+    fn write(v: &Tag, w: &mut Writer) {
+        if matches!(v, Tag::End) {
+            w.u8(0);
+            return;
+        }
+        assert!(
+            matches!(v, Tag::Compound(_)),
+            "OptionalCompoundTag::write requires Tag::Compound or Tag::End"
+        );
+        let limits = nbt::Limits {
+            max_bytes: NBT_QUOTA,
+            ..nbt::Limits::default()
+        };
+        w.try_nbt(v, limits)
+            .expect("OptionalCompoundTag must be validated before write");
+    }
+}
+/// ByteBufCodecs.TRUSTED_COMPOUND_TAG (`NbtAccounter.unlimitedHeap()`, non-null compound).
+pub struct TrustedCompoundTag;
+impl Codec<Tag> for TrustedCompoundTag {
+    fn read(r: &mut Reader) -> Result<Tag> {
+        let tag = r.nbt_within(TRUSTED_NBT_LIMITS)?;
+        match tag {
+            Tag::Compound(_) => Ok(tag),
+            Tag::End => Err(Error::new("NBT: expected non-null compound tag")),
+            _ => Err(Error::new("NBT: expected compound tag")),
+        }
+    }
+    fn validate(v: &Tag) -> Result<()> {
+        match v {
+            Tag::Compound(_) => nbt::write_network(v, TRUSTED_NBT_LIMITS)
+                .map(|_| ())
+                .map_err(|e| Error::new(format!("NBT: {e}"))),
+            Tag::End => Err(Error::new("NBT: expected non-null compound tag")),
+            _ => Err(Error::new("NBT: expected compound tag")),
+        }
+    }
+    fn write(v: &Tag, w: &mut Writer) {
+        assert!(
+            matches!(v, Tag::Compound(_)),
+            "TrustedCompoundTag::write requires Tag::Compound"
+        );
+        w.try_nbt(v, TRUSTED_NBT_LIMITS)
+            .expect("TrustedCompoundTag must be validated before write");
+    }
+}
 /// ByteBufCodecs.LONG_ARRAY.
 pub struct Longs;
 impl Codec<Vec<i64>> for Longs {
@@ -471,6 +541,21 @@ impl<T, C: Codec<T>> Codec<Vec<T>> for List<C> {
         let n = r.count(r.remaining())?;
         (0..n).map(|_| C::read(r)).collect()
     }
+    fn validate(v: &Vec<T>) -> Result<()> {
+        for e in v {
+            C::validate(e)?;
+        }
+        Ok(())
+    }
+    fn validate_with_payload_codecs(
+        v: &Vec<T>,
+        codecs: &crate::packets::custom_payload::PayloadCodecs,
+    ) -> Result<()> {
+        for e in v {
+            C::validate_with_payload_codecs(e, codecs)?;
+        }
+        Ok(())
+    }
     fn write(v: &Vec<T>, w: &mut Writer) {
         w.varint(v.len() as i32);
         for e in v {
@@ -487,6 +572,21 @@ impl<T, C: Codec<T>> Codec<Option<T>> for Opt<C> {
         } else {
             Ok(None)
         }
+    }
+    fn validate(v: &Option<T>) -> Result<()> {
+        if let Some(v) = v {
+            C::validate(v)?;
+        }
+        Ok(())
+    }
+    fn validate_with_payload_codecs(
+        v: &Option<T>,
+        codecs: &crate::packets::custom_payload::PayloadCodecs,
+    ) -> Result<()> {
+        if let Some(v) = v {
+            C::validate_with_payload_codecs(v, codecs)?;
+        }
+        Ok(())
     }
     fn write(v: &Option<T>, w: &mut Writer) {
         w.bool(v.is_some());
@@ -689,6 +789,19 @@ macro_rules! packet {
             #[allow(unused_variables)]
             fn read(r: &mut $crate::buf::Reader) -> $crate::Result<$name> {
                 Ok($name { $($field: <$codec as $crate::buf::Codec<$ty>>::read(r)?),* })
+            }
+            #[allow(unused_variables)]
+            fn validate(v: &$name) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate(&v.$field)?;)*
+                Ok(())
+            }
+            #[allow(unused_variables)]
+            fn validate_with_payload_codecs(
+                v: &$name,
+                codecs: &$crate::packets::custom_payload::PayloadCodecs,
+            ) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate_with_payload_codecs(&v.$field, codecs)?;)*
+                Ok(())
             }
             #[allow(unused_variables)]
             fn write(v: &$name, w: &mut ::sunrise_core::vanilla_bytes::Writer) {
@@ -906,5 +1019,85 @@ mod tests {
         assert_eq!(pack_degrees(-90.0), -64);
         assert_eq!(pack_degrees(180.0), -128);
         assert_eq!(unpack_degrees(64), 90.0);
+    }
+
+    #[test]
+    fn compound_tag_codecs_enforce_optional_and_trusted_policies() {
+        use crate::{
+            chunk::{BlockEntityInfo, ChunkData, LightData},
+            packets::play::{self, Clientbound},
+        };
+        let mut deep = Tag::Byte(1);
+        for _ in 0..515 {
+            deep = Tag::Compound(nbt::Compound::from([("child".into(), deep)]));
+        }
+        let named_end = Tag::Compound(nbt::Compound::from([("bad".into(), Tag::End)]));
+        let large = Tag::Compound(nbt::Compound::from([(
+            "blob".into(),
+            Tag::ByteArray(vec![0; NBT_QUOTA + 64]),
+        )]));
+        let valid = Tag::Compound(nbt::Compound::from([("k".into(), Tag::Int(7))]));
+
+        // OptionalCompoundTag: End allowed, compounds bound by 2 MiB / 512 depth / no named End.
+        assert!(OptionalCompoundTag::validate(&Tag::End).is_ok());
+        assert!(OptionalCompoundTag::validate(&valid).is_ok());
+        assert!(OptionalCompoundTag::validate(&deep).is_err());
+        assert!(OptionalCompoundTag::validate(&named_end).is_err());
+        assert!(OptionalCompoundTag::validate(&large).is_err());
+        assert!(OptionalCompoundTag::validate(&Tag::Int(1)).is_err());
+        round::<Tag, OptionalCompoundTag>(Tag::End);
+        round::<Tag, OptionalCompoundTag>(valid.clone());
+
+        let chunk_packet = |tag: Tag| {
+            Clientbound::LevelChunkWithLight(play::LevelChunkWithLight {
+                x: 0,
+                z: 0,
+                chunk: ChunkData {
+                    heightmaps: Vec::new(),
+                    buffer: Vec::new(),
+                    block_entities: vec![BlockEntityInfo {
+                        packed_xz: 0,
+                        y: 64,
+                        kind: 0,
+                        tag,
+                    }],
+                },
+                light: LightData {
+                    sky_mask: Vec::new(),
+                    block_mask: Vec::new(),
+                    empty_sky_mask: Vec::new(),
+                    empty_block_mask: Vec::new(),
+                    sky: Vec::new(),
+                    block: Vec::new(),
+                },
+            })
+        };
+        assert!(chunk_packet(Tag::End).try_encode().is_ok());
+        assert!(chunk_packet(valid.clone()).try_encode().is_ok());
+        assert!(chunk_packet(deep.clone()).try_encode().is_err());
+        assert!(chunk_packet(named_end.clone()).try_encode().is_err());
+        assert!(chunk_packet(large.clone()).try_encode().is_err());
+
+        // TrustedCompoundTag: non-null compound, unlimited heap, still bounded by depth 512.
+        assert!(TrustedCompoundTag::validate(&Tag::End).is_err());
+        assert!(TrustedCompoundTag::validate(&deep).is_err());
+        assert!(TrustedCompoundTag::validate(&named_end).is_err());
+        assert!(TrustedCompoundTag::validate(&valid).is_ok());
+        assert!(TrustedCompoundTag::validate(&large).is_ok());
+        round::<Tag, TrustedCompoundTag>(valid.clone());
+        round::<Tag, TrustedCompoundTag>(large.clone());
+
+        let entity_packet = |tag: Tag| {
+            Clientbound::BlockEntityData(play::BlockEntityData {
+                pos: [0, 64, 0],
+                kind: 0,
+                tag,
+            })
+        };
+        assert!(entity_packet(Tag::End).try_encode().is_err());
+        assert!(entity_packet(deep).try_encode().is_err());
+        assert!(entity_packet(named_end).try_encode().is_err());
+        assert!(entity_packet(valid).try_encode().is_ok());
+        assert!(entity_packet(large).try_encode().is_ok());
     }
 }

@@ -268,7 +268,17 @@ impl Hub {
                 if holders.is_empty() {
                     continue;
                 }
-                let body = self.encoder.body_in(chunk, world);
+                let body = match self.encoder.body_in(chunk, world) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        log::warn!(
+                            "[lan] bulk chunk ({}, {}) could not be encoded: {error}",
+                            chunk.x,
+                            chunk.z
+                        );
+                        continue;
+                    }
+                };
                 let groups =
                     if !chunk.connection_groups.is_empty() && self.has_group_holders(&holders) {
                         encode_chunk_connection_groups(chunk)
@@ -369,13 +379,18 @@ impl Hub {
                     let Some(kind) = self.encoder.entity_type(state) else {
                         continue;
                     };
-                    let body = C::BlockEntityData(play::BlockEntityData {
+                    match C::BlockEntityData(play::BlockEntityData {
                         pos: [x, y, z],
                         kind,
                         tag,
                     })
-                    .encode();
-                    self.send_to_holders(&holders, &body);
+                    .try_encode()
+                    {
+                        Ok(body) => self.send_to_holders(&holders, &body),
+                        Err(error) => log::warn!(
+                            "[lan] block entity update at ({x}, {y}, {z}) could not be encoded: {error}"
+                        ),
+                    }
                 }
             }
         }

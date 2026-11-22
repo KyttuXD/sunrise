@@ -245,12 +245,16 @@ impl Modifier {
 }
 impl Modifier {
     /// RuleBlockEntityModifier.apply: the block entity the output gets.
-    fn apply(&self, nbt: Option<&Compound>, random: &mut impl ProcessorRandom) -> Option<Compound> {
+    fn apply(
+        &self,
+        nbt: Option<Box<Compound>>,
+        random: &mut impl ProcessorRandom,
+    ) -> Option<Box<Compound>> {
         match self {
-            Self::Passthrough => nbt.cloned(),
-            Self::Clear => Some(Compound::new()),
+            Self::Passthrough => nbt,
+            Self::Clear => Some(Box::new(Compound::new())),
             Self::AppendLoot(table) => {
-                let mut nbt = nbt.cloned().unwrap_or_default();
+                let mut nbt = nbt.unwrap_or_default();
                 nbt.insert("LootTable".into(), Tag::String(table.as_str().into()));
                 nbt.insert("LootTableSeed".into(), Tag::Long(random.long()));
                 Some(nbt)
@@ -262,8 +266,8 @@ impl Modifier {
 }
 /// A block entity with `remove`'s keys taken out and `data` merged in
 /// (append_static is the one with nothing to remove).
-fn edited(nbt: Option<&Compound>, remove: &[String], data: &Compound) -> Compound {
-    let mut nbt = nbt.cloned().unwrap_or_default();
+fn edited(nbt: Option<Box<Compound>>, remove: &[String], data: &Compound) -> Box<Compound> {
+    let mut nbt = nbt.unwrap_or_default();
     for key in remove {
         nbt.remove(&JavaString::from(key.as_str()));
     }
@@ -1154,10 +1158,7 @@ fn process_block<W: PlacementContext>(
                 return Ok(Some(BlockInfo {
                     pos: info.pos,
                     state: rule.output,
-                    nbt: rule
-                        .modifier
-                        .apply(info.nbt.as_deref(), &mut random)
-                        .map(Box::new),
+                    nbt: rule.modifier.apply(info.nbt, &mut random),
                 }));
             }
             Some(info)
@@ -1223,10 +1224,7 @@ fn process_block<W: PlacementContext>(
                     .unwrap_or(state),
                 false => state,
             };
-            let nbt = set
-                .modifier
-                .apply(info.nbt.as_deref(), &mut random)
-                .map(Box::new);
+            let nbt = set.modifier.apply(info.nbt, &mut random);
             Some(BlockInfo { state, nbt, ..info })
         }
         Processor::Condition(c) => {
@@ -1402,7 +1400,8 @@ fn process_infos<W: PlacementContext>(
         .processors
         .iter()
         .any(|p| p.evaluates_entire_piece());
-    let mut original = Vec::new();
+    // Capped finalization needs the source positions, not a second copy of the NBT.
+    let mut original_positions = Vec::new();
     let mut processed = Vec::new();
     for info in template.palettes()[palette].blocks() {
         let relative = StructureTemplate::transform(
@@ -1429,7 +1428,9 @@ fn process_infos<W: PlacementContext>(
         }
         if let Some(value) = current {
             processed.push(value);
-            original.push(info.clone());
+            if whole {
+                original_positions.push(info.pos);
+            }
         }
     }
     let processors = settings.processors.clone();
@@ -1437,7 +1438,7 @@ fn process_infos<W: PlacementContext>(
         let Processor::Capped { delegate, limit } = processor else {
             continue;
         };
-        if limit.bounds()[1] == 0 || processed.is_empty() || original.len() != processed.len() {
+        if limit.bounds()[1] == 0 || processed.is_empty() {
             continue;
         }
         let seed = world.world_seed()?;
@@ -1463,19 +1464,19 @@ fn process_infos<W: PlacementContext>(
             if replaced >= max {
                 break;
             }
-            let before = processed[index].clone();
+            let before = &processed[index];
             let altered = process_block(
                 delegate,
                 world,
                 resources,
                 position,
                 reference,
-                original[index].pos,
+                original_positions[index],
                 before.clone(),
                 settings,
             )?;
             if let Some(altered) = altered
-                && altered != before
+                && &altered != before
             {
                 replaced += 1;
                 processed[index] = altered;

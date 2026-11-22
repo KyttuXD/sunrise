@@ -934,7 +934,13 @@ impl BlockEntitiesRegistrar for PartRegistrar {
                 .any(|(_, decl)| decl.id == *id)
                 && self.owned_declaration_id(id).is_ok()
         }) {
-            self.block_entity_transforms.insert(id, step);
+            self.block_entity_transforms.insert(
+                id,
+                mod_vocab::__private::RegisteredBlockEntityTransform {
+                    owner: mod_vocab::__private::game::CallbackOwner::for_mod(self.mod_id),
+                    step,
+                },
+            );
         } else {
             self.refused
                 .push("transform requires an owned block entity declaration".into());

@@ -44,20 +44,20 @@ pub type BlockProvider<T> = dyn BlockCapabilityProvider<T>;
 
 pub use super::capabilities::providers_of::{BlockProviderOf, EntityProviderOf, ItemProviderOf};
 
+/// One retained structure callback, with its owner and session-wide panic state.
+// no wire: native callback and process-local enablement.
+#[derive(Clone)]
+pub struct RegisteredBlockEntityTransform {
+    pub owner: crate::callback_owner::CallbackOwner,
+    pub step: Arc<dyn crate::BlockEntityTransform>,
+}
+
 /// Snapshot the callbacks once at registry preparation for worldgen workers.
-pub fn block_entity_transforms()
--> std::collections::HashMap<String, Arc<dyn crate::BlockEntityTransform>> {
+pub fn block_entity_transforms() -> std::collections::HashMap<String, RegisteredBlockEntityTransform>
+{
     installed().map_or_else(Default::default, |table| {
         table.block_entity_transforms.clone()
     })
-}
-
-/// The registered saved-data transform, looked up only during structure placement.
-pub fn block_entity_transform(id: &str) -> Option<&'static dyn crate::BlockEntityTransform> {
-    installed()?
-        .block_entity_transforms
-        .get(id)
-        .map(AsRef::as_ref)
 }
 
 /// Owned declarations of the block entity types mods registered.

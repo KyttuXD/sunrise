@@ -71,7 +71,8 @@ pub struct PartRegistrar {
     pub(crate) entity_selector_bytes: usize,
     pub(crate) tags: TagParts,
     pub(crate) block_entity_types: Vec<(&'static str, BlockEntityTypeDecl)>,
-    pub(crate) block_entity_transforms: HashMap<String, Arc<dyn crate::BlockEntityTransform>>,
+    pub(crate) block_entity_transforms:
+        HashMap<String, mod_vocab::__private::RegisteredBlockEntityTransform>,
     pub(crate) entity_attributes: Vec<EntityAttributeDeclaration>,
     pub(crate) world_fluids: Vec<(&'static str, (String, crate::WorldFluid))>,
     pub(crate) fluid_interactions: Vec<crate::FluidInteraction>,

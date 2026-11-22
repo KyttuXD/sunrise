@@ -205,7 +205,7 @@ use mod_api::{Compound, StructureMirror, StructureRotation, StructureTransform, 
 
 let press = r.block_entity_type("press")
     .blocks(&["mymod:press"])
-    .transform(|data: &Compound, transform: StructureTransform| {
+    .transform(|data: &mut Compound, transform: StructureTransform| {
         let facing = match data.get(&"facing".into()) {
             Some(Tag::String(value)) => value.to_string()
                 .map_err(|_| TransformRefusal::new("invalid facing text"))?,
@@ -228,25 +228,26 @@ let press = r.block_entity_type("press")
             StructureRotation::Counterclockwise90 => 3,
             _ => return Err(TransformRefusal::new("unknown rotation")),
         };
-        let mut result = data.clone();
-        result.insert("facing".into(), Tag::String(directions[(index + turns) % 4].into()));
-        Ok(result)
+        data.insert("facing".into(), Tag::String(directions[(index + turns) % 4].into()));
+        Ok(())
     })
     .build();
 ```
 
-The step runs on the authoritative server during structure-template placement and worldgen,
-possibly on worldgen worker threads. The block state has already been mirrored and rotated; the
-step returns the saved data to store. Mirror applies before rotation. Its only inputs are the data,
-rotation and mirror: it gets no `Host` or world access. Determinism is the mod's obligation, not
-something the engine enforces; any matching `Send + Sync + 'static` closure is accepted. Avoid
-randomness, clocks and mutable external state when calculating the result.
+The step runs on the authoritative server during structure-template placement, possibly on a
+worldgen worker thread. It borrows this placement's working compound after the block state is
+placed and any loot seed is set, before the block entity loads the data. Each placement starts
+from the reusable, unedited template. Mirror applies before rotation. The only inputs are the
+data, rotation and mirror: there is no `Host` or world access. Mods must ensure determinism,
+including when using a `Send + Sync + 'static` closure; avoid randomness, clocks and mutable
+external state when calculating the result.
 
-The engine restores the original `id` and any original `x`, `y`, `z` fields over the result, so a
-payload transform cannot change the saved entity's identity or original coordinates. With no step,
-data is unchanged. A `TransformRefusal` logs the type and position and keeps the original data;
-placement succeeds. Invalid output exceeding standard NBT limits (64 MiB, one million nodes,
-depth 512), or unwinding panics also keep the original data.
+Edit only the payload fields you need to change. The engine preserves the original `id` and any
+original `x`, `y`, `z` fields. `TransformRefusal` logs the mod, block entity type and position each
+time, without disabling the callback. Validate before editing if refusal should leave the data
+unchanged: edits already made are not undone. A panic is logged and sent to the error toast and
+disables that callback for the session; its partial edits likewise are not undone. Limits are
+checked when data is actually serialized, not by the placement callback.
 
 Callbacks are registered at startup and frozen with the block registry snapshot. A data-pack
 `/reload` keeps that registry and its existing callbacks; it does not register replacement code.

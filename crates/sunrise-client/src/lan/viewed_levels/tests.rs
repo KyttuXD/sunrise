@@ -615,7 +615,7 @@ fn a_column_too_large_to_wrap_is_not_counted_as_sent() {
     use super::send::batch_runs;
     let (hub, _rx) = hub_with(&[1], 2);
     let world = lit_columns(1);
-    let body = |key| hub.encoder.body_in(&world.chunks[&key], &world);
+    let body = |key| hub.encoder.body_in(&world.chunks[&key], &world).unwrap();
     // A LevelChunkWithLight id and 2 MiB after it: past a frame's limit once wrapped.
     let mut oversized = Writer::new();
     oversized.varint(ids::LEVEL_CHUNK_WITH_LIGHT);

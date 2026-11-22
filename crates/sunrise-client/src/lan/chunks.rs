@@ -936,7 +936,11 @@ impl ChunkEncoder {
     /// exist. It is written once into a buffer of its final size: the cached
     /// sections and light layers go straight to it, with no packet built and
     /// copied again first.
-    pub fn body_in(&self, chunk: &Chunk, world: &crate::world::World) -> Vec<u8> {
+    pub fn body_in(
+        &self,
+        chunk: &Chunk,
+        world: &crate::world::World,
+    ) -> sunrise_protocol::Result<Vec<u8>> {
         self.body_with(chunk, world, &|_, _| None)
     }
     /// [`Self::body_in`], with `protos` giving the non-air sections of a
@@ -946,7 +950,7 @@ impl ChunkEncoder {
         chunk: &Chunk,
         world: &crate::world::World,
         protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
-    ) -> Vec<u8> {
+    ) -> sunrise_protocol::Result<Vec<u8>> {
         self.body(
             chunk,
             &world.block_entities,
@@ -1065,8 +1069,8 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity, impl std::hash::BuildHasher>,
         around: SectionMask,
-    ) -> Vec<u8> {
-        self.prepare(chunk, block_entities, around).write()
+    ) -> sunrise_protocol::Result<Vec<u8>> {
+        Ok(self.prepare(chunk, block_entities, around)?.write())
     }
 
     /// What of a column's body reads the level or the caches.
@@ -1075,13 +1079,14 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity, impl std::hash::BuildHasher>,
         around: SectionMask,
-    ) -> Prepared {
+    ) -> sunrise_protocol::Result<Prepared> {
         let (wires, entities) = self.blocks(chunk, block_entities);
         let heightmaps = self.heightmaps_of(chunk);
+        List::<BlockEntityInfo>::validate(&entities)?;
         // Before the light: their tags' size is only known once written.
         let mut tags = Writer::new();
         List::<BlockEntityInfo>::write(&entities, &mut tags);
-        Prepared {
+        Ok(Prepared {
             x: chunk.x,
             z: chunk.z,
             heightmaps,
@@ -1093,7 +1098,7 @@ impl ChunkEncoder {
             first_section: self.sections.start,
             around,
             sky: self.sky,
-        }
+        })
     }
 
     /// [`Self::body_with`] for each of `chunks`, in their order. What reads
@@ -1106,34 +1111,53 @@ impl ChunkEncoder {
         chunks: &[&Chunk],
         world: &crate::world::World,
         protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
-    ) -> Vec<Vec<u8>> {
-        let columns: Vec<Prepared> = chunks
+    ) -> Vec<sunrise_protocol::Result<Vec<u8>>> {
+        let prepared: Vec<sunrise_protocol::Result<Prepared>> = chunks
             .iter()
             .map(|c| self.prepare(c, &world.block_entities, self.around(c, world, protos)))
             .collect();
+        let mut valid_indices = Vec::new();
+        let mut columns = Vec::new();
+        let mut results: Vec<Option<sunrise_protocol::Result<Vec<u8>>>> =
+            (0..prepared.len()).map(|_| None).collect();
+        for (idx, item) in prepared.into_iter().enumerate() {
+            match item {
+                Ok(column) => {
+                    valid_indices.push(idx);
+                    columns.push(column);
+                }
+                Err(error) => results[idx] = Some(Err(error)),
+            }
+        }
         let pool = if columns.len() >= BODIES_MIN {
             warm_pool()
         } else {
             None
         };
-        let Some(pool) = pool else {
-            return columns.iter().map(Prepared::write).collect();
-        };
-        let job = Arc::new(Bodies {
-            done: columns.iter().map(|_| OnceLock::new()).collect(),
-            columns,
-            next: AtomicUsize::new(0),
-        });
-        pool.post(Job::Bodies(job.clone()));
-        job.run();
-        pool.clear(Arc::as_ptr(&job).cast());
-        job.columns
-            .iter()
-            .zip(&job.done)
-            .map(|(c, done)| {
+        if let Some(pool) = pool {
+            let job = Arc::new(Bodies {
+                done: columns.iter().map(|_| OnceLock::new()).collect(),
+                columns,
+                next: AtomicUsize::new(0),
+            });
+            pool.post(Job::Bodies(job.clone()));
+            job.run();
+            pool.clear(Arc::as_ptr(&job).cast());
+            for (slot, (c, done)) in valid_indices
+                .into_iter()
+                .zip(job.columns.iter().zip(&job.done))
+            {
                 let body = done.get_or_init(|| std::sync::Mutex::new(c.write()));
-                std::mem::take(&mut *body.lock().unwrap())
-            })
+                results[slot] = Some(Ok(std::mem::take(&mut *body.lock().unwrap())));
+            }
+        } else {
+            for (slot, column) in valid_indices.into_iter().zip(&columns) {
+                results[slot] = Some(Ok(column.write()));
+            }
+        }
+        results
+            .into_iter()
+            .map(|item| item.expect("every column has a result"))
             .collect()
     }
 
@@ -2382,14 +2406,14 @@ mod tests {
         tall.set(0, MIN_Y + 16 * 10, 0, 1);
         world.chunks.insert((1, 0), Arc::new(tall));
         let centre = world.chunks[&(0, 0)].clone();
-        let loaded = encoder.body_in(&centre, &world);
+        let loaded = encoder.body_in(&centre, &world).unwrap();
         world.chunks.remove(&(1, 0));
-        assert_ne!(encoder.body_in(&centre, &world), loaded);
+        assert_ne!(encoder.body_in(&centre, &world).unwrap(), loaded);
         let mut sections = SectionMask::EMPTY;
         sections.insert(0);
         sections.insert(10);
         let proto = |x, z| ((x, z) == (1, 0)).then_some(sections);
-        assert_eq!(encoder.body_with(&centre, &world, &proto), loaded);
+        assert_eq!(encoder.body_with(&centre, &world, &proto).unwrap(), loaded);
     }
 
     #[test]
@@ -2448,7 +2472,9 @@ mod tests {
         world.install_light_column(chunk);
         let chunk = &world.chunks[&(0, 0)];
         let mut encoder = encoder();
-        let bytes = encoder.body_with(chunk, &world, &|_, _| Some(SectionMask::ALL));
+        let bytes = encoder
+            .body_with(chunk, &world, &|_, _| Some(SectionMask::ALL))
+            .unwrap();
         let read_light = |bytes: &[u8]| {
             let mut reader = Reader::new(bytes);
             let id = reader.varint().unwrap();
@@ -2460,7 +2486,7 @@ mod tests {
             packet.light
         };
         let initial = read_light(&bytes);
-        assert_eq!(encoder.body_in(chunk, &world), bytes);
+        assert_eq!(encoder.body_in(chunk, &world).unwrap(), bytes);
         let mask = |mask: &[u8]| {
             (0..SECTIONS + 2)
                 .filter(|&b| bit(mask, b))
@@ -2492,11 +2518,11 @@ mod tests {
 
         encoder.set_dimension(LevelShape::OVERWORLD);
         let neighbour = world.unload_chunk((1, 0)).unwrap();
-        let unsupported = read_light(&encoder.body_in(&world.chunks[&(0, 0)], &world));
+        let unsupported = read_light(&encoder.body_in(&world.chunks[&(0, 0)], &world).unwrap());
         assert!(unsupported.sky_mask.is_empty() && unsupported.empty_sky_mask.is_empty());
         assert!(unsupported.block_mask.is_empty() && unsupported.empty_block_mask.is_empty());
         world.install_light_column((*neighbour).clone());
-        let restored = read_light(&encoder.body_in(&world.chunks[&(0, 0)], &world));
+        let restored = read_light(&encoder.body_in(&world.chunks[&(0, 0)], &world).unwrap());
         assert_eq!(mask(&restored.sky_mask), [0, 1, 2]);
         assert_eq!(
             restored.sky,
@@ -2527,16 +2553,19 @@ mod tests {
         crate::light::light_from_saved_layers(&mut chunk, &layers, true);
         world.install_light_column(chunk);
         let encoder = encoder();
-        let first = encoder.body_in(&world.chunks[&(0, 0)], &world);
+        let first = encoder.body_in(&world.chunks[&(0, 0)], &world).unwrap();
         assert_eq!(world.light(0, MIN_Y, 0), 2);
         world.unload_chunk((1, 0)).unwrap();
-        assert_eq!(encoder.body_in(&world.chunks[&(0, 0)], &world), first);
+        assert_eq!(
+            encoder.body_in(&world.chunks[&(0, 0)], &world).unwrap(),
+            first
+        );
 
         world.unload_chunk((0, 1)).unwrap();
         assert_eq!(world.light(0, MIN_Y - 1, 0), 0x70);
         assert_eq!(world.light(0, MIN_Y, 0), 0x70);
         assert_eq!(world.light(0, MIN_Y + 16, 0), 0x70);
-        let resend = encoder.body_in(&world.chunks[&(0, 0)], &world);
+        let resend = encoder.body_in(&world.chunks[&(0, 0)], &world).unwrap();
         let mut reader = Reader::new(&resend);
         let id = reader.varint().unwrap();
         let Ok(play::Clientbound::LevelChunkWithLight(packet)) =
@@ -2620,14 +2649,14 @@ mod tests {
             SectionMask::ALL,
         ] {
             assert_eq!(
-                encoder.body(&chunk, &entities, around),
+                encoder.body(&chunk, &entities, around).unwrap(),
                 packet(&encoder, around),
                 "around {around:?}"
             );
         }
         encoder.set_dimension(LevelShape::NETHER);
         assert_eq!(
-            encoder.body(&chunk, &entities, SectionMask::ALL),
+            encoder.body(&chunk, &entities, SectionMask::ALL).unwrap(),
             packet(&encoder, SectionMask::ALL)
         );
     }
@@ -2720,11 +2749,17 @@ mod tests {
         ));
         let mut alone = ChunkEncoder::new(states.clone(), &builtin, &[], &[], Default::default());
         alone.tables = Some(tables.clone());
-        let expected: Vec<Vec<u8>> = chunks.iter().map(|c| alone.body_in(c, &world)).collect();
+        let expected: Vec<Vec<u8>> = chunks
+            .iter()
+            .map(|c| alone.body_in(c, &world).unwrap())
+            .collect();
         let mut warmed = ChunkEncoder::new(states.clone(), &builtin, &[], &[], Default::default());
         warmed.tables = Some(tables);
         let bodies = |encoder: &ChunkEncoder| -> Vec<Vec<u8>> {
-            chunks.iter().map(|c| encoder.body_in(c, &world)).collect()
+            chunks
+                .iter()
+                .map(|c| encoder.body_in(c, &world).unwrap())
+                .collect()
         };
         assert!(chunks.len() * SECTIONS >= WARM_MIN);
         warmed.warm(&chunks);

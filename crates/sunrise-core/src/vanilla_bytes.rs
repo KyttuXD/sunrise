@@ -76,6 +76,13 @@ impl Writer {
             Err(_) => self.data.push(0),
         }
     }
+    /// Write a network NBT tag under `limits`, returning the serialization error
+    /// instead of substituting `Tag::End`.
+    pub fn try_nbt(&mut self, tag: &Tag, limits: nbt::Limits) -> Result<(), nbt::Error> {
+        let bytes = nbt::write_network(tag, limits)?;
+        self.data.extend_from_slice(&bytes);
+        Ok(())
+    }
     pub fn long_array(&mut self, v: &[i64]) {
         self.varint(v.len() as i32);
         for &l in v {

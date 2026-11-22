@@ -3,8 +3,8 @@ use crate::{
     Error, Result,
     buf::{
         Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
-        Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
-        VarVec3i, Vec3d,
+        Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, TrustedCompoundTag, UByte, Uuid,
+        VarInt, VarLong, VarVec3i, Vec3d,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
@@ -102,7 +102,7 @@ packet!(
     SelectAdvancementsTab { tab: Option<String> => Opt<Ident> }
 );
 packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8 => UByte });
-packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
+packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => TrustedCompoundTag });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
 // ClientboundAddTransientBlockPacket: a block the client shows for a moment
 // while its section mesh catches up (a falling block that landed).
