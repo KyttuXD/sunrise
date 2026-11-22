@@ -1522,19 +1522,24 @@ impl Game<'_> {
     ) -> Vec<(sunrise_client::text::Text, u32)> {
         self.stack_tooltip_lines(stack, false, false)
     }
-    /// `ItemStack.getRarity`'s colour for the name line and a `[name]` link.
-    fn rarity_color(&self, stack: &ItemStack) -> u32 {
+    /// `ItemStack.getRarity().color()` in text's RGB format.
+    pub(in crate::game) fn stack_rarity_color(&self, stack: &ItemStack) -> u32 {
+        use sunrise_client::text;
         let props = self.stations().enchantments.props(&stack.item);
-        let rarity = sunrise_client::item_tooltip::rarity(
+        match sunrise_client::item_tooltip::rarity(
             stack,
             props.map_or("common", |p| p.rarity.as_str()),
-        );
-        match rarity {
-            "uncommon" => rgba(255, 255, 85, 255),
-            "rare" => rgba(85, 255, 255, 255),
-            "epic" => rgba(255, 85, 255, 255),
-            _ => u32::MAX,
+        ) {
+            "uncommon" => text::YELLOW,
+            "rare" => text::AQUA,
+            "epic" => text::LIGHT_PURPLE,
+            _ => text::WHITE,
         }
+    }
+    /// The same rarity colour in the GUI batch's packed RGBA format.
+    fn rarity_color(&self, stack: &ItemStack) -> u32 {
+        let c = self.stack_rarity_color(stack);
+        rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, 255)
     }
     /// The resolved `ItemStack.getHoverName` rendered as plain text.
     pub(in crate::game) fn stack_hover_name(&self, stack: &ItemStack) -> String {

@@ -1184,27 +1184,20 @@ impl Game<'_> {
         if empty {
             return wrapped;
         }
-        let mut rarity = self.item_rarity(item);
-        if !s.enchantments().is_empty() {
-            rarity = match rarity.as_str() {
-                "rare" => "epic".into(),
-                "epic" => rarity,
-                _ => "rare".into(),
-            };
-        }
-        let color = match rarity.as_str() {
-            "uncommon" => text::YELLOW,
-            "rare" => text::AQUA,
-            "epic" => text::LIGHT_PURPLE,
-            _ => text::WHITE,
-        };
+
         // HoverEvent.ShowItem: the count only when it is not one.
         let mut shown = serde_json::json!({"action": "show_item", "id": item});
         if s.count != 1 {
             shown["count"] = s.count.into();
         }
+        // ItemStackTemplate.fromNonEmptyStack keeps the stack's component patch.
+        if let Some(patch) = sunrise_client::item_data::encode_components(s, self.items())
+            && let Ok(components) = sunrise_core::json_nbt::tag_to_json(&patch)
+        {
+            shown["components"] = components;
+        }
         wrapped
-            .with_color(color)
+            .with_color(self.stack_rarity_color(s))
             .with_component_fields(vec![("hover_event".into(), shown)])
     }
     fn cmd_give(&mut self, ctx: &Context) -> R<i32> {

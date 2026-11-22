@@ -98,6 +98,49 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
             let other = anvil("Minutes").expect("another name is a rename");
             assert_eq!(other.custom_name().as_deref(), Some("Minutes"));
 
+            // ChargedProjectiles.addProjectileTooltip uses getDisplayName for a single arrow.
+            let mut arrow = ItemStack::new("minecraft:arrow", 1);
+            arrow
+                .data_mut()
+                .set_other("minecraft:rarity", Some(Tag::String("epic".into())));
+            let mut crossbow = ItemStack::new("minecraft:crossbow", 1);
+            crossbow.data_mut().charged.push(arrow);
+            let tooltip = game.stack_tooltip(&crossbow);
+            let (projectile, _) = tooltip
+                .iter()
+                .find(|(line, _)| line.plain().ends_with("[Arrow]"))
+                .expect("a single projectile's bracketed display name");
+            assert!(
+                projectile.spans.iter().any(|span| {
+                    span.text.contains("Arrow") && span.style.color == Some(0xFF55FF)
+                })
+            );
+
+            // GiveCommand's refused count still links the one-item prototype, with its patch.
+            game.player = Some(
+                sunrise_client::motion::PlayerMotion::new(
+                    game.motion,
+                    sunrise_core::geometry::Vec3::ZERO,
+                )
+                .unwrap(),
+            );
+            game.set_allow_commands(true);
+            game.build_registries();
+            let refusal = game
+                .execute_line(
+                    r#"give @s minecraft:paper[minecraft:custom_name={text:"Diary"}] 6401"#,
+                    game.player_source(),
+                )
+                .unwrap_err();
+            let message = refusal.message.component();
+            assert_eq!(message["translate"], "commands.give.failed.toomanyitems");
+            let hover = &message["with"][1]["hover_event"];
+            assert_eq!(hover["action"], "show_item");
+            let shown = sunrise_client::item_data::stack_from_hover(hover).unwrap();
+            assert_eq!(&*shown.item, "minecraft:paper");
+            assert_eq!(shown.count, 1);
+            assert_eq!(shown.custom_name().as_deref(), Some("Diary"));
+
             // The screen uses the same comparison before sending the rename packet.
             let mut station = super::stations::Station::new(super::stations::Kind::Anvil, [0; 3]);
             station.inputs[0] = Some(named);
