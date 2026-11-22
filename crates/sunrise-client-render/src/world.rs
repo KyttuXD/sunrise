@@ -1029,9 +1029,8 @@ impl World {
 pub enum ChunkResend {
     /// Preceding light work for this column is complete; ready to send on the next broadcast.
     Ready,
-    /// Waiting for the next `Streaming::relight_edits` pass to drain preceding `light_edits`
-    /// in this column's 3x3 neighbourhood.
-    WaitingEdits,
+    /// Waiting for the prefix of `World::light_edits` already queued for the next light pass.
+    WaitingEdits { through: usize },
     /// Waiting for a whole-column light job for this column (including any replacement needed
     /// if a superseded in-flight job is discarded without applying) to finish `apply_lit`.
     WaitingLight,

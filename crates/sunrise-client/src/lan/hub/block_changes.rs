@@ -299,7 +299,7 @@ impl Hub {
                         resends.push(key);
                         false
                     }
-                    ChunkResend::WaitingEdits | ChunkResend::WaitingLight => {
+                    ChunkResend::WaitingEdits { .. } | ChunkResend::WaitingLight => {
                         self.has_chunk_resend_target(&self.config.dimension, key)
                     }
                 }

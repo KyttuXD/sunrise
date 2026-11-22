@@ -392,6 +392,61 @@ fn later_light_check_does_not_prevent_chunk_resend() {
     });
 }
 
+#[test]
+#[ignore = "daily"]
+fn resend_after_air_check_does_not_wait_for_later_column_relight() {
+    use sunrise_client::lan::{Out, PlayerSender};
+    use sunrise_protocol::{buf::Reader, packets::play::Clientbound};
+
+    if run_fresh_cases(
+        "game::native_chunk_relight_tests::resend_after_air_check_does_not_wait_for_later_column_relight",
+        "SUNRISE_CHUNK_RESEND_LATER_RELIGHT_CHILD",
+        &["game"],
+    ) {
+        return;
+    }
+    with_guests(|game| {
+        roofed(game);
+        let level = game.level("minecraft:overworld").unwrap();
+        let key = (100, 100);
+        let (tx, rx) = std::sync::mpsc::channel();
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.sender = PlayerSender::new(tx, Arc::default());
+            g.dimension = "minecraft:overworld".into();
+            g.center = Some(key);
+            g.sent_chunks.insert(key);
+        });
+        game.streaming.paused = false;
+
+        assert!(level.check_light(game, [1608, 105, 1608]));
+        assert_eq!(game.chunk(level, [100, 100]).unwrap().resend(game), Ok(()));
+        game.lan_broadcast_changes();
+        assert!(rx.try_recv().is_err(), "the earlier check has not drained");
+
+        assert_eq!(level.relight_chunks(game, &[[100, 100]]), Ok(9));
+        game.streaming.update_light(&mut game.world);
+        assert!(game.world.light_edits.is_empty());
+        assert!(game.streaming.has_column_light_job(key));
+        game.lan_broadcast_changes();
+
+        let Out::Packet(body) = rx
+            .try_recv()
+            .expect("resend before the later light job applies")
+        else {
+            panic!("expected a chunk packet");
+        };
+        let mut reader = Reader::new(&body);
+        let id = reader.varint().unwrap();
+        let Clientbound::LevelChunkWithLight(packet) =
+            Clientbound::decode(id, reader.rest()).unwrap()
+        else {
+            panic!("expected LevelChunkWithLight");
+        };
+        assert_eq!((packet.x, packet.z), key);
+        assert!(rx.try_recv().is_err());
+    });
+}
+
 /// Loading is required even with no recipients; a loaded chunk with none is a no-op.
 #[test]
 #[ignore = "daily"]

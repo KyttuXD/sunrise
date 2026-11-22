@@ -60,9 +60,10 @@ pub trait LevelChunksBackendMut {
     /// Side: server.
     /// Queues the loaded chunk of any open server level (active or parked) to go whole again
     /// with its light, block entities and biomes when that level broadcasts changes after the
-    /// column's pending light work (`ChunkMap.waitForLightBeforeSending`). Only players who
-    /// currently hold the chunk receive it, including in a viewed level (`ChunkMap.getPlayers`,
-    /// `PlayerChunkSender`); no holders at the time of the call means `Ok(())` with nothing queued.
+    /// column's light work pending at the call, including any whole-column jobs those edits need
+    /// (`ChunkMap.waitForLightBeforeSending`). Only current holders receive it, including in a viewed
+    /// level (`ChunkMap.getPlayers`, `PlayerChunkSender`). No holders at the time of the call means
+    /// `Ok(())` with nothing queued.
     /// Each refusal queues nothing and is named by `ChunkRefusal`: `Stale` (stale handle or
     /// unloaded level), `Client` and `NotLoaded`.
     fn chunk_resend(&mut self, chunk: ChunkRef) -> Result<(), ChunkRefusal>;
