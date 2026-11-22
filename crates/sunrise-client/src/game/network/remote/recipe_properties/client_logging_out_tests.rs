@@ -129,7 +129,7 @@ fn poll_until(
 }
 
 fn local_server(pipe: Pipe) -> Connection {
-    let mut server = Connection::local(pipe);
+    let server = Connection::local(pipe);
     server
         .reader
         .set_read_timeout(Some(Duration::from_secs(5)))
