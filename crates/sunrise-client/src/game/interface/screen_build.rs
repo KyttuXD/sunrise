@@ -619,10 +619,10 @@ impl Game<'_> {
         out: &mut Vec<mod_api::ScreenRegion>,
     ) {
         use mod_api::{ScreenRegion, ScreenRegionKind};
-        if let Some(book) = layout.book {
-            if !self.book_covers_menu(width) {
-                out.push(ScreenRegion::new(ScreenRegionKind::RecipeBook, book));
-            }
+        if let Some(book) = layout.book
+            && !self.book_covers_menu(width)
+        {
+            out.push(ScreenRegion::new(ScreenRegionKind::RecipeBook, book));
         }
         if screen == Screen::Creative {
             // `CreativeModeInventoryScreen.extractTabButton`: 26 x 32 each.
