@@ -5,9 +5,8 @@ use sunrise_client::{
     entity_nbt,
     nbt_path::int_value,
     save::{float, number, text},
-    scoreboard::{Comp, canonical_component, component_tag, tag_to_json},
     text_display::{
-        resident::{DisplayContents, DisplayState, DisplayText},
+        resident::{DisplayComponent, DisplayContents, DisplayState, DisplayText},
         transformation,
     },
 };
@@ -44,17 +43,8 @@ impl Game<'_> {
             },
             "minecraft:text_display" => {
                 let mut value = DisplayText::default();
-                if let Some(component) = tag.get("text") {
-                    value.component = Arc::new(match component {
-                        Tag::String(s) => Comp::String(s.to_string_lossy()),
-                        Tag::Compound(fields) if !fields.is_empty() => {
-                            canonical_component(&tag_to_json(component))
-                        }
-                        Tag::List(items) if !items.is_empty() => {
-                            canonical_component(&tag_to_json(component))
-                        }
-                        _ => Comp::String(String::new()),
-                    });
+                if let Some(component) = tag.get("text").and_then(DisplayComponent::from_nbt) {
+                    value.component = Arc::new(component);
                 }
                 value.line_width = int("line_width", value.line_width);
                 value.background = int("background", value.background);
@@ -167,7 +157,7 @@ impl Game<'_> {
             }
             DisplayContents::Text(text) => {
                 for (key, value) in [
-                    ("text", component_tag(&text.component)),
+                    ("text", text.component.to_nbt()),
                     ("line_width", Tag::Int(text.line_width)),
                     ("background", Tag::Int(text.background)),
                     ("text_opacity", Tag::Byte(text.opacity)),

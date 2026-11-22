@@ -5253,7 +5253,7 @@ mod tests {
                 entry,
                 (23, kind, Value::Item(Some(stack)))
                     if *kind == serializer::ITEM_STACK
-                        && stack.id == diamond_id
+                        && stack.item == diamond_id
                         && stack.count == 3
             )));
             assert!(values.contains(&(

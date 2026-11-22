@@ -3252,53 +3252,49 @@ mod item_display_saved_transform_tests {
             let clock = game.world.game_time;
             let update = Transformation {
                 translation: [9.0, 8.0, 7.0],
+                left_rotation: [0.0; 4],
                 scale: [2.0; 3],
-                ..Transformation::IDENTITY
+                right_rotation: [0.0, 0.0, 0.0, 2.0],
             };
             let display = game.display(game.entity(id).unwrap()).unwrap();
-            assert!(game.display_set_transformation(display, update));
-            assert!(game.display_set_interpolation_duration(display, 13));
-            assert!(game.display_set_teleport_duration(display, 5));
-            assert!(game.display_set_start_interpolation(display, 0));
-            let raw = game.persist.raw.get_mut(&id).unwrap();
-            assert_eq!(raw.get("interpolation_duration"), Some(&Tag::Int(13)));
-            assert_eq!(raw.get("teleport_duration"), Some(&Tag::Int(5)));
-            assert_eq!(raw.get("start_interpolation"), Some(&Tag::Int(0)));
-            let Tag::Compound(c) = raw else {
-                panic!("compound")
-            };
-            c.insert(
-                "transformation".into(),
-                expected([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3]),
-            );
-            assert!(game.display_set_shadow_radius(display, 1.25));
-            let want = expected([9.0, 8.0, 7.0], [0.0, 0.0, 0.0, 1.0], [2.0; 3]);
-            assert_eq!(
-                game.command_target_nbt(Target::Other(id))
-                    .unwrap()
-                    .get("transformation"),
-                Some(&want)
-            );
+            assert!(display.set_transformation(game, update));
+            assert!(display.set_interpolation_duration(game, 13));
+            assert!(display.set_teleport_duration(game, 5));
+            assert!(display.set_start_interpolation(game, 7));
+            assert!(display.set_shadow_radius(game, 1.25));
             let raw = game.persist.raw.remove(&id).unwrap();
+            for field in [
+                "transformation",
+                "interpolation_duration",
+                "teleport_duration",
+                "start_interpolation",
+            ] {
+                assert!(raw.get(field).is_none(), "{field} is resident");
+            }
+            assert_eq!(display.transformation(game), Some(update));
+            assert_eq!(display.interpolation_duration(game), Some(13));
+            assert_eq!(display.teleport_duration(game), Some(5));
+            assert_eq!(display.start_interpolation(game), Some(7));
+
             let fresh = game.command_target_nbt(Target::Other(id)).unwrap();
-            assert_eq!(fresh.get("transformation"), Some(&want));
-            assert_eq!(fresh.get("interpolation_duration"), Some(&Tag::Int(0)));
-            assert_eq!(fresh.get("teleport_duration"), Some(&Tag::Int(0)));
-            assert!(fresh.get("start_interpolation").is_none());
-            game.persist.raw.insert(id, raw);
-            let invalid = Transformation {
-                left_rotation: [0.0; 4],
-                ..update
+            let floats = |values: &[f32]| {
+                Tag::List(
+                    values
+                        .iter()
+                        .map(|value| Tag::Float(value.to_bits()))
+                        .collect(),
+                )
             };
-            let before = game.persist.raw.get(&id).unwrap().clone();
-            assert!(!game.display_set_transformation(display, invalid));
-            assert_eq!(game.persist.raw.get(&id), Some(&before));
-            assert_eq!(
-                game.command_target_nbt(Target::Other(id))
-                    .unwrap()
-                    .get("transformation"),
-                Some(&want)
-            );
+            let want = Tag::compound([
+                ("translation", floats(&[9.0, 8.0, 7.0])),
+                ("left_rotation", floats(&[0.0; 4])),
+                ("scale", floats(&[2.0; 3])),
+                ("right_rotation", floats(&[0.0, 0.0, 0.0, 2.0])),
+            ]);
+            assert_eq!(fresh.get("transformation"), Some(&want));
+            assert_eq!(fresh.get("interpolation_duration"), Some(&Tag::Int(13)));
+            assert_eq!(fresh.get("teleport_duration"), Some(&Tag::Int(5)));
+            assert!(fresh.get("start_interpolation").is_none());
             assert_eq!(game.persist.uuid_of(id), uuid);
             assert_eq!(game.world.game_time, clock);
         });

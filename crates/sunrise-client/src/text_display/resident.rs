@@ -4,10 +4,12 @@ mod tests;
 
 use crate::{
     items::ItemStack,
-    scoreboard::{Comp, component_tag},
+    scoreboard::{component_tag, tag_to_json},
+    text::Text,
 };
 use mod_api::{Billboard, ItemDisplayContext, TextAlignment, Transformation};
 use std::sync::Arc;
+use sunrise_core::nbt::{Tag, clone_tag};
 use sunrise_protocol::{
     entity_data::{Value, serializer},
     item::Stack,
@@ -25,9 +27,48 @@ pub enum DisplayContents {
     Text(DisplayText),
 }
 
+/// A decoded component tree in its NBT data model. Unlike the JSON view, it
+/// retains the tag types inside payloads such as `HoverEvent.ShowItem` patches.
+#[derive(Debug, PartialEq)]
+pub struct DisplayComponent(Tag);
+
+impl DisplayComponent {
+    pub fn from_nbt(tag: &Tag) -> Option<Self> {
+        match tag {
+            Tag::String(_) => {}
+            Tag::Compound(fields) if !fields.is_empty() => {}
+            Tag::List(items) if !items.is_empty() => {}
+            _ => return None,
+        }
+        Some(Self(clone_tag(tag)))
+    }
+
+    pub fn from_text(text: &Text) -> Self {
+        Self(component_tag(&text.component_view()))
+    }
+
+    pub fn to_nbt(&self) -> Tag {
+        clone_tag(&self.0)
+    }
+
+    pub fn project_text(&self) -> Text {
+        Text::from(tag_to_json(&self.0))
+    }
+
+    fn is_empty(&self) -> bool {
+        matches!(&self.0, Tag::String(text) if text.is_empty())
+    }
+}
+
+impl Default for DisplayComponent {
+    fn default() -> Self {
+        Self(Tag::String("".into()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayText {
-    pub component: Arc<Comp>,
+    pub component: Arc<DisplayComponent>,
     pub line_width: i32,
     pub background: i32,
     pub opacity: i8,
@@ -40,7 +81,7 @@ pub struct DisplayText {
 impl Default for DisplayText {
     fn default() -> Self {
         Self {
-            component: Arc::new(Comp::String(String::new())),
+            component: Arc::default(),
             line_width: 200,
             background: 0x4000_0000,
             opacity: -1,
@@ -226,15 +267,18 @@ impl DisplayState {
                     DisplayContents::Text(text) => Some(text),
                     _ => None,
                 };
-                if !before.is_some_and(|old| Arc::ptr_eq(&old.component, &text.component)) {
-                    let component = component_tag(&text.component);
-                    let old = before.map_or_else(
-                        || sunrise_core::nbt::Tag::String("".into()),
-                        |old| component_tag(&old.component),
+                if before.map_or_else(
+                    || !text.component.is_empty(),
+                    |old| {
+                        !Arc::ptr_eq(&old.component, &text.component)
+                            && old.component != text.component
+                    },
+                ) {
+                    put(
+                        23,
+                        serializer::COMPONENT,
+                        Value::Text(text.component.to_nbt()),
                     );
-                    if component != old {
-                        put(23, serializer::COMPONENT, Value::Text(component));
-                    }
                 }
                 if text.line_width != before.map_or(200, |text| text.line_width) {
                     put(24, serializer::INT, Value::Int(text.line_width));

@@ -2375,14 +2375,17 @@ mod tests {
 
     #[test]
     fn tracking_display_pairs_from_typed_fields_and_sends_a_return_to_default() {
-        use crate::{scoreboard::literal, text_display::resident::DisplayText};
+        use crate::{
+            text::Text,
+            text_display::resident::{DisplayComponent, DisplayText},
+        };
         use mod_api::Billboard;
         use sunrise_core::nbt::Tag;
 
         let mut row = state(0.0);
         row.kind = "minecraft:text_display".into();
         let mut display = Arc::new(DisplayState::new(DisplayContents::Text(DisplayText {
-            component: Arc::new(literal("live")),
+            component: Arc::new(DisplayComponent::from_text(&Text::literal("live"))),
             line_width: 60,
             ..Default::default()
         })));

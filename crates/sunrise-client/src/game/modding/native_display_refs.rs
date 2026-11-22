@@ -12,7 +12,7 @@ use std::sync::Arc;
 use sunrise_client::{
     items::ItemStack,
     text::Text,
-    text_display::resident::{DisplayContents, DisplayState, DisplayText},
+    text_display::resident::{DisplayComponent, DisplayContents, DisplayState, DisplayText},
 };
 use sunrise_world::registry::BlockStateId;
 
@@ -248,13 +248,13 @@ impl Game<'_> {
     }
 
     pub(super) fn display_text(&self, display: DisplayRef) -> Option<Text> {
-        Some(Text::from(
-            self.display_text_state(display)?.component.as_ref().clone(),
-        ))
+        Some(self.display_text_state(display)?.component.project_text())
     }
 
     pub(super) fn display_set_text(&mut self, display: DisplayRef, value: Text) -> bool {
-        self.display_edit_text(display, |text| text.component = Arc::new(value.component()))
+        self.display_edit_text(display, |text| {
+            text.component = Arc::new(DisplayComponent::from_text(&value));
+        })
     }
 
     pub(super) fn display_line_width(&self, display: DisplayRef) -> Option<i32> {
@@ -721,12 +721,32 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn text_display_preserves_keybind_component_across_load_read_save_and_pairing() {
-        use mod_api::text::TextContent;
-        use sunrise_protocol::entity_data::{Value, serializer};
+        use mod_api::text::{TextContent, TextHover};
+        use sunrise_protocol::{
+            buf::Reader,
+            entity_data::{Value, serializer},
+            packets::play::{Clientbound, SetEntityData},
+        };
 
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            let keybind = Tag::compound([("keybind", Tag::String("key.jump".into()))]);
+            let keybind = Tag::compound([
+                ("keybind", Tag::String("key.jump".into())),
+                (
+                    "hover_event",
+                    Tag::compound([
+                        ("action", Tag::String("show_item".into())),
+                        ("id", Tag::String("minecraft:diamond".into())),
+                        (
+                            "components",
+                            Tag::compound([(
+                                "minecraft:custom_data",
+                                Tag::compound([("marker", Tag::Byte(2))]),
+                            )]),
+                        ),
+                    ]),
+                ),
+            ]);
             let tag = Tag::compound([
                 ("Pos", Tag::List(vec![Tag::Double(0.0f64.to_bits()); 3])),
                 ("Rotation", Tag::List(vec![Tag::Float(0.0f32.to_bits()); 2])),
@@ -736,8 +756,12 @@ mod tests {
                 .load_other_transferred(tag, "minecraft:text_display", None)
                 .unwrap();
             let display = game.display(game.entity(id).unwrap()).unwrap();
-            let expected = mod_api::Text::new(TextContent::Keybind("key.jump".into()));
-            assert_eq!(display.text(game).unwrap(), Some(expected));
+            let projected = display.text(game).unwrap().unwrap();
+            assert_eq!(projected.content, TextContent::Keybind("key.jump".into()));
+            assert!(matches!(
+                &projected.style.hover,
+                Some(TextHover::Item { id, .. }) if id == "minecraft:diamond"
+            ));
 
             let entity = game.others.iter().find(|o| o.id == id).unwrap();
             let saved = game.other_to_nbt(entity, [1, 2, 3, 4]);
@@ -749,7 +773,23 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .append_metadata(None, false, |_| None, &mut metadata);
-            assert!(metadata.contains(&(23, serializer::COMPONENT, Value::Text(keybind))));
+            let packet = Clientbound::SetEntityData(SetEntityData {
+                id: id as i32,
+                values: metadata,
+            })
+            .encode();
+            let mut reader = Reader::new(&packet);
+            let packet_id = reader.varint().unwrap();
+            let Clientbound::SetEntityData(decoded) =
+                Clientbound::decode(packet_id, reader.rest()).unwrap()
+            else {
+                panic!("expected display metadata packet");
+            };
+            assert!(
+                decoded
+                    .values
+                    .contains(&(23, serializer::COMPONENT, Value::Text(keybind)))
+            );
 
             let sprint = mod_api::Text::new(TextContent::Keybind("key.sprint".into()));
             assert!(display.set_text(game, sprint.clone()).unwrap());
