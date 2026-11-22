@@ -63,7 +63,6 @@ pub enum PlacementError<E> {
     Random(InvalidBound),
     World(PlacementQueryError),
     Output(E),
-    WorkLimit,
 }
 impl<E: std::fmt::Display> std::fmt::Display for PlacementError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,7 +70,6 @@ impl<E: std::fmt::Display> std::fmt::Display for PlacementError<E> {
             Self::Random(e) => e.fmt(f),
             Self::World(e) => e.fmt(f),
             Self::Output(e) => e.fmt(f),
-            Self::WorkLimit => f.write_str("placement work limit exceeded"),
         }
     }
 }
@@ -326,7 +324,7 @@ impl PlacementModifier {
         position: [i32; 3],
         mut emit: impl FnMut(&mut R, [i32; 3]) -> Result<(), E>,
     ) -> Result<(), PlacementError<E>> {
-        self.modify_inner(context, random, position, &mut emit, &mut 65536)
+        self.modify_inner(context, random, position, &mut emit)
     }
     fn modify_inner<R: RandomSource, E>(
         &self,
@@ -334,12 +332,7 @@ impl PlacementModifier {
         random: &mut R,
         position: [i32; 3],
         emit: &mut impl FnMut(&mut R, [i32; 3]) -> Result<(), E>,
-        remaining: &mut usize,
     ) -> Result<(), PlacementError<E>> {
-        if *remaining == 0 {
-            return Err(PlacementError::WorkLimit);
-        }
-        *remaining -= 1;
         let [x, y, z] = position;
         match self {
             Self::Biome => {
@@ -351,7 +344,7 @@ impl PlacementModifier {
                 }
             }
             Self::BlockPredicate(predicate) => {
-                if predicate.test_inner(context, position, 0, remaining)? {
+                if predicate.test(context, position)? {
                     emit(random, position).map_err(PlacementError::Output)?;
                 }
             }
@@ -362,27 +355,27 @@ impl PlacementModifier {
                 max_steps,
             } => {
                 let mut position = position;
-                if !allowed.test_inner(context, position, 0, remaining)? {
+                if !allowed.test(context, position)? {
                     return Ok(());
                 }
                 for _ in 0..*max_steps {
-                    if target.test_inner(context, position, 0, remaining)? {
+                    if target.test(context, position)? {
                         return emit(random, position).map_err(PlacementError::Output);
                     }
                     position[1] = position[1].wrapping_add(if *upwards { 1 } else { -1 });
                     if context.outside_build_height(position[1])? {
                         return Ok(());
                     }
-                    if !allowed.test_inner(context, position, 0, remaining)? {
+                    if !allowed.test(context, position)? {
                         break;
                     }
                 }
-                if target.test_inner(context, position, 0, remaining)? {
+                if target.test(context, position)? {
                     emit(random, position).map_err(PlacementError::Output)?;
                 }
             }
             Self::CountOnEveryLayer(count) => {
-                layer::modify(count, context, random, position, emit, remaining)?
+                layer::modify(count, context, random, position, emit)?
             }
             Self::Heightmap(kind) => {
                 let height = context.height(*kind, x, z)?;
@@ -413,9 +406,6 @@ impl PlacementModifier {
                 let count = self
                     .repetitions(random, position)?
                     .expect("repeating modifier");
-                if count > 4096 {
-                    return Err(PlacementError::WorkLimit);
-                }
                 for _ in 0..count {
                     emit(random, position).map_err(PlacementError::Output)?;
                 }
@@ -435,10 +425,6 @@ impl PlacementModifier {
                 for dx in 0..=nx {
                     for dy in 0..=ny {
                         for dz in 0..=nz {
-                            if *remaining == 0 {
-                                return Err(PlacementError::WorkLimit);
-                            }
-                            *remaining -= 1;
                             let bx = dx == 0 || dx == nx;
                             let by = dy == 0 || dy == ny;
                             let bz = dz == 0 || dz == nz;
@@ -483,9 +469,6 @@ impl PlacementModifier {
                 }
             }
             Self::Fixed(positions) => {
-                if positions.len() > 8192 {
-                    return Err(PlacementError::WorkLimit);
-                }
                 for p in positions {
                     if p[0] >> 4 == x >> 4 && p[2] >> 4 == z >> 4 {
                         emit(random, *p).map_err(PlacementError::Output)?;
@@ -493,11 +476,8 @@ impl PlacementModifier {
                 }
             }
             Self::RandomlySelected(placements) => {
-                if placements.len() > 8192 {
-                    return Err(PlacementError::WorkLimit);
-                }
                 let index = random.next_int_bound(placements.len() as i32)? as usize;
-                placements[index].modify_inner(context, random, position, emit, remaining)?;
+                placements[index].modify_inner(context, random, position, emit)?;
             }
         }
         Ok(())

@@ -97,8 +97,6 @@ pub enum FeaturePlacementError<E> {
     Random(InvalidBound),
     World(PlacementQueryError),
     Feature(E),
-    WorkLimit,
-    InvalidPendingIndex,
 }
 impl<E: std::fmt::Display> std::fmt::Display for FeaturePlacementError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -106,18 +104,13 @@ impl<E: std::fmt::Display> std::fmt::Display for FeaturePlacementError<E> {
             Self::Random(e) => e.fmt(f),
             Self::World(e) => e.fmt(f),
             Self::Feature(e) => e.fmt(f),
-            Self::WorkLimit => f.write_str("feature placement work limit exceeded"),
-            Self::InvalidPendingIndex => {
-                f.write_str("pending modifier index is outside the current chain")
-            }
         }
     }
 }
 impl<E: std::error::Error + 'static> std::error::Error for FeaturePlacementError<E> {}
 
 /// Processes one modifier completely before running its descendants. Siblings
-/// retain emitted order. The reusable buffers also retain partial state after
-/// errors, like vanilla; a fresh placer starts without that state.
+/// retain emitted order. A failed root never lends its pending work to the next root.
 #[derive(Default, Debug)]
 pub struct FeaturePlacer {
     pending: Vec<([i32; 3], usize)>,
@@ -195,41 +188,47 @@ impl FeaturePlacer {
             return feature(context, random, origin).map_err(FeaturePlacementError::Feature);
         }
         self.pending.push((origin, 0));
-        let mut any = false;
-        while let Some((position, index)) = self.pending.pop() {
-            let modifier = modifiers
-                .get(index)
-                .ok_or(FeaturePlacementError::InvalidPendingIndex)?;
-            modifier
-                .modify_in(
-                    &mut Queries {
-                        world: context,
-                        top,
-                    },
-                    random,
-                    position,
-                    |_, p| -> Result<(), Infallible> {
-                        self.modified.push(p);
-                        Ok(())
-                    },
-                )
-                .map_err(|e| match e {
-                    PlacementError::Random(e) => FeaturePlacementError::Random(e),
-                    PlacementError::World(e) => FeaturePlacementError::World(e),
-                    PlacementError::Output(never) => match never {},
-                    PlacementError::WorkLimit => FeaturePlacementError::WorkLimit,
-                })?;
-            let next = index + 1;
-            if next < modifiers.len() {
-                self.pending
-                    .extend(self.modified.iter().rev().map(|p| (*p, next)));
-            } else {
-                for p in &self.modified {
-                    any |= feature(context, random, *p).map_err(FeaturePlacementError::Feature)?;
+        let result = (|| {
+            let mut any = false;
+            while let Some((position, index)) = self.pending.pop() {
+                // Only queue a next index when it exists in this root's modifier chain.
+                let modifier = &modifiers[index];
+                modifier
+                    .modify_in(
+                        &mut Queries {
+                            world: context,
+                            top,
+                        },
+                        random,
+                        position,
+                        |_, p| -> Result<(), Infallible> {
+                            self.modified.push(p);
+                            Ok(())
+                        },
+                    )
+                    .map_err(|e| match e {
+                        PlacementError::Random(e) => FeaturePlacementError::Random(e),
+                        PlacementError::World(e) => FeaturePlacementError::World(e),
+                        PlacementError::Output(never) => match never {},
+                    })?;
+                let next = index + 1;
+                if next < modifiers.len() {
+                    self.pending
+                        .extend(self.modified.iter().rev().map(|p| (*p, next)));
+                } else {
+                    for p in &self.modified {
+                        any |=
+                            feature(context, random, *p).map_err(FeaturePlacementError::Feature)?;
+                    }
                 }
+                self.modified.clear();
             }
+            Ok(any)
+        })();
+        if result.is_err() {
+            self.pending.clear();
             self.modified.clear();
         }
-        Ok(any)
+        result
     }
 }

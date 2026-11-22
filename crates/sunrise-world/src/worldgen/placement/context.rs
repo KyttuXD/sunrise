@@ -6,14 +6,12 @@ pub enum PlacementQueryError {
     Unavailable,
     /// A direct placed-feature call reached a biome filter without a top feature.
     MissingTopFeature,
-    WorkLimit,
     Failed(String),
 }
 impl std::fmt::Display for PlacementQueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MissingTopFeature => f.write_str("biome filter requires a top feature"),
-            Self::WorkLimit => f.write_str("predicate work limit exceeded"),
             Self::Unavailable => f.write_str("placement world query is unavailable"),
             Self::Failed(message) => f.write_str(message),
         }

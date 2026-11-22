@@ -18,10 +18,8 @@ use super::{
 };
 use crate::heightmap::HeightmapType;
 use crate::registry::{BlockRegistry, BlockStateId};
-use mod_api::FeatureError;
 use std::any::Any;
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::sync::{Arc, OnceLock};
 use sunrise_core::nbt::Compound;
 use sunrise_core::random::RandomSource;
@@ -36,7 +34,7 @@ pub trait ModFeatureType: Send + Sync {
     /// Decode a configured feature's JSON once at load (the settings sit inline next to
     /// `type`) against the type's declared schema; an error refuses the definition, naming it.
     fn prepare_config(&self, config: &serde_json::Value) -> Result<ModFeatureConfig, String>;
-    /// `Feature.place`: true when the feature says it placed. An `Err` is the mod's failure.
+    /// `Feature.place`: true when the feature says it placed. An `Err` is an engine-owned diagnostic.
     fn place(
         &self,
         target: &mut dyn ModFeatureTarget,
@@ -44,7 +42,7 @@ pub trait ModFeatureType: Send + Sync {
         origin: [i32; 3],
         // Decoded once and retained by the loaded definition.
         config: &(dyn Any + Send + Sync),
-    ) -> Result<bool, FeatureError>;
+    ) -> Result<bool, String>;
 }
 
 /// The level a mod feature places in, object-safe: the caller's own world (a decoration
@@ -206,18 +204,8 @@ impl ModFeature {
         {
             Ok(placed) => placed,
             Err(error) => {
-                let causes = std::fmt::from_fn(|f| {
-                    write!(f, "{error}")?;
-                    // FeatureError displays its immediate cause; don't print that cause twice.
-                    let mut remaining = error.source().and_then(Error::source);
-                    while let Some(cause) = remaining {
-                        write!(f, ": {cause}")?;
-                        remaining = cause.source();
-                    }
-                    Ok(())
-                });
                 log::error!(
-                    "mod {}: feature type {} failed at {origin:?}: {causes}",
+                    "mod {}: feature type {} failed at {origin:?}: {error}",
                     self.entry.mod_id,
                     self.id,
                 );

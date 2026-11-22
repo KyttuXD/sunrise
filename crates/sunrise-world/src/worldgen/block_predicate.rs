@@ -267,19 +267,6 @@ impl BlockPredicate {
         world: &mut impl PlacementContext,
         position: [i32; 3],
     ) -> Result<bool, PlacementQueryError> {
-        self.test_inner(world, position, 0, &mut 65536)
-    }
-    pub(crate) fn test_inner(
-        &self,
-        world: &mut impl PlacementContext,
-        position: [i32; 3],
-        depth: usize,
-        remaining: &mut usize,
-    ) -> Result<bool, PlacementQueryError> {
-        if depth > 256 || *remaining == 0 {
-            return Err(PlacementQueryError::WorkLimit);
-        }
-        *remaining -= 1;
         match self {
             Self::WouldSurvive { state, offset } => world.block_survives(
                 *state,
@@ -321,14 +308,13 @@ impl BlockPredicate {
                 max,
                 predicate,
             } => {
-                // Native order is X, Z, Y. Each child shares the evaluation
-                // budget, including nested volumes and early-failing queries.
+                // Native order is X, Z, Y.
                 for x in min[0]..=max[0] {
                     for z in min[2]..=max[2] {
                         for y in min[1]..=max[1] {
                             let offset = [x, y, z];
                             let p = std::array::from_fn(|i| position[i].wrapping_add(offset[i]));
-                            if !predicate.test_inner(world, p, depth + 1, remaining)? {
+                            if !predicate.test(world, p)? {
                                 return Ok(false);
                             }
                         }
@@ -337,11 +323,11 @@ impl BlockPredicate {
                 Ok(true)
             }
             Self::True => Ok(true),
-            Self::Not(value) => Ok(!value.test_inner(world, position, depth + 1, remaining)?),
+            Self::Not(value) => Ok(!value.test(world, position)?),
             Self::All(values) | Self::Any(values) => {
                 let all = matches!(self, Self::All(_));
                 for value in values {
-                    let result = value.test_inner(world, position, depth + 1, remaining)?;
+                    let result = value.test(world, position)?;
                     if result != all {
                         return Ok(result);
                     }

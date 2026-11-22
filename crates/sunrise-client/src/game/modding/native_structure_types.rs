@@ -5,7 +5,6 @@ use mod_api::{
     BiomeId, BlockKey, BlockMetadata, BlockState, ChunkPos, GenerationContext, HeightmapType,
     NoiseBlock, NoiseColumn, PieceContext, RandomSource, StructurePiece, StructureType,
 };
-use std::error::Error;
 use std::sync::Arc;
 use sunrise_core::{
     bounding_box::BoundingBox,
@@ -130,20 +129,6 @@ impl GenerationContext for Start<'_> {
     }
     fn config(&self) -> Arc<Tag> {
         self.config.clone()
-    }
-}
-
-struct ErrorCauses<'a>(&'a mod_api::StructureError);
-impl std::fmt::Display for ErrorCauses<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)?;
-        // StructureError displays its immediate cause; don't print that cause twice.
-        let mut remaining = self.0.source().and_then(Error::source);
-        while let Some(cause) = remaining {
-            write!(f, ": {cause}")?;
-            remaining = cause.source();
-        }
-        Ok(())
     }
 }
 
@@ -388,7 +373,7 @@ impl ModStructureType for Adapter {
         let metadata = WorkerResources::get(registry).ok()?.metadata;
         let loaded = self
             .load_piece
-            .call("structure type", "StructureType::load_piece", || {
+            .call_with_error("structure type", "StructureType::load_piece", || {
                 self.inner.load_piece(metadata, tag)
             })
             .ok()?;
@@ -399,7 +384,7 @@ impl ModStructureType for Adapter {
                     "mod {}: structure type {} failed to load saved piece: {}",
                     self.load_piece.id(),
                     self.id,
-                    ErrorCauses(&error),
+                    error,
                 );
                 return None;
             }
@@ -512,19 +497,18 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
     ) -> std::result::Result<(), PlacementQueryError> {
         let chunk = context.chunk;
         let mut context = Placing::new(context, self.post_process.id(), self.id)?;
-        if let Ok(Err(error)) =
-            self.post_process
-                .call("structure piece", "StructurePiece::post_process", || {
-                    self.piece.post_process(&mut context)
-                })
-        {
+        if let Ok(Err(error)) = self.post_process.call_with_error(
+            "structure piece",
+            "StructurePiece::post_process",
+            || self.piece.post_process(&mut context),
+        ) {
             log::error!(
                 "mod {}: structure piece {} failed in chunk ({}, {}): {}",
                 self.post_process.id(),
                 self.id,
                 chunk.x,
                 chunk.z,
-                ErrorCauses(&error),
+                error,
             );
         }
         Ok(())
@@ -541,7 +525,7 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
         let mut context = Placing::new(context, self.after_place.id(), self.id)?;
         if let Ok(Err(error)) =
             self.after_place
-                .call("structure type", "StructureType::after_place", || {
+                .call_with_error("structure type", "StructureType::after_place", || {
                     self.ty.after_place(&mut context, pieces)
                 })
         {
@@ -551,7 +535,7 @@ impl sunrise_world::worldgen::structure::legacy::LegacyPiece for ModPiece {
                 self.id,
                 chunk.x,
                 chunk.z,
-                ErrorCauses(&error),
+                error,
             );
         }
         Ok(())

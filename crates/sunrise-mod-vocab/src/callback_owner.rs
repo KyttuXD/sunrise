@@ -269,6 +269,47 @@ impl CallbackOwner {
         .map_err(|why| format!("mod {}: {why}", self.id))
     }
 
+    /// Render a returned API error wrapper's causes while the callback still owns the
+    /// invocation. Keep the original error outside the formatting unwind so a panicking
+    /// destructor cannot collide with a formatter panic. Only engine-owned text escapes.
+    pub fn call_with_error<T, E: std::error::Error + 'static>(
+        &self,
+        kind: &'static str,
+        operation: &'static str,
+        invoke: impl FnOnce() -> Result<T, E>,
+    ) -> Result<Result<T, String>, String> {
+        let mut returned_error = None;
+        let result = self.call(kind, operation, || {
+            invoke().map_err(|error| {
+                use std::fmt::Write;
+                let error: &E = returned_error.insert(error);
+                let mut cause = error.source().unwrap_or(error);
+                let mut text = String::new();
+                let mut seen = Vec::new();
+                loop {
+                    if seen.iter().any(|&prev| std::ptr::eq(prev, cause)) {
+                        text.push_str(": [cyclic error source]");
+                        break;
+                    }
+                    if !seen.is_empty() {
+                        text.push_str(": ");
+                    }
+                    seen.push(cause);
+                    if write!(text, "{cause}").is_err() {
+                        text.push_str("[error formatting cause]");
+                    }
+                    let Some(next) = cause.source() else { break };
+                    cause = next;
+                }
+                text
+            })
+        });
+        if let Some(error) = returned_error {
+            self.dispose(kind, operation, error);
+        }
+        result
+    }
+
     /// A retained callback invoked by a generated registration listener shares that
     /// listener's phase scope so a phase refusal can roll back its staged registrations.
     pub(crate) fn call_in_listener<T>(
@@ -461,6 +502,72 @@ mod tests {
     use super::*;
     use crate::world::phase::ModPhase;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn returned_native_errors_keep_causes_and_contain_format_and_drop_panics() {
+        use crate::FeatureError;
+        use std::{error::Error, fmt};
+
+        #[derive(Debug)]
+        struct Cycle;
+        impl fmt::Display for Cycle {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("cyclic cause")
+            }
+        }
+        impl Error for Cycle {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self)
+            }
+        }
+
+        #[derive(Debug)]
+        struct Hostile<'a> {
+            format_panics: bool,
+            drops: &'a AtomicUsize,
+        }
+        impl fmt::Display for Hostile<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                assert!(!self.format_panics, "panic in error display");
+                f.write_str("drop-only error")
+            }
+        }
+        impl Error for Hostile<'_> {}
+        impl Drop for Hostile<'_> {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+                panic!("panic in error drop");
+            }
+        }
+
+        let kind = "feature type";
+        let operation = "place test";
+        let other = CallbackOwner::for_mod("returned_error_test");
+        let cycle = other
+            .call_with_error(kind, operation, || Err::<(), _>(FeatureError::new(Cycle)))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(cycle, "cyclic cause: [cyclic error source]");
+
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+        for format_panics in [false, true] {
+            let owner = CallbackOwner::for_mod("returned_error_test");
+            let result = owner.call_with_error(kind, operation, || {
+                Err::<(), _>(FeatureError::new(Hostile {
+                    format_panics,
+                    drops: &DROPS,
+                }))
+            });
+            if format_panics {
+                assert!(result.unwrap_err().contains("panic in error display"));
+            } else {
+                assert_eq!(result.unwrap().unwrap_err(), "drop-only error");
+            }
+            assert!(!owner.is_enabled());
+            assert_eq!(other.call(kind, operation, || 17), Ok(17));
+        }
+        assert_eq!(DROPS.load(Ordering::Relaxed), 2);
+    }
 
     #[test]
     fn identical_phase_refusals_are_each_reported_without_disabling_the_callback() {

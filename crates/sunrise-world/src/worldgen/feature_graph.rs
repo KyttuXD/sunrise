@@ -123,8 +123,6 @@ pub enum FeatureExecutionError<E> {
     SimpleBlock(super::simple_block::SimpleBlockError<E>),
     Random(InvalidBound),
     Query(PlacementQueryError),
-    WorkLimit,
-    InvalidPendingIndex,
     /// A block-state transition required by a feature is absent from the registry.
     InvalidState,
 }
@@ -152,8 +150,6 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::SimpleBlock(e) => e.fmt(f),
             Self::Random(e) => e.fmt(f),
             Self::Query(e) => e.fmt(f),
-            Self::WorkLimit => f.write_str("feature graph work limit exceeded"),
-            Self::InvalidPendingIndex => f.write_str("invalid pending modifier index"),
             Self::InvalidState => f.write_str("feature block state outside registry"),
         }
     }
@@ -170,8 +166,6 @@ impl<E> From<FeaturePlacementError<Self>> for FeatureExecutionError<E> {
             FeaturePlacementError::Feature(e) => e,
             FeaturePlacementError::Random(e) => Self::Random(e),
             FeaturePlacementError::World(e) => Self::Query(e),
-            FeaturePlacementError::WorkLimit => Self::WorkLimit,
-            FeaturePlacementError::InvalidPendingIndex => Self::InvalidPendingIndex,
         }
     }
 }

@@ -1,5 +1,6 @@
 use super::super::native_structure_types::book_example;
 use super::*;
+use mod_api::FeatureError;
 use sunrise_core::random::LegacyRandom;
 use sunrise_world::registry::BlockStateId;
 use sunrise_world::worldgen::mod_features::ModFeatureRandom;
@@ -208,7 +209,7 @@ fn block_entity_data_must_fit_its_block_and_a_registry_is_required() {
             &*config,
         );
         assert_eq!(
-            placed.unwrap_err().to_string(),
+            placed.unwrap_err(),
             "this world has no block registry for mod features"
         );
     })

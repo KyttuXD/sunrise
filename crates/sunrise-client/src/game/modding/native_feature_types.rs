@@ -4,7 +4,7 @@ use super::native_worldgen::WorkerResources;
 use mod_api::__private::game::CallbackOwner;
 use mod_api::{
     BlockKey, BlockMetadata, BlockState, BlockUpdateFlags, DatapackEntry, DatapackField,
-    FeatureContext, FeatureError, FeatureType, HeightmapType, RandomSource,
+    FeatureContext, FeatureType, HeightmapType, RandomSource,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -168,18 +168,14 @@ impl ModFeatureType for Adapter {
         random: &mut dyn ModFeatureRandom,
         origin: [i32; 3],
         config: &(dyn Any + Send + Sync),
-    ) -> Result<bool, FeatureError> {
-        let Some(registry) = target.registry() else {
-            return Err(FeatureError::new(std::io::Error::other(
-                "this world has no block registry for mod features",
-            )));
-        };
-        let config = config.downcast_ref::<DatapackEntry>().ok_or_else(|| {
-            FeatureError::new(std::io::Error::other(
-                "config was not decoded by this adapter",
-            ))
-        })?;
-        let worker = WorkerResources::get(registry).map_err(FeatureError::new)?;
+    ) -> Result<bool, String> {
+        let registry = target
+            .registry()
+            .ok_or("this world has no block registry for mod features")?;
+        let config = config
+            .downcast_ref::<DatapackEntry>()
+            .ok_or("config was not decoded by this adapter")?;
+        let worker = WorkerResources::get(registry).map_err(|error| error.to_string())?;
         let mut context = Placing {
             target,
             mod_id: self.owner.id(),
@@ -189,9 +185,9 @@ impl ModFeatureType for Adapter {
             config,
         };
         // The owner reports panics and phase refusals itself; don't report them again as
-        // returned FeatureErrors. Only the mod's typed result reaches the placement caller.
+        // returned FeatureErrors. Only an engine-owned diagnostic reaches the caller.
         self.owner
-            .call("feature type", "FeatureType::place", || {
+            .call_with_error("feature type", "FeatureType::place", || {
                 self.inner.place(&mut context, origin)
             })
             .unwrap_or(Ok(false))

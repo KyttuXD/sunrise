@@ -4,7 +4,7 @@ use sunrise_world::{
     worldgen::{
         anchor::WorldGenerationContext,
         block_predicate::BlockPredicate,
-        placement::{PlacementContext, PlacementError, PlacementModifier, PlacementQueryError},
+        placement::{PlacementContext, PlacementModifier, PlacementQueryError},
     },
 };
 struct UnboundedWorld(usize);
@@ -27,12 +27,12 @@ impl PlacementContext for UnboundedWorld {
     }
 }
 #[test]
-fn directly_constructed_scans_share_predicate_work_budget() {
+fn environment_scan_checks_every_configured_step_without_a_draw() {
     let scan = PlacementModifier::EnvironmentScan {
         upwards: true,
         target: BlockPredicate::Not(Box::new(BlockPredicate::True)),
         allowed: BlockPredicate::True,
-        max_steps: i32::MAX,
+        max_steps: 32,
     };
     let mut world = UnboundedWorld(0);
     let mut random = LegacyRandom::new(1);
@@ -40,18 +40,15 @@ fn directly_constructed_scans_share_predicate_work_budget() {
     let result = scan.modify_in(
         &mut world,
         &mut random,
-        [0, i32::MAX, 0],
+        [0, 0, 0],
         |_, _| -> Result<(), ()> { panic!("false target must not emit") },
     );
-    assert!(matches!(
-        result,
-        Err(PlacementError::World(PlacementQueryError::WorkLimit))
-    ));
-    assert!(world.0 > 0 && world.0 < 65536);
+    assert_eq!(result.ok(), Some(()));
+    assert_eq!(world.0, 32);
     assert_eq!(random.next_long(), expected.next_long());
 }
 #[test]
-fn predicate_trees_share_decode_and_evaluation_budgets() {
+fn predicate_evaluation_does_not_limit_visits_to_the_decode_budget() {
     let leaf = r#"{"type":"true"}"#;
     let branch = format!(
         r#"{{"type":"all_of","predicates":[{}]}}"#,
@@ -66,14 +63,11 @@ fn predicate_trees_share_decode_and_evaluation_budgets() {
         BlockPredicate::All(vec![BlockPredicate::True; 256]);
         256
     ]);
-    assert!(matches!(
-        tree.test(&mut UnboundedWorld(0), [0; 3]),
-        Err(PlacementQueryError::WorkLimit)
-    ));
+    assert!(tree.test(&mut UnboundedWorld(0), [0; 3]).unwrap());
 }
 
 #[test]
-fn oversized_volume_keeps_early_exit_and_bounds_total_work() {
+fn volume_keeps_early_exit() {
     let mut world = UnboundedWorld(0);
     let volume = |predicate| BlockPredicate::Volume {
         min: [i32::MIN; 3],
@@ -85,8 +79,4 @@ fn oversized_volume_keeps_early_exit_and_bounds_total_work() {
             .test(&mut world, [0; 3])
             .unwrap()
     );
-    assert!(matches!(
-        volume(BlockPredicate::True).test(&mut world, [0; 3]),
-        Err(PlacementQueryError::WorkLimit)
-    ));
 }

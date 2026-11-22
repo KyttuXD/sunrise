@@ -110,7 +110,7 @@ impl ModFeatureType for Test {
         random: &mut dyn ModFeatureRandom,
         origin: [i32; 3],
         config: &(dyn Any + Send + Sync),
-    ) -> Result<bool, FeatureError> {
+    ) -> Result<bool, String> {
         let [x, y, z] = origin;
         match self.0 {
             Kind::Marks => {
@@ -127,7 +127,7 @@ impl ModFeatureType for Test {
             }
             Kind::Fails => {
                 target.set_block(origin, BlockStateId(2), 3);
-                Err(FeatureError::new(std::io::Error::other("no room")))
+                Err("no room".into())
             }
             Kind::Reads => {
                 let read_all = (0..70_000).all(|_| target.block(origin) == Some(BlockStateId(0)));
@@ -151,7 +151,7 @@ impl ModFeatureType for Test {
                 assert!(target.set_block(origin, BlockStateId(5), 3));
                 assert!(target.set_block_entity(origin, chest));
                 if calls == 2 {
-                    Err(FeatureError::new(std::io::Error::other("second call")))
+                    Err("second call".into())
                 } else {
                     Ok(true)
                 }
@@ -420,7 +420,7 @@ fn immediate_reads_see_the_updated_block_tag_and_height() {
             _: &mut dyn ModFeatureRandom,
             o: [i32; 3],
             _: &(dyn Any + Send + Sync),
-        ) -> Result<bool, FeatureError> {
+        ) -> Result<bool, String> {
             let [x, y, z] = o;
             assert_eq!(t.block_in_tag(o, "minecraft:dirt"), Some(false));
             assert_eq!(t.height(HeightmapType::WorldSurfaceWg, x, z), Some(0));

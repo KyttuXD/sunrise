@@ -353,11 +353,11 @@ mod tests {
             _: &mut dyn crate::worldgen::mod_features::ModFeatureRandom,
             origin: [i32; 3],
             _: &(dyn std::any::Any + Send + Sync),
-        ) -> Result<bool, mod_api::FeatureError> {
+        ) -> Result<bool, String> {
             let chest = target
                 .registry()
                 .and_then(|registry| registry.default_state("minecraft:chest"))
-                .ok_or_else(|| mod_api::FeatureError::new(std::io::Error::other("no chest")))?;
+                .ok_or("no chest")?;
             let nbt = sunrise_core::nbt::Compound::from([(
                 "id".into(),
                 sunrise_core::nbt::Tag::String("minecraft:chest".into()),
