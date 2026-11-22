@@ -354,7 +354,11 @@ fn compile(
             say(question).is_ok() && answer(&mut **asked.borrow_mut())
         })
     };
-    let (binary, libraries) = prebuilt::compile(
+    let prebuilt::Built {
+        binary,
+        libraries,
+        catalog,
+    } = prebuilt::compile(
         &plan.toolchain,
         &plan.package,
         &crate::root().join("prebuilt-build"),
@@ -372,7 +376,6 @@ fn compile(
             });
         },
     )?;
-    let catalog = crate::internals::Catalog::read(&plan.package.api)?;
     let mut internals = BTreeMap::new();
     for &index in &resolution.order {
         let manifest = &mods[index].manifest;

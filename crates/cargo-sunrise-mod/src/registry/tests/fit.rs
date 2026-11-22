@@ -43,7 +43,12 @@ pub(super) fn sdk(
     for (name, body) in [
         (
             build_data::FUNCTIONS,
-            json!({"crates": {}, "functions": functions, "refused": {}}),
+            json!({
+                "crates": {"sunrise_client": {
+                    "library": "sunrise_client", "modules": {"sunrise_client::game": []},
+                }},
+                "functions": functions, "refused": {},
+            }),
         ),
         (build_data::INTERNALS, json!({"internals": []})),
         (build_data::LOOPS, json!({"loops": []})),

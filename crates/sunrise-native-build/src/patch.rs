@@ -5,7 +5,7 @@
 //! against the prebuilt game and the mods, and the generated `main` installs each copy through
 //! its point's replacement slot. What can't take this route is refused by name; nothing here
 //! falls back to compiling the game.
-use super::{Bundle, MixinsIdentity, api, prebuilt::Identity};
+use super::{Bundle, MixinsIdentity, api, game_uses, prebuilt::Identity};
 use crate::host::trf;
 use crate::rust::Toolchain;
 use std::collections::HashMap;
@@ -262,30 +262,22 @@ impl Prepared<'_> {
 /// are asked, from the game's `loops.json`. A row naming no published loop, and a mixin that
 /// replaces or redirects a filled loop's entry (anything but `HEAD` and `RETURN`, which compose
 /// around the loop), are refused by name.
-fn loop_slots(game: &Path, bundles: &[&Bundle]) -> Result<Vec<api_gen::patch::LoopSlots>, String> {
+fn loop_slots(
+    game: &Path,
+    commit: &str,
+    bundles: &[&Bundle],
+) -> Result<Vec<api_gen::patch::LoopSlots>, String> {
     use sunrise_mod_package::manifest::mixin::Kind;
-    let rows: Vec<(&Bundle, &sunrise_mod_package::manifest::loops::Loop)> = bundles
+    let published =
+        game_uses::published_loops(game, commit).map_err(|e| format!("E_MIXIN_INDEX: {e}"))?;
+    let mut ordered: Vec<_> = bundles
         .iter()
         .flat_map(|bundle| bundle.native().r#loop.iter().map(move |row| (*bundle, row)))
         .collect();
-    let path = game.join(api_gen::loops::FILE);
-    // A game built before published loops has no list, and so no loop a row can name.
-    #[derive(serde::Deserialize)]
-    struct Loops {
-        loops: Vec<api_gen::loops::PublishedLoop>,
-    }
-    let published = match fs::read_to_string(&path) {
-        Ok(text) => {
-            sunrise_mod_package::build_data::read::<Loops>(api_gen::loops::FILE, &text)
-                .map_err(|e| format!("{}: {e}", path.display()))?
-                .1
-                .loops
-        }
-        Err(_) => Vec::new(),
-    };
     let mut refusals = Vec::new();
     // A loop with a mixin on its function is copied with it, slots or none.
     let mut filled: Vec<api_gen::patch::LoopSlots> = published
+        .entries
         .iter()
         .filter(|l| {
             let generic = l.generic_target();
@@ -298,25 +290,17 @@ fn loop_slots(game: &Path, bundles: &[&Bundle]) -> Result<Vec<api_gen::patch::Lo
             slots: Vec::new(),
         })
         .collect();
-    let mut ordered = rows;
     ordered.sort_by(|(a, ra), (b, rb)| {
         (ra.priority, &a.manifest.id, &ra.id).cmp(&(rb.priority, &b.manifest.id, &rb.id))
     });
     for (bundle, row) in ordered {
         let id = &bundle.manifest.id;
-        let Some(found) = published.iter().find(|l| l.name == row.name) else {
-            let known: Vec<&str> = published.iter().map(|l| l.name.as_str()).collect();
-            refusals.push(format!(
-                "E_LOOP_UNKNOWN: {id}:{}: the game publishes no loop `{}`; its loops: {}",
-                row.id,
-                row.name,
-                if known.is_empty() {
-                    "none".to_owned()
-                } else {
-                    known.join(", ")
-                }
-            ));
-            continue;
+        let found = match published.require(id, row) {
+            Ok(found) => found,
+            Err(refusal) => {
+                refusals.push(refusal);
+                continue;
+            }
         };
         let path = bundle.dir.join(&row.helper);
         let helper = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -368,30 +352,6 @@ fn loop_slots(game: &Path, bundles: &[&Bundle]) -> Result<Vec<api_gen::patch::Lo
     }
 }
 
-/// The game build's function index (`functions.json`), from its SDK at `game`: where each function
-/// a row may target is in the source, and whether it can be copied. With no index for this build
-/// nothing is copied: the source is never walked instead.
-fn function_index(game: &Path, commit: &str) -> Result<api_gen::functions::FunctionIndex, String> {
-    use api_gen::functions::FILE;
-    let path = game.join(FILE);
-    let text = fs::read_to_string(&path).map_err(|e| {
-        format!(
-            "E_MIXIN_INDEX: {}: {e}: the game build's SDK has no function index, so no function can be copied; fetch the SDK again",
-            path.display()
-        )
-    })?;
-    let (build, index): (_, api_gen::functions::FunctionIndex) =
-        sunrise_mod_package::build_data::read(FILE, &text)
-            .map_err(|e| format!("E_MIXIN_INDEX: {e}"))?;
-    if build.commit != commit {
-        return Err(format!(
-            "E_MIXIN_INDEX: {FILE} describes game build {}, not {commit}; fetch the SDK again",
-            build.commit
-        ));
-    }
-    index.checked().map_err(|e| format!("E_MIXIN_INDEX: {e}"))
-}
-
 /// Copies, generates and transforms the patch crates for `projects` into `out`, without
 /// compiling them; `None` when no mod has a mixin, module, bridge or loop.
 pub fn prepare<'a>(
@@ -417,7 +377,9 @@ pub fn prepare<'a>(
     if bundles.is_empty() {
         return Ok(None);
     }
-    let loops = loop_slots(game, &bundles)?;
+    let loops = loop_slots(game, sdk.commit(), &bundles)?;
+    let index =
+        game_uses::function_index(game, sdk.commit()).map_err(|e| format!("E_MIXIN_INDEX: {e}"))?;
     let requests: Vec<(String, String, String)> = bundles
         .iter()
         .flat_map(|bundle| {
@@ -442,7 +404,6 @@ pub fn prepare<'a>(
     };
     let source = super::source(sdk.commit())?;
     let started = std::time::Instant::now();
-    let index = function_index(game, sdk.commit())?;
     // A filled loop's entry, or one whose loop function has rows, is copied like a mixin's target,
     // with the loop's body.
     let targets: Vec<String> = rows
@@ -739,44 +700,69 @@ mod refusal_tests {
     #[test]
     fn a_missing_or_foreign_function_index_is_refused_by_name() {
         let game = tempfile::tempdir().unwrap();
-        let commit = "c".repeat(40);
-        let error = super::function_index(game.path(), &commit).unwrap_err();
+        let commit = crate::tests::A;
+        let read = || super::game_uses::function_index(game.path(), commit);
+        let error = read().unwrap_err().to_string();
         assert!(
-            error.starts_with("E_MIXIN_INDEX: ") && error.contains("no function index"),
+            error.contains("functions.json") && error.contains("fetch the SDK again"),
             "{error}"
         );
-        let write = |commit: &str| {
-            std::fs::write(
-                game.path().join("functions.json"),
-                format!(
-                    r#"{{"schema":1,"build":{{"commit":"{commit}"}},"crates":{{}},"functions":{{}},"refused":{{}}}}"#
-                ),
-            )
-            .unwrap();
+        let write = |commit, functions| {
+            let index = serde_json::json!({
+                "schema": 1, "build": {"commit": commit},
+                "crates": {"sunrise_client": {
+                    "library": "sunrise_client", "modules": {"sunrise_client::game": []},
+                }},
+                "functions": functions, "refused": {},
+            });
+            std::fs::write(game.path().join("functions.json"), index.to_string()).unwrap();
         };
-        write(&"d".repeat(40));
-        let error = super::function_index(game.path(), &commit).unwrap_err();
+        write(crate::tests::B, serde_json::json!({}));
+        let error = read().unwrap_err().to_string();
+        assert!(error.contains("functions.json"), "{error}");
         assert!(
-            error.starts_with("E_MIXIN_INDEX: functions.json describes game build dddd"),
+            error.contains(crate::tests::B) && error.contains(commit),
             "{error}"
         );
-        write(&commit);
-        assert_eq!(
-            super::function_index(game.path(), &commit).unwrap(),
-            Default::default()
-        );
+        write(commit, serde_json::json!({}));
+        assert!(read().unwrap().functions.is_empty());
         // A tampered index whose module the copy would write as Rust is refused, not a panic.
+        write(
+            commit,
+            serde_json::json!({"sunrise_client::game::f": {
+                "module": "sunrise_client::not a path!",
+                "file": "crates/sunrise-client/src/game.rs", "span": [0, 1],
+                "signature_hash": "", "sha256": "",
+            }}),
+        );
+        let error = read().unwrap_err().to_string();
+        assert!(error.contains("functions.json"), "{error}");
+        assert!(
+            error.contains("sunrise_client::game::f")
+                && error.contains("sunrise_client::not a path!"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn patching_refuses_a_missing_loop_catalog_but_accepts_an_empty_one() {
+        let game = tempfile::tempdir().unwrap();
+        let commit = crate::tests::A;
+        let error = super::loop_slots(game.path(), commit, &[]).err().unwrap();
+        assert!(error.starts_with("E_MIXIN_INDEX:"), "{error}");
+        assert!(
+            error.contains("loops.json") && error.contains("fetch the SDK again"),
+            "{error}"
+        );
         std::fs::write(
-            game.path().join("functions.json"),
-            format!(
-                r#"{{"schema":1,"build":{{"commit":"{commit}"}},"crates":{{"sunrise_client":{{"library":"sunrise_client","modules":{{"sunrise_client::game":[]}}}}}},"functions":{{"sunrise_client::game::f":{{"module":"sunrise_client::not a path!","file":"crates/sunrise-client/src/game.rs","span":[0,1],"signature_hash":"","sha256":""}}}},"refused":{{}}}}"#
-            ),
+            game.path().join("loops.json"),
+            format!(r#"{{"schema":1,"build":{{"commit":"{commit}"}},"loops":[]}}"#),
         )
         .unwrap();
-        let error = super::function_index(game.path(), &commit).unwrap_err();
         assert!(
-            error.starts_with("E_MIXIN_INDEX: functions.json: function `sunrise_client::game::f` is in `sunrise_client::not a path!`"),
-            "{error}"
+            super::loop_slots(game.path(), commit, &[])
+                .unwrap()
+                .is_empty()
         );
     }
 

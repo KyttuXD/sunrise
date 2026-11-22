@@ -194,7 +194,7 @@ A row the build can't apply stops the build, naming the mod, the row and the rea
 | | ``<target>: it names `<path>`, which crosses a non-public `use` in `<module>` `` | The signature or body uses a re-export the prebuilt game keeps private. Target a caller or callee that can be copied. |
 | | ``<target>: it names `<path>`, which reaches the non-public crate-root function `<name>` `` | The prebuilt game keeps that function private. Target a caller or callee that can be copied. |
 | `E_MIXIN_SOURCE` | `<target>: <why>`, such as `<file> differs from this game build's functions.json` | The game's source could not be read, or is not the build's: retry the build. |
-| `E_MIXIN_INDEX` | `<path>: …: the game build's SDK has no function index …`, or `functions.json describes game build <commit>, not <commit>` | The SDK on disk is damaged or another build's: fetch the SDK again. |
+| `E_MIXIN_INDEX` | `functions.json` or `loops.json` is missing, invalid, or describes a different build | Fetch the SDK for the build again. |
 | `E_OVERWRITE_CONFLICT` | from the tool: `OVERWRITE must be exclusive on <function>; competing injections: <mod>/<row>, …`; it names every row, of any mods, on the function | For competing rows of one mod, remove one of those rows. For rows of different mods, keep only one of those mods installed. |
 | `E_FINGERPRINT` | from the tool: `original function changed; expected <hash>, got <hash>`, or for an `OVERWRITE` with none: ``OVERWRITE requires the `fingerprint` of the function it replaces; expected <none>, got <hash>`` | Check the game's new function still suits your replacement, then set `fingerprint` to the `got` value. |
 | `E_LOOP_ENTRY_REPLACED` | see [Published loops](3-loops.md#errors) | |

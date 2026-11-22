@@ -14,9 +14,11 @@ const BIN: &str = "bin";
 
 /// Compile the mods in dependency order against API metadata and the runtime's dynamic
 /// closure. Return the unchanged executable and its runtime libraries, followed by mod dylibs.
+#[allow(clippy::too_many_arguments)]
 pub fn compile(
     rust: &dyn Toolchain,
     package: &prebuilt::Package,
+    sdk: &prebuilt::Identity,
     out: &Path,
     projects: &[api::Project<'_>],
     declared: &[Vec<dependencies::Dependency>],
@@ -24,7 +26,6 @@ pub fn compile(
     on_mod: &dyn Fn(&str, usize, usize),
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let (runtime, api) = (package.runtime.as_path(), package.api.as_path());
-    let sdk = prebuilt::identity(runtime)?;
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let deps = api.join("deps");
     let host = api.join("host");
@@ -61,7 +62,7 @@ pub fn compile(
         )?;
         rlibs.insert(project.bundle.manifest.id.as_str(), rlib);
     }
-    let mut installed = prebuilt::runtime_libraries(rust, &sdk, runtime)?;
+    let mut installed = prebuilt::runtime_libraries(rust, sdk, runtime)?;
     for &index in &resolution.order {
         installed.push(rlibs[projects[index].bundle.manifest.id.as_str()].clone());
     }
