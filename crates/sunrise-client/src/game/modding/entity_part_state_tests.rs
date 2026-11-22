@@ -44,8 +44,8 @@ static SCRATCH: AttachmentType<i32> = AttachmentType {
 struct Charge;
 #[mod_api::sunrise_part]
 impl EntityPart for Charge {
-    fn register_goals(&self, goals: &mut mod_api::GoalRegistrar<'_>) {
-        let _ = goals;
+    fn register_goals(&self, event: &mut mod_api::RegisterGoalsEvent<'_, '_>) {
+        let _ = event;
     }
 }
 impl EntityPartState for Charge {

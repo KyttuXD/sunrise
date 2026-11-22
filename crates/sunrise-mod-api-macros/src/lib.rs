@@ -169,40 +169,6 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
     let id = format_ident!("HookId");
     let ids = format_ident!("hook_ids");
     let subscribed_name = format_ident!("{}", part.unwrap_or("subscribed"));
-    // Entity parts (#1077) carry plain methods beside their scoped hooks
-    // (#792): the goal, behavior and spawn-size registrars are not hooks, so
-    // their names subscribe nothing.
-    if name == "EntityPart" {
-        const ENTITY_PART_PLAIN: [&str; 5] = [
-            "register_goals",
-            "register_behaviors",
-            "spawn_cluster_size",
-            "is_shearable",
-            "on_sheared",
-        ];
-        let plain: Vec<bool> = methods
-            .iter()
-            .map(|method| ENTITY_PART_PLAIN.contains(&method.to_string().as_str()))
-            .collect();
-        let hooked: Vec<_> = methods
-            .iter()
-            .zip(&plain)
-            .filter(|(_, plain)| !*plain)
-            .map(|(method, _)| method)
-            .collect();
-        let hooked_cfgs: Vec<_> = cfgs
-            .iter()
-            .zip(&plain)
-            .filter(|(_, plain)| !*plain)
-            .map(|(cfgs, _)| cfgs)
-            .collect();
-        implementation.items.push(syn::parse_quote! {
-            fn #subscribed_name(&self) -> &'static [Option<mod_api::#id>] {
-                &[#(#(#hooked_cfgs)* mod_api::#ids::#hooked),*]
-            }
-        });
-        return quote!(#implementation).into();
-    }
     let subscribed = {
         syn::parse_quote! {
             fn #subscribed_name(&self) -> &'static [Option<mod_api::#id>] {

@@ -854,6 +854,50 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
     parts: &'a [Attached<P>],
     hook: &'static str,
 ) -> impl Iterator<Item = (&'static str, &'a P)> {
+    entered_part_entries(hook_id, parts, hook).map(|attached| (attached.mod_id, &*attached.part))
+}
+
+/// Like [`entered_parts`], also yielding the owning part's type name for registration labels.
+pub(crate) fn entered_parts_with_owner<'a, P: ?Sized>(
+    hook_id: generated::HookId,
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'static str, &'a P)> {
+    entered_part_entries(hook_id, parts, hook)
+        .map(|attached| (attached.mod_id, attached.type_name, &*attached.part))
+}
+
+/// Like [`entered_parts`], also yielding the registration slot for a paired follow-up hook.
+pub(crate) fn entered_parts_with_slot<'a, P: ?Sized>(
+    hook_id: generated::HookId,
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, (usize, usize), &'a P)> {
+    entered_part_entries(hook_id, parts, hook).map(|attached| {
+        (
+            attached.mod_id,
+            (attached.mod_index, attached.order),
+            &*attached.part,
+        )
+    })
+}
+
+/// Find the single subscription at this slot, independently of its quarantine state.
+pub(crate) fn part_slot<P: ?Sized>(
+    parts: &[Attached<P>],
+    slot: (usize, usize),
+) -> Option<&[Attached<P>]> {
+    parts
+        .iter()
+        .find(|attached| (attached.mod_index, attached.order) == slot)
+        .map(std::slice::from_ref)
+}
+
+fn entered_part_entries<'a, P: ?Sized>(
+    hook_id: generated::HookId,
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = &'a Attached<P>> {
     let mut guard = crate::dispatch_scope::ModGuard::empty();
     let scope = crate::dispatch_scope::snapshot();
     parts
@@ -871,7 +915,7 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
                     part: Some(attached.type_name),
                 },
             );
-            (attached.mod_id, &*attached.part)
+            attached
         })
 }
 

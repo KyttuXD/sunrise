@@ -7,7 +7,7 @@
 //!
 //! ```no_run
 //! # use mod_api::{
-//! #     Activity, Behavior, BehaviorCx, BehaviorRegistrar, EntityPart, Hooks,
+//! #     Activity, Behavior, BehaviorCx, EntityPart, Hooks, RegisterBehaviorsEvent,
 //! #     Registrar, RegistrationContext,
 //! # };
 //! #[derive(Default)]
@@ -16,8 +16,8 @@
 //! struct VillagerBehaviors;
 //! #[mod_api::sunrise_part]
 //! impl EntityPart for VillagerBehaviors {
-//!     fn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {
-//!         behaviors.add(Activity::Idle, 5, 40, 80, &[], Stroll::default());
+//!     fn register_behaviors(&self, event: &mut RegisterBehaviorsEvent<'_, '_>) {
+//!         let _ = event.behaviors.add(Activity::Idle, 5, 40, 80, &[], Stroll::default());
 //!     }
 //! }
 //!
@@ -219,6 +219,13 @@ impl<'a> BehaviorRegistrar<'a> {
             mod_id,
             part,
         }
+    }
+    pub(crate) fn route_kind(&self) -> &str {
+        self.mob_id
+    }
+    pub(crate) fn set_owner(&mut self, mod_id: &'static str, part: &'static str) {
+        self.mod_id = mod_id;
+        self.part = part;
     }
     /// Add `behavior` to the brain: it starts in `activity` lanes at
     /// `priority`, runs a duration drawn from the level random in

@@ -1226,29 +1226,31 @@ impl Game<'_> {
         spawner: Option<mod_api::SpawnSource>,
         vanilla: u32,
     ) -> Option<u32> {
-        if !mod_api::__private::has_entity_parts() {
+        if !mod_api::__private::has_scoped_hook(mod_api::HookId::SpawnClusterSize)
+            || !mod_api::__private::entity_part_hooked(
+                mod_api::HookId::SpawnClusterSize,
+                "spawn_cluster_size",
+                &mob.kind.id,
+            )
+        {
             return None;
         }
-        let parts = mod_api::__private::entity_parts();
-        let kind = mob.kind.id.clone();
-        let list = parts.entity_parts(&kind);
-        if list.is_empty() {
-            return None;
-        }
+        let kind = Arc::clone(&mob.kind);
         let at = [mob.position.x, mob.position.y, mob.position.z];
-        self.lend_unspawned(&kind, at, Some(mob), |lent, _| {
-            list.iter().find_map(|attached| {
-                let _guard =
-                    mod_api::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
-                        id: attached.mod_id(),
-                        hook: "spawn_cluster_size",
-                        part: Some(attached.type_name()),
-                    });
-                attached
-                    .part()
-                    .spawn_cluster_size(self, lent, reason, spawner, vanilla)
-            })
-        })
+        let mut limit = None;
+        self.lend_unspawned(&kind.id, at, Some(mob), |lent, _| {
+            self.native_spawn_cluster_size(
+                mod_api::__private::SpawnClusterSizeCall {
+                    mob: lent,
+                    reason,
+                    spawner,
+                    vanilla,
+                    limit: &mut limit,
+                },
+                &kind.id,
+            );
+        });
+        limit
     }
     /// The shared finalization decision for a mob type the game keeps apart
     /// from mobs (the dragon), before the entity joins the level: its lend has

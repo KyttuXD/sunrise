@@ -283,17 +283,25 @@ impl ModEntry {
     }
 }
 trait Registrar {}
-/// The goal registrar of the generated `EntityPart`, as the fixture sees
-/// it: no methods, its type is all the generated trait asks of the scope.
-#[expect(dead_code)]
+/// The goal registrar of the generated `EntityPart`, as the fixture sees it.
 struct GoalRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
-/// The behavior registrar of the generated `EntityPart` (#824), as the
-/// fixture sees it: like [`GoalRegistrar`], only its type is asked for.
-#[expect(dead_code)]
+impl GoalRegistrar<'_> {
+    fn route_kind(&self) -> &str {
+        "test:mob"
+    }
+    fn set_owner(&mut self, _: &'static str, _: &'static str) {}
+}
+/// The behavior registrar of the generated `EntityPart` (#824), as the fixture sees it.
 struct BehaviorRegistrar<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
+}
+impl BehaviorRegistrar<'_> {
+    fn route_kind(&self) -> &str {
+        "test:mob"
+    }
+    fn set_owner(&mut self, _: &'static str, _: &'static str) {}
 }
 /// Scope fixtures install their own Parts. Block attachments retain their API keys;
 /// other scopes keep their existing single-target fixture tables.
@@ -427,6 +435,32 @@ fn entered_parts<'a, P: ?Sized>(
                 && !runtime::poisoned(hook_id, "part")
         })
         .map(|part| ("part", part))
+}
+fn entered_parts_with_owner<'a, P: ?Sized>(
+    hook: generated::HookId,
+    parts: &'a [&'a P],
+    name: &'static str,
+) -> impl Iterator<Item = (&'static str, &'static str, &'a P)> {
+    entered_parts(hook, parts, name).map(|(id, part)| (id, "Part", part))
+}
+fn entered_parts_with_slot<'a, P: ?Sized>(
+    _: generated::HookId,
+    parts: &'a [&'a P],
+    _: &'static str,
+) -> impl Iterator<Item = (&'static str, (usize, usize), &'a P)> {
+    let disabled = DISABLED_BLOCK_PART.get();
+    parts
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(move |(_, part)| disabled != Some(std::ptr::from_ref(*part).cast()))
+        .map(|(order, part)| ("part", (0, order), part))
+}
+fn part_slot<'a, P: ?Sized>(parts: &'a [&'a P], slot: (usize, usize)) -> Option<&'a [&'a P]> {
+    match slot {
+        (0, order) => parts.get(order).map(std::slice::from_ref),
+        _ => None,
+    }
 }
 
 #[test]

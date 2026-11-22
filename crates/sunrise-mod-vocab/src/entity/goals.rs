@@ -6,7 +6,7 @@
 //!
 //! ```no_run
 //! # use mod_api::{
-//! #     EntityPart, Goal, GoalContext, GoalFlags, GoalRegistrar, Hooks, Registrar,
+//! #     EntityPart, Goal, GoalContext, GoalFlags, Hooks, RegisterGoalsEvent, Registrar,
 //! #     RegistrationContext,
 //! # };
 //! # use std::sync::atomic::{AtomicU32, Ordering};
@@ -16,8 +16,8 @@
 //! struct ZombieGoals;
 //! #[mod_api::sunrise_part]
 //! impl EntityPart for ZombieGoals {
-//!     fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-//!         goals.add_goal(7, Stare::default());
+//!     fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+//!         event.goals.add_goal(7, Stare::default());
 //!     }
 //! }
 //!
@@ -145,21 +145,36 @@ pub trait Goal: Send + Sync + 'static {
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct GoalRegistrar<'a> {
     inner: &'a mut dyn GoalRegistrarBackend,
+    mod_id: &'static str,
+    part: &'static str,
 }
 impl<'a> GoalRegistrar<'a> {
     // hidden: a game-side helper, not part of the mod surface
     #[doc(hidden)]
     pub fn new(inner: &'a mut dyn GoalRegistrarBackend) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            mod_id: "",
+            part: "",
+        }
+    }
+    pub(crate) fn route_kind(&self) -> &str {
+        self.inner.mob_id()
+    }
+    pub(crate) fn set_owner(&mut self, mod_id: &'static str, part: &'static str) {
+        self.mod_id = mod_id;
+        self.part = part;
     }
     /// `GoalSelector.addGoal(priority, goal)` on the mob's goal selector.
     pub fn add_goal<P: Goal>(&mut self, priority: i32, goal: P) {
-        self.inner.add_goal(priority, Box::new(goal));
+        self.inner
+            .add_goal(self.mod_id, self.part, priority, Box::new(goal));
     }
     /// `GoalSelector.addGoal` on the mob's target selector: the
     /// nearest-hurt-target kinds, as vanilla's second selector holds them.
     pub fn add_target_goal<P: Goal>(&mut self, priority: i32, goal: P) {
-        self.inner.add_target_goal(priority, Box::new(goal));
+        self.inner
+            .add_target_goal(self.mod_id, self.part, priority, Box::new(goal));
     }
     /// The mob being built, as far as construction goes: its entity type, the
     /// datum vanilla's per-species `registerGoals` branches on.
@@ -192,10 +207,22 @@ impl<'a> RegistrarMob<'a> {
 // hidden: a game-side helper, not part of the mod surface
 #[doc(hidden)]
 pub trait GoalRegistrarBackend {
-    /// `GoalRegistrar::add_goal`, the built goal boxed.
-    fn add_goal(&mut self, priority: i32, goal: Box<dyn Goal>);
-    /// `GoalRegistrar::add_target_goal`, the built goal boxed.
-    fn add_target_goal(&mut self, priority: i32, goal: Box<dyn Goal>);
+    /// `GoalRegistrar::add_goal`, the built goal boxed with its registering mod and part.
+    fn add_goal(
+        &mut self,
+        mod_id: &'static str,
+        part: &'static str,
+        priority: i32,
+        goal: Box<dyn Goal>,
+    );
+    /// `GoalRegistrar::add_target_goal`, the built goal boxed with its registering mod and part.
+    fn add_target_goal(
+        &mut self,
+        mod_id: &'static str,
+        part: &'static str,
+        priority: i32,
+        goal: Box<dyn Goal>,
+    );
     /// The entity type id of the mob being built.
     fn mob_id(&self) -> &str;
 }
@@ -308,10 +335,22 @@ mod tests {
         targets: Vec<(i32, &'static str)>,
     }
     impl GoalRegistrarBackend for Recording {
-        fn add_goal(&mut self, priority: i32, goal: Box<dyn Goal>) {
+        fn add_goal(
+            &mut self,
+            _: &'static str,
+            _: &'static str,
+            priority: i32,
+            goal: Box<dyn Goal>,
+        ) {
             self.goals.push((priority, goal.name()));
         }
-        fn add_target_goal(&mut self, priority: i32, goal: Box<dyn Goal>) {
+        fn add_target_goal(
+            &mut self,
+            _: &'static str,
+            _: &'static str,
+            priority: i32,
+            goal: Box<dyn Goal>,
+        ) {
             self.targets.push((priority, goal.name()));
         }
         fn mob_id(&self) -> &str {

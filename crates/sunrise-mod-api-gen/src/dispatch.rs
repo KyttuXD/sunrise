@@ -71,6 +71,7 @@ pub(super) fn emit<'a>(
     let mut calls = String::new();
     for hook in hooks {
         let name = hook.name.as_str();
+        let single_part_slot = name == "on_sheared";
         let native = format!("native_{name}");
         let target = hook.target.as_str();
         let is_render = is_render(hook);
@@ -318,6 +319,7 @@ pub(super) fn emit<'a>(
             });
         // A scoped hook's parts: the trait its method goes on, and the lookup
         // of the parts attached to the thing its `key` argument names.
+        let mut entity_kind_param = false;
         let scoped = match &hook.scope {
             None => None,
             Some(scope) => {
@@ -372,11 +374,14 @@ pub(super) fn emit<'a>(
                     ),
                     "& str" if opener_routed => format!("menu_for_opener({key}, block)"),
                     "& str" => format!("{table}(|| Some({key}))"),
-                    "EntityRef" if table == "entity" => {
-                        let host = &host.as_ref().ok_or("entity handle needs a Host")?.0;
-                        format!(
-                            "entity(|| {key}.kind({host}).and_then(super::content::registry_keys::entity_type_name))"
-                        )
+                    "EntityRef" | "UnspawnedMobRef" if table == "entity" => {
+                        entity_kind_param = true;
+                        "entity(|| Some(__entity_kind))".to_owned()
+                    }
+                    "& mut GoalRegistrar < '_ >" | "& mut BehaviorRegistrar < '_ >"
+                        if table == "entity" =>
+                    {
+                        format!("entity(|| Some({key}.route_kind()))")
                     }
                     "BlockEntityRef" if table == "block_entity" => {
                         let host = &host.as_ref().ok_or("block entity handle needs a Host")?.0;
@@ -510,13 +515,21 @@ pub(super) fn emit<'a>(
             })
             .collect();
         // Keep the last accepted API value, not a new clone for every untouched listener.
+        let snapshot_mut = if single_part_slot { "" } else { "mut " };
         let stack_snapshots = stack_outputs
             .iter()
-            .map(|(name, _)| format!("let mut __previous_{name} = {name}.clone();"))
+            .map(|(name, _)| format!("let {snapshot_mut}__previous_{name} = {name}.clone();"))
             .collect::<String>();
-        let stack_after = stack_outputs.iter().map(|(output, _)| format!(
-            "if *{event}.{output} != __previous_{output} {{ match __validate_{output}({event}.{output}) {{ Ok(()) => __previous_{output} = {event}.{output}.clone(), Err(error) => {{ *{event}.{output} = __previous_{output}.clone(); log::warn!(\"mod {{}} hook {name} output {output} refused: {{error:?}}\", super::content::crash::current_native_mod().unwrap_or(\"unknown\")); }} }} }}\n"
-        )).collect::<String>();
+        let stack_after = stack_outputs.iter().map(|(output, _)| {
+            let accepted = if single_part_slot {
+                "()".into()
+            } else {
+                format!("__previous_{output} = {event}.{output}.clone()")
+            };
+            format!(
+                "if *{event}.{output} != __previous_{output} {{ match __validate_{output}({event}.{output}) {{ Ok(()) => {accepted}, Err(error) => {{ *{event}.{output} = __previous_{output}.clone(); log::warn!(\"mod {{}} hook {name} output {output} refused: {{error:?}}\", super::content::crash::current_native_mod().unwrap_or(\"unknown\")); }} }} }}\n"
+            )
+        }).collect::<String>();
         let collected = output
             .as_ref()
             .filter(|_| contract == Contract::Collect && !answered_return);
@@ -614,6 +627,10 @@ pub(super) fn emit<'a>(
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
                 if matches!(&field_ty, Type::Reference(reference) if matches!(*reference.elem, Type::TraitObject(_)))
+                    || matches!(
+                        ty.to_token_stream().to_string().as_str(),
+                        "& mut GoalRegistrar < '_ >" | "& mut BehaviorRegistrar < '_ >"
+                    )
                 {
                     surfaces.push(name.clone());
                 }
@@ -702,6 +719,14 @@ pub(super) fn emit<'a>(
         }
         if panic_signal {
             dispatch_params.push("panicked: &mut bool".into());
+        }
+        let returns_slot = name == "is_shearable";
+        let sets_registrar_owner = matches!(name, "register_goals" | "register_behaviors");
+        if single_part_slot {
+            dispatch_params.push("__part_slot: (usize, usize)".into());
+        }
+        if entity_kind_param {
+            dispatch_params.push("__entity_kind: &str".into());
         }
         let (generics, elided) = match (lifetimes.a, lifetimes.b) {
             (_, true) => ("<'a, 'b>", "<'_, '_>"),
@@ -921,6 +946,10 @@ pub(super) fn emit<'a>(
             }
             if name == "add_pack_finders" {
                 parameter("allow", "impl FnMut(&str) -> bool");
+            }
+            if entity_kind_param {
+                parameter("entity_kind", "&str");
+                passed.push("entity_kind".to_owned());
             }
             let receiver = match hook.receiver {
                 Receiver::Read => "&self",
@@ -1266,7 +1295,10 @@ pub(super) fn emit<'a>(
                 )
             } else if matches!(
                 name,
-                "contents_changed" | "farmland_trample" | "register_configuration_tasks"
+                "contents_changed"
+                    | "farmland_trample"
+                    | "on_sheared"
+                    | "register_configuration_tasks"
             ) {
                 // Let the existing journal see the unwind before invoke catches it.
                 let (host, _) = host.as_ref().unwrap();
@@ -1406,6 +1438,13 @@ pub(super) fn emit<'a>(
             String::new()
         };
         let inert_owner = fresh_name("disabled_owner", &mut used);
+        let empty_return = if returns_slot {
+            "return None;"
+        } else if single_part_slot {
+            "return Ok(());"
+        } else {
+            "return;"
+        };
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => {
                 let output = out.unwrap();
@@ -1518,17 +1557,17 @@ pub(super) fn emit<'a>(
                         format!("super::parts(HookId::{hook_id}, \"{name}\")")
                     };
                     let routing = format!(
-                        "\nif !super::has_part_hook(HookId::{hook_id}) {{ return; }} let {part_table} = {table};"
+                        "\nif !super::has_part_hook(HookId::{hook_id}) {{ {empty_return} }} let {part_table} = {table};"
                     );
                     let table = format!("{part_table}.for_hook(HookId::{hook_id})");
                     if hook.inert.is_some() {
                         let entry = fresh_name("part_entry", &mut used);
                         format!(
-                            "{routing} let Some({entry}) = {table}.and_then(|table| table.{lookup}) else {{ return; }}; let {part_list} = {entry}.parts(); let {inert_owner} = if super::any_mod_disabled() {{ {entry}.disabled_owner_slot() }} else {{ None }};"
+                            "{routing} let Some({entry}) = {table}.and_then(|table| table.{lookup}) else {{ {empty_return} }}; let {part_list} = {entry}.parts(); let {inert_owner} = if super::any_mod_disabled() {{ {entry}.disabled_owner_slot() }} else {{ None }};"
                         )
                     } else {
                         format!(
-                            "{routing} let {part_list} = {table}.map_or(&[][..], |table| table.{lookup}); if {part_list}.is_empty() {{ return; }}"
+                            "{routing} let {part_list} = {table}.map_or(&[][..], |table| table.{lookup}); if {part_list}.is_empty() {{ {empty_return} }}"
                         )
                     }
                 },
@@ -1549,6 +1588,30 @@ pub(super) fn emit<'a>(
                             "break 'dispatch_parts"
                         ),
                     )
+                } else if sets_registrar_owner {
+                    let registrar = hook.scope.as_ref().unwrap().key.as_str();
+                    format!(
+                        "for ({listener_id}, __part_name, {part_item}) in super::entered_parts_with_owner(HookId::{hook_id}, {part_list}, \"{name}\") {{ {event}.{registrar}.set_owner({listener_id}, __part_name); {} }}",
+                        call(&part_item, &listener_id, "continue;", "break"),
+                    )
+                } else if returns_slot {
+                    let answer_call = run(
+                        &listener_id,
+                        "continue;",
+                        &format!("{part_item}.{name}({invoke})"),
+                    );
+                    let o = out.unwrap();
+                    format!(
+                        "for ({listener_id}, __slot, {part_item}) in super::entered_parts_with_slot(HookId::{hook_id}, {part_list}, \"{name}\") {{ if let Some({replacement}) = {answer_call} {{ *{o} = Some({replacement}); return Some(__slot); }} }} None"
+                    )
+                } else if single_part_slot {
+                    format!(
+                        "let Some(__selected) = super::part_slot({part_list}, __part_slot) else {{ return Ok(()); }};
+                         let mut __entered = super::entered_parts(HookId::{hook_id}, __selected, \"{name}\");
+                         let Some(({listener_id}, {part_item})) = __entered.next() else {{ return Err(()); }};
+                         {} Ok(())",
+                        call(&part_item, &listener_id, "return Err(());", ""),
+                    )
                 } else {
                     let part_owner = if collision_owns_panic {
                         "_"
@@ -1568,14 +1631,21 @@ pub(super) fn emit<'a>(
                 o = cancel_out.unwrap()
             ),
             Contract::Cancel => format!(
-                "if *{o} {{ return; }} {lookup} {build} {calls} {write_back}",
+                "if *{o} {{ {empty_return} }} {lookup} {build} {calls} {write_back}",
                 o = out.unwrap()
             ),
             Contract::Replace => format!(
-                "if {o}.is_some() {{ return; }} {lookup} {build} {calls} {write_back}",
+                "if {o}.is_some() {{ {empty_return} }} {lookup} {build} {calls} {write_back}",
                 o = out.unwrap()
             ),
             _ => format!("{lookup} {build} {calls} {write_back}"),
+        };
+        let dispatch_return = if returns_slot {
+            " -> Option<(usize, usize)>"
+        } else if single_part_slot {
+            " -> Result<(), ()>"
+        } else {
+            ""
         };
         let early_return = if scoped.is_some() {
             String::new()
@@ -1625,8 +1695,13 @@ pub(super) fn emit<'a>(
                  #[doc(hidden)] pub fn dispatch_{name}_for({dispatch_signature}, {allow_subscriber}: impl FnMut(&str) -> bool) {{ {unpack}{early_return}\n{body} }}\n"
             ));
         } else {
+            let lints = if single_part_slot {
+                "#[allow(clippy::too_many_arguments, clippy::result_unit_err)] "
+            } else {
+                ""
+            };
             dispatch.push_str(&format!(
-                "#[doc(hidden)] pub fn dispatch_{name}({dispatch_signature}) {{ {unpack}{early_return}\n{body} }}\n"
+                "{lints}#[doc(hidden)] pub fn dispatch_{name}({dispatch_signature}){dispatch_return} {{ {unpack}{early_return}\n{body} }}\n"
             ));
         }
     }

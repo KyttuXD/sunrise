@@ -8,7 +8,8 @@ use super::super::native_entity_refs::tests::with_game;
 use super::tests::zombie;
 use mod_api::{
     Activity, Behavior, BehaviorCx, BehaviorRegistrar, BrainMemory, EntityPart, Hooks,
-    MemoryStatus, ModEntry, RegisteredBehavior, Registrar, RegistrationContext,
+    MemoryStatus, ModEntry, RegisterBehaviorsEvent, RegisteredBehavior, Registrar,
+    RegistrationContext,
 };
 use std::sync::Mutex;
 use sunrise_client::health::DamageLevel;
@@ -137,8 +138,11 @@ fn random_of(level: &mut DamageLevel<'_>) -> (u64, Option<f64>) {
 struct ZombieBehaviors;
 #[mod_api::sunrise_part]
 impl EntityPart for ZombieBehaviors {
-    fn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {
-        if let Err(e) = behaviors.add(Activity::Idle, 5, 40, 80, &[], Probe::still_for(1)) {
+    fn register_behaviors(&self, event: &mut RegisterBehaviorsEvent<'_, '_>) {
+        if let Err(e) = event
+            .behaviors
+            .add(Activity::Idle, 5, 40, 80, &[], Probe::still_for(1))
+        {
             REFUSALS.lock().unwrap().push(e);
         }
     }
@@ -157,10 +161,10 @@ macro_rules! plan_part {
         struct $name;
         #[mod_api::sunrise_part]
         impl EntityPart for $name {
-            fn register_behaviors(&self, behaviors: &mut BehaviorRegistrar<'_>) {
+            fn register_behaviors(&self, event: &mut RegisterBehaviorsEvent<'_, '_>) {
                 for (id, add) in ADDS.lock().unwrap().iter() {
                     if *id == $id {
-                        add(behaviors);
+                        add(event.behaviors);
                     }
                 }
             }

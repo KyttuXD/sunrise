@@ -1,0 +1,20 @@
+ids = [
+    "hook:is_shearable",
+    "hook:on_sheared",
+    "hook:register_behaviors",
+    "hook:register_goals",
+    "hook:spawn_cluster_size",
+    "method:EntityPart::is_shearable",
+    "method:EntityPart::on_sheared",
+    "method:EntityPart::register_behaviors",
+    "method:EntityPart::register_goals",
+    "method:EntityPart::spawn_cluster_size",
+    "trait:EntityPart",
+    "type:IsShearableEvent",
+    "type:OnShearedEvent",
+    "type:RegisterBehaviorsEvent",
+    "type:RegisterGoalsEvent",
+    "type:SpawnClusterSizeEvent",
+]
+why = "Moves the five EntityPart methods (register_goals for vanilla Mob.registerGoals, register_behaviors for LivingEntity.makeBrain, spawn_cluster_size for Mob.getMaxSpawnClusterSize, and is_shearable/on_sheared for NeoForge IShearable.isShearable and IShearable.onSheared) from hand-pasted generator text into scoped catalog hooks. Each moment now subscribes and dispatches through HookId so only EntityParts implementing a moment are called, is_shearable and on_sheared lend shears lazily as ItemStackView<'_> without projecting components unless requested, EntityPart::entity_subscribed no longer carries an empty default, and the sunrise_part macro drops its separate ENTITY_PART_PLAIN denylist."
+migrate = "Update EntityPart implementations to take the generated event structs: register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) using event.goals, register_behaviors(&self, event: &mut RegisterBehaviorsEvent<'_, '_>) using event.behaviors, spawn_cluster_size(&self, host: &dyn Host, event: &mut SpawnClusterSizeEvent) -> Option<u32>, is_shearable(&self, host: &dyn Host, event: &mut IsShearableEvent<'_>) -> Option<bool> reading event.shears: ItemStackView<'_>, and on_sheared(&self, host: &mut dyn ServerHost, event: &mut OnShearedEvent<'_>) pushing drops into event.drops. Annotate every EntityPart impl with #[mod_api::sunrise_part] and rebuild native mods against the updated SDK."

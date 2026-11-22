@@ -6,8 +6,8 @@
 use super::super::creatures;
 use super::super::native_entity_refs::tests::with_game;
 use mod_api::{
-    EntityPart, EntityRef, Goal, GoalContext, GoalFlags, GoalRegistrar, Hooks, LivingRef, ModEntry,
-    Registrar, RegistrationContext,
+    EntityPart, EntityRef, Goal, GoalContext, GoalFlags, Hooks, LivingRef, ModEntry,
+    RegisterGoalsEvent, Registrar, RegistrationContext,
 };
 use std::sync::Mutex;
 use sunrise_client::mobs::{self, Mob, goals::Cx};
@@ -80,9 +80,9 @@ impl Goal for Counter {
 struct ZombieGoals;
 #[mod_api::sunrise_part]
 impl EntityPart for ZombieGoals {
-    fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-        assert_eq!(goals.mob().id(), "minecraft:zombie");
-        goals.add_goal(7, Counter::default());
+    fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+        assert_eq!(event.goals.mob().id(), "minecraft:zombie");
+        event.goals.add_goal(7, Counter::default());
     }
 }
 
@@ -93,7 +93,7 @@ static ASKED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0
 struct Asked;
 #[mod_api::sunrise_part]
 impl EntityPart for Asked {
-    fn register_goals(&self, _: &mut GoalRegistrar<'_>) {
+    fn register_goals(&self, _: &mut RegisterGoalsEvent<'_, '_>) {
         ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -366,8 +366,8 @@ fn set_target_follows_the_write_rules() {
     struct Targets;
     #[mod_api::sunrise_part]
     impl EntityPart for Targets {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(5, SetTarget);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(5, SetTarget);
         }
     }
     struct TargetMod;
@@ -480,8 +480,8 @@ fn the_host_answers_without_panicking() {
     struct Readers;
     #[mod_api::sunrise_part]
     impl EntityPart for Readers {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(4, Reader);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(4, Reader);
         }
     }
     struct ReaderMod;
@@ -680,8 +680,8 @@ fn a_goal_jump_goes_through_the_jump_control_input() {
     struct Jumpers;
     #[mod_api::sunrise_part]
     impl EntityPart for Jumpers {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(6, Jumper);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(6, Jumper);
         }
     }
     struct JumpMod;
@@ -739,8 +739,8 @@ fn set_target_refuses_what_the_write_handle_refuses() {
     struct Targets;
     #[mod_api::sunrise_part]
     impl EntityPart for Targets {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(5, SetTarget);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(5, SetTarget);
         }
     }
     struct TargetMod;
@@ -853,8 +853,8 @@ fn move_and_look_inputs_pass_the_navigation_boundary() {
     struct Movers;
     #[mod_api::sunrise_part]
     impl EntityPart for Movers {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(6, Mover);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(6, Mover);
         }
     }
     struct MoveMod;
@@ -915,8 +915,8 @@ fn the_player_the_tick_sees_resolves_by_its_captured_identity() {
     struct Readers;
     #[mod_api::sunrise_part]
     impl EntityPart for Readers {
-        fn register_goals(&self, goals: &mut GoalRegistrar<'_>) {
-            goals.add_goal(6, PlayerReader);
+        fn register_goals(&self, event: &mut RegisterGoalsEvent<'_, '_>) {
+            event.goals.add_goal(6, PlayerReader);
         }
     }
     struct PlayerMod;

@@ -136,15 +136,15 @@ impl mod_api::BlockPart for GoalPart {
 }
 #[mod_api::sunrise_part]
 impl mod_api::EntityPart for GoalPart {
-    fn register_goals(&self, goals: &mut mod_api::GoalRegistrar<'_>) {
-        goals.add_target_goal(
+    fn register_goals(&self, event: &mut mod_api::RegisterGoalsEvent<'_, '_>) {
+        event.goals.add_target_goal(
             0,
             GoalSpec {
                 probe: self.0.clone(),
                 target: true,
             },
         );
-        goals.add_goal(
+        event.goals.add_goal(
             0,
             GoalSpec {
                 probe: self.0.clone(),

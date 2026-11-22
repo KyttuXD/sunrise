@@ -2678,14 +2678,14 @@ mod tests {
         fn spawn_cluster_size(
             &self,
             host: &dyn mod_api::Host,
-            mob: mod_api::UnspawnedMobRef,
-            reason: mod_api::SpawnReason,
-            _: Option<mod_api::SpawnSource>,
-            vanilla: u32,
+            event: &mut mod_api::SpawnClusterSizeEvent,
         ) -> Option<u32> {
-            assert_eq!(mob.kind(host).unwrap().to_string(), "minecraft:zombie");
-            Some(if reason == mod_api::SpawnReason::Natural {
-                vanilla * 2
+            assert_eq!(
+                event.mob.kind(host).unwrap().to_string(),
+                "minecraft:zombie"
+            );
+            Some(if event.reason == mod_api::SpawnReason::Natural {
+                event.vanilla * 2
             } else {
                 1
             })
@@ -2698,10 +2698,7 @@ mod tests {
         fn spawn_cluster_size(
             &self,
             _: &dyn mod_api::Host,
-            _: mod_api::UnspawnedMobRef,
-            _: mod_api::SpawnReason,
-            _: Option<mod_api::SpawnSource>,
-            _: u32,
+            _: &mut mod_api::SpawnClusterSizeEvent,
         ) -> Option<u32> {
             Some(9)
         }
@@ -2761,6 +2758,25 @@ mod tests {
                 None
             );
             assert_eq!(ask("minecraft:cow", mod_api::SpawnReason::Natural), None);
+            // Unsubscribed entity types must not lend the mob or expire an open standalone lend.
+            let mut cow = mob("minecraft:cow");
+            let mut skeleton = mob("minecraft:skeleton");
+            let host: &Game<'_> = game;
+            host.lend_unspawned("minecraft:pig", [0.0; 3], None, |outer, _| {
+                assert_eq!(
+                    host.spawn_cluster_size(&mut cow, mod_api::SpawnReason::Natural, None, 4),
+                    None
+                );
+                assert_eq!(
+                    host.spawn_cluster_size(&mut skeleton, mod_api::SpawnReason::Natural, None, 4),
+                    None
+                );
+                assert_eq!(
+                    outer.kind(host).unwrap().to_string(),
+                    "minecraft:pig",
+                    "unsubscribed types must not lend or expire an outer unspawned lend"
+                );
+            });
         });
     }
 

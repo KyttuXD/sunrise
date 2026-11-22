@@ -410,7 +410,8 @@ mod tests {
                 );
                 game.handle_mob_events(vec![ram]).unwrap();
                 // SnowGolem.shear from a dispenser: BLOCKS.
-                assert!(game.shear_entity((4, 64, 2)).unwrap());
+                let shears = sunrise_client::items::ItemStack::new("minecraft:shears", 1);
+                assert!(game.shear_entity((4, 64, 2), &shears).unwrap());
                 assert!(
                     heard.lock().unwrap().is_empty(),
                     "asked at the end of the tick"

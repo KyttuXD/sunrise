@@ -6,10 +6,7 @@
 //! list: nothing of this module runs, and the species' random streams stay
 //! exactly as they were.
 use super::{Mob, MobWorld, Species, brain::Timed, part_goals::BehaviorOp};
-use mod_api::{
-    BehaviorRegistrarBackend, RegisteredBehavior,
-    content::crash::{ModCall, enter_native_mod},
-};
+use mod_api::{BehaviorRegistrarBackend, RegisteredBehavior};
 use sunrise_core::random::LegacyRandom;
 
 /// One mod behavior, wrapped for a brain's list: the mod and part a panic in
@@ -346,32 +343,21 @@ pub fn has_brain(s: Species) -> bool {
     )
 }
 
+/// Native catalog target for [`mod_api::EntityPart::register_behaviors`].
+#[inline(never)]
+pub fn native_register_behaviors(behaviors: &mut mod_api::BehaviorRegistrar<'_>) {
+    mod_api::dispatch_register_behaviors(behaviors);
+}
+
 /// Ask the installed entity parts for the mob's behaviors (#824), each into
 /// `backend` — the brain module's own, which knows its activities. The parts
 /// are named in a panic the way `register_goals` names them.
 pub fn attach(mob_id: &str, backend: &mut dyn BehaviorRegistrarBackend) {
-    if !mod_api::__private::has_entity_parts() {
+    if !mod_api::__private::has_scoped_hook(mod_api::HookId::RegisterBehaviors) {
         return;
     }
-    let parts = mod_api::__private::entity_parts();
-    let list = parts.entity_parts(mob_id);
-    if list.is_empty() {
-        return;
-    }
-    for attached in list {
-        let _guard = enter_native_mod(ModCall {
-            id: attached.mod_id(),
-            hook: "register_behaviors",
-            part: Some(attached.type_name()),
-        });
-        let mut registrar = mod_api::BehaviorRegistrar::new(
-            backend,
-            mob_id,
-            attached.mod_id(),
-            attached.type_name(),
-        );
-        attached.part().register_behaviors(&mut registrar);
-    }
+    let mut registrar = mod_api::BehaviorRegistrar::new(backend, mob_id, "", "");
+    native_register_behaviors(&mut registrar);
 }
 
 /// `register_behaviors` for a type with no brain (#824): every add refuses

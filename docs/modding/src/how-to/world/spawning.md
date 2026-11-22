@@ -326,7 +326,7 @@ See [the `finalize_spawn` contract](https://github.com/sunrise-org/sunrise/blob/
 
 ## Changing how large a spawn group grows
 
-A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host, the mob just spawned, why and from what it spawned, and the limit vanilla would use. Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
+A natural spawn adds mobs of one type to a group until the group reaches the type's limit (`Mob.getMaxSpawnClusterSize`: 4 by default, more for horses, wolves and schooling fish, 1 for ghasts and pillagers). The entity part of the type changes that limit with `EntityPart::spawn_cluster_size`, which gets the read-only host and a `SpawnClusterSizeEvent` carrying the mob just spawned (`event.mob`), why and from what it spawned (`event.reason`, `event.spawner`), and the limit vanilla would use (`event.vanilla`). Return `Some(limit)` to replace it, or `None` to leave it to the next part and then to vanilla. The first part to answer wins, and the group stops growing once its size reaches the limit.
 
 ```rust,ignore
 struct ZombiePacks;
@@ -335,12 +335,9 @@ impl mod_api::EntityPart for ZombiePacks {
     fn spawn_cluster_size(
         &self,
         _: &dyn mod_api::Host,
-        _: mod_api::UnspawnedMobRef,
-        _: mod_api::SpawnReason,
-        _: Option<mod_api::SpawnSource>,
-        vanilla: u32,
+        event: &mut mod_api::SpawnClusterSizeEvent,
     ) -> Option<u32> {
-        Some(vanilla * 2)
+        Some(event.vanilla * 2)
     }
 }
 ```

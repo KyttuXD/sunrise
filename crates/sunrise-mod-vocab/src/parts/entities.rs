@@ -18,49 +18,6 @@ where
 /// An entity capability provider, as the registrar keeps it.
 pub type EntityProvider<T, C = ()> = dyn EntityCapabilityProvider<T, C>;
 
-/// Whether any mod attached an entity part, so `Mob` construction asks for
-/// goals, the mob tick builds a goal read view, and the general entity tick
-/// asks its dispatch.
-pub fn has_entity_parts() -> bool {
-    !crate::mods().is_empty()
-        && installed().is_some_and(|installed| !installed.keys.entities.is_empty())
-}
-
-/// The entity parts attached to entity type `id` (`minecraft:zombie`,
-/// `mymod:robot`), in dispatch order, for the goal registration at every
-/// `Mob` construction.
-pub fn entity_parts() -> PartsRef {
-    let Some(installed) = installed() else {
-        return PartsRef::Shared(&NO_PARTS);
-    };
-    let (game_parts, game_thread) =
-        GAME_PARTS.with_borrow(|lookup| (lookup.parts.clone(), lookup.game_thread));
-    if let Some(parts) = game_parts {
-        return PartsRef::Game(parts);
-    }
-    if !game_thread {
-        let thread = std::thread::current();
-        let thread = thread.name().unwrap_or("unnamed");
-        if crate::dispatch_scope::backend()
-            .is_none_or(|backend| (backend.diagnostics.first_off_thread_warning)())
-        {
-            log::warn!(
-                "Native entity parts asked off a game thread ({thread}): a mob built there keeps no mod goals"
-            );
-        }
-    }
-    PartsRef::Shared(&installed.keys)
-}
-
-impl Parts {
-    /// The entity parts attached to entity type `id` (`minecraft:zombie`), in
-    /// dispatch order, for the goal registration at every `Mob` construction
-    ///.
-    pub fn entity_parts(&self, id: &str) -> &[Attached<dyn EntityPart>] {
-        self.entities.get(id).map_or(&[], Vec::as_slice)
-    }
-}
-
 impl HookParts {
     pub(crate) fn entity<'k>(
         &self,
