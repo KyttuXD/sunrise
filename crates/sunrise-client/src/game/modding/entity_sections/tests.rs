@@ -858,12 +858,11 @@ fn section_host_reads_entity_type_defaults_without_unwinding() {
     );
 }
 
-/// #3944 on a running game, through the Host: the section host and the game answer from the same
-/// published suppliers. Vanilla's Zombie has 20 health, 3 attack damage and 2 armor. A supplier
-/// declared for a registered type whose base lies outside its attribute's range (a Zombie
-/// declared at 5000 health) answers its supplier value, 1024, while a fresh entity's raw base
-/// stays 5000; an attribute a mod adds to a type (a Skeleton's luck) answers too. Neither host
-/// answers for `minecraft:item` (no supplier) or a type no one registered.
+/// #3944 on a running game: the section host, game host and reload context answer from the
+/// same published suppliers. Vanilla's Zombie has 20 health, 3 attack damage and 2 armor.
+/// A mod-owned type with a 5000 health base answers 1024, while its spawn base stays 5000.
+/// An attribute a mod adds to a type (a Skeleton's luck) answers too. No read answers for
+/// `minecraft:item` (no supplier) or a type no one registered.
 #[test]
 #[ignore = "daily"]
 fn section_host_and_game_read_the_same_entity_type_defaults() {
@@ -876,7 +875,7 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
     }
     with_game(|game| {
         let host = LiveSectionHost(None);
-        let both = |game: &crate::game::Game<'_>, entity_type: &str, attribute: &str| {
+        let read = |game: &crate::game::Game<'_>, entity_type: &str, attribute: &str| {
             let scoped = mod_api::prelude::ItemsHost::entity_type_default_attribute(
                 &host,
                 entity_type,
@@ -887,7 +886,10 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
                 entity_type,
                 attribute,
             );
+            let reload =
+                mod_api::ReloadContext::entity_type_default_attribute(game, entity_type, attribute);
             assert_eq!(live, scoped, "{entity_type} {attribute}");
+            assert_eq!(reload, scoped, "{entity_type} {attribute}");
             scoped
         };
         for (entity_type, attribute, expected) in [
@@ -899,17 +901,26 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
             ("minecraft:zombie", "minecraft:no_such", None),
         ] {
             assert_eq!(
-                both(&*game, entity_type, attribute),
+                read(&*game, entity_type, attribute),
                 expected,
                 "{entity_type} {attribute}"
             );
         }
-        // Mods' rows, published as the core load publishes them.
-        let stock = game.motion.attributes.clone();
+        // A new installation resolves its own keys and sees no old suppliers before publication.
+        crate::game::api_values::install_parts(&[]).unwrap();
+        mod_api::__private::resolve_entity_types([
+            "minecraft:zombie",
+            "minecraft:skeleton",
+            "minecraft:item",
+            "ruby:titan",
+        ])
+        .unwrap();
+        assert_eq!(read(&*game, "minecraft:zombie", "max_health"), None);
         let modded = std::sync::Arc::new(
-            stock
+            game.motion
+                .attributes
                 .with_entity_row(
-                    "minecraft:zombie",
+                    "ruby:titan",
                     "minecraft:zombie",
                     &[("minecraft:max_health".into(), 5000.0)],
                 )
@@ -921,19 +932,18 @@ fn section_host_and_game_read_the_same_entity_type_defaults() {
                 .unwrap(),
         );
         crate::game::resource_load::publish_entity_type_defaults(&modded);
-        assert_eq!(both(&*game, "minecraft:zombie", "max_health"), Some(1024.0));
+        assert_eq!(read(&*game, "ruby:titan", "max_health"), Some(1024.0));
         let health = modded.id("minecraft:max_health").unwrap();
         assert_eq!(
             modded
-                .create("minecraft:zombie")
+                .create("ruby:titan")
                 .unwrap()
                 .base_value(health)
                 .unwrap(),
             5000.0,
             "the spawn base stays the declared one"
         );
-        assert_eq!(both(&*game, "minecraft:skeleton", "luck"), Some(1.5));
-        crate::game::resource_load::publish_entity_type_defaults(&stock);
-        assert_eq!(both(&*game, "minecraft:zombie", "max_health"), Some(20.0));
+        assert_eq!(read(&*game, "minecraft:skeleton", "luck"), Some(1.5));
+        assert_eq!(read(&*game, "minecraft:zombie", "max_health"), Some(20.0));
     });
 }
