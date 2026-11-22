@@ -21,6 +21,12 @@ pub trait MobHooks {
     ) -> Option<PathType> {
         default
     }
+    /// Whether `block_path_type` or `adjacent_block_path_type` may override `state`.
+    /// Returning `false` lets pathfinding treat uniform sections of `state`
+    /// without scanning them cell by cell.
+    fn path_type_hooked(&self, _state: BlockStateId) -> bool {
+        true
+    }
     /// `EnderManAngerEvent`: whether a mod keeps enderman `enderman` calm
     /// though `player` stares at it.
     fn enderman_anger_suppressed(&self, enderman: u32, player: &PlayerView) -> bool;

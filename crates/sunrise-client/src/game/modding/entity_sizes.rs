@@ -783,6 +783,268 @@ mod tests {
         });
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn large_sizes_complete_navigation_and_wither_sweep() {
+        let (ready, started) = std::sync::mpsc::channel();
+        let (done, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let size = Arc::new(Mutex::new([0.9, 1e30, 1.0]));
+            let mods = vec![mod_api::ModEntry::new(
+                "set_size",
+                Box::new(SetSize(size.clone())),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                with_game(|game| {
+                    ready.send(()).unwrap();
+                    use sunrise_client::mobs::{
+                        MobEvent,
+                        path::{Evaluator, Finder},
+                        wither,
+                    };
+                    use sunrise_core::geometry::Vec3;
+
+                    for cx in [0, 1, 3] {
+                        game.world.chunks.insert(
+                            (cx, 0),
+                            Arc::new(sunrise_client::chunk::Chunk::empty(cx, 0)),
+                        );
+                    }
+                    let registry = &game.pack.assets.registry;
+                    let stone = registry.default_state("minecraft:stone").unwrap();
+                    let bedrock = registry.default_state("minecraft:bedrock").unwrap();
+                    let air = game.world.air;
+                    for x in 0..8 {
+                        for z in 0..4 {
+                            game.world.set(x, 69, z, stone).unwrap();
+                        }
+                    }
+
+                    // 1. Real navigation with uncapped large finite sizes.
+                    let cow_id = game
+                        .spawn_mob_spawned(
+                            "cow",
+                            [1.0, 70.0, 1.0],
+                            crate::game::creatures::SpawnSite::Plain,
+                        )
+                        .unwrap();
+                    let ci = game.mobs.iter().position(|m| m.id == cow_id).unwrap();
+                    *size.lock().unwrap() = [0.9, 1e30, 1.0];
+                    game.mobs[ci].size_answer = None;
+                    game.native_mob_sizes();
+                    let mut mob = game.mobs[ci].path_mob();
+                    mob.on_ground = true;
+                    {
+                        let world = game.mob_world_base(&[]);
+                        let path = Finder::new(&world, &mob, Evaluator::Walk)
+                            .find(&[[4, 70, 1]], 16.0, 0, 64)
+                            .expect("clear 1e30-tall walk path must succeed");
+                        assert!(path.reached, "clear 1e30-tall walk path must reach target");
+                    }
+                    // An obstacle 50 blocks overhead inside the 1e30 footprint still blocks (3, 70, 1).
+                    game.world.set(3, 120, 1, stone).unwrap();
+                    {
+                        let world = game.mob_world_base(&[]);
+                        let path = Finder::new(&world, &mob, Evaluator::Walk).find(
+                            &[[3, 70, 1]],
+                            16.0,
+                            0,
+                            64,
+                        );
+                        assert!(
+                            path.is_none_or(|p| !p.reached),
+                            "overhead stone inside 1e30 height must block (3, 70, 1)"
+                        );
+                    }
+                    game.world.set(3, 120, 1, air).unwrap();
+
+                    for answer in [[128.0, 128.0, 128.0], [1e30, 1e30, 1e30]] {
+                        *size.lock().unwrap() = answer;
+                        game.mobs[ci].size_answer = None;
+                        game.native_mob_sizes();
+                        let mut mob = game.mobs[ci].path_mob();
+                        mob.on_ground = true;
+                        let world = game.mob_world_base(&[]);
+                        for eval in [
+                            Evaluator::Walk,
+                            Evaluator::Swim { breach: true },
+                            Evaluator::Fly,
+                            Evaluator::Amphibious {
+                                prefers_shallow: false,
+                            },
+                        ] {
+                            let _ =
+                                Finder::new(&world, &mob, eval).find(&[[4, 70, 1]], 16.0, 0, 32);
+                        }
+                    }
+
+                    // 2. Real wither destruction sweep with uncapped large finite sizes.
+                    let wither_id = game
+                        .spawn_mob_spawned(
+                            "wither",
+                            [2.5, 70.0, 2.5],
+                            crate::game::creatures::SpawnSite::Plain,
+                        )
+                        .unwrap();
+                    let wi = game.mobs.iter().position(|m| m.id == wither_id).unwrap();
+
+                    // Positive Y with 1e30 height: Java signed-int `70 + i32::MAX` wraps below `70`,
+                    // so `BlockPos.betweenClosed` is empty and completes immediately.
+                    game.world.set(2, 71, 2, stone).unwrap();
+                    *size.lock().unwrap() = [0.9, 1e30, 1.0];
+                    game.mobs[wi].size_answer = None;
+                    game.native_mob_sizes();
+                    {
+                        let mut wither = game.mobs[wi].clone();
+                        wither.extra.counter = 0;
+                        wither.extra.counter2 = 1;
+                        let world = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        wither::custom_server_ai_step(&mut wither, &world, &mut events);
+                        assert!(
+                            !events
+                                .iter()
+                                .any(|e| matches!(e, MobEvent::BreakBlock { .. })),
+                            "wrapped positive-Y sweep must match empty Java betweenClosed"
+                        );
+                    }
+                    game.world.set(2, 71, 2, air).unwrap();
+
+                    // Negative Y with 1e30 height: `-10 + i32::MAX` stays positive, sweeping loaded
+                    // non-air sections sparsely while keeping wither-immune bedrock.
+                    game.world.set(2, 120, 2, stone).unwrap();
+                    game.world.set(2, -10, 2, bedrock).unwrap();
+                    {
+                        let mut wither = game.mobs[wi].clone();
+                        wither.position = Vec3::new(2.5, -10.0, 2.5);
+                        wither.extra.counter = 0;
+                        wither.extra.counter2 = 1;
+                        let world = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        wither::custom_server_ai_step(&mut wither, &world, &mut events);
+                        let broken: Vec<[i32; 3]> = events
+                            .iter()
+                            .filter_map(|e| match e {
+                                MobEvent::BreakBlock { pos, .. } => Some(*pos),
+                                _ => None,
+                            })
+                            .collect();
+                        assert!(
+                            broken.contains(&[2, 120, 2]),
+                            "1e30-tall wither at y=-10 must break overhead stone"
+                        );
+                        assert!(
+                            !broken.contains(&[2, -10, 2]),
+                            "wither must not break wither_immune bedrock"
+                        );
+                    }
+                    game.world.set(2, 120, 2, air).unwrap();
+                    game.world.set(2, -10, 2, air).unwrap();
+
+                    // 128x128x128 wither at positive Y destroys distant stone inside its box.
+                    game.world.set(50, 120, 2, stone).unwrap();
+                    *size.lock().unwrap() = [128.0, 128.0, 128.0];
+                    game.mobs[wi].size_answer = None;
+                    game.native_mob_sizes();
+                    {
+                        let mut wither = game.mobs[wi].clone();
+                        wither.position = Vec3::new(2.5, 70.0, 2.5);
+                        wither.extra.counter = 0;
+                        wither.extra.counter2 = 1;
+                        let world = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        wither::custom_server_ai_step(&mut wither, &world, &mut events);
+                        assert!(
+                            events.iter().any(|e| matches!(
+                                e,
+                                MobEvent::BreakBlock {
+                                    pos: [50, 120, 2],
+                                    ..
+                                }
+                            )),
+                            "128^3 wither must destroy stone at (50, 120, 2) inside its sweep"
+                        );
+                    }
+                });
+            });
+            done.send(()).unwrap();
+        });
+        started.recv().expect("large-size fixture must initialize");
+        result
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("large-size navigation and wither sweep must finish within 30 seconds");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn large_player_pose_fit_covers_box_past_collision_budget() {
+        use sunrise_client::{motion::PlayerMotion, pose::Pose as MotionPose};
+        use sunrise_core::geometry::{Aabb, Vec3};
+
+        struct HugeStanding;
+
+        #[mod_api::__subscriptions]
+        impl Hooks for HugeStanding {
+            fn entity_size(&self, _: &dyn Host, event: &mut EntitySizeEvent<'_>) {
+                if event.pose == Pose::Standing {
+                    *event.size = [128.0, 128.0, 128.0];
+                }
+            }
+        }
+
+        let mods = vec![mod_api::ModEntry::new(
+            "huge_standing",
+            Box::new(HugeStanding),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                game.world
+                    .chunks
+                    .insert((3, 3), Arc::new(sunrise_client::chunk::Chunk::empty(3, 3)));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                let air = game.world.air;
+                let mut body = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap();
+
+                // 128x128x128 (>2M cells) in clear space fits without failing VisitBudget.
+                let (fits_clear, answer) = game
+                    .body_can_fit_pose(1, &body, &[], MotionPose::Standing)
+                    .expect("large clear pose-fit must not error with VisitBudget");
+                assert!(fits_clear);
+                assert_eq!(answer.unwrap().effective(), [128.0, 128.0, 128.0]);
+                game.update_body_pose(1, &mut body, &[], false).unwrap();
+                assert_eq!(body.pose, MotionPose::Standing);
+
+                // A solid block deep inside the 128x128x128 box blocks Standing.
+                game.world.set(50, 150, 50, stone).unwrap();
+                let (fits_blocked, _) = game
+                    .body_can_fit_pose(1, &body, &[], MotionPose::Standing)
+                    .expect("large obstructed pose-fit must not error with VisitBudget");
+                assert!(!fits_blocked);
+                game.update_body_pose(1, &mut body, &[], false).unwrap();
+                assert_eq!(body.pose, MotionPose::Crouching);
+                game.world.set(50, 150, 50, air).unwrap();
+
+                // An entity box inside the 128x128x128 box also blocks Standing.
+                let entity = Aabb::new(Vec3::new(50.0, 150.0, 50.0), Vec3::new(51.0, 151.0, 51.0));
+                let (fits_entity, _) = game
+                    .body_can_fit_pose(1, &body, &[entity], MotionPose::Standing)
+                    .expect("large entity-obstructed pose-fit must not error with VisitBudget");
+                assert!(!fits_entity);
+            })
+        });
+    }
+
     fn m_pose(game: &crate::game::Game<'_>, i: usize) -> Pose {
         game.mobs[i].pose()
     }

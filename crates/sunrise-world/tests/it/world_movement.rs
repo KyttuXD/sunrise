@@ -11,7 +11,10 @@ use sunrise_world::{
     collision_context::CollisionContext,
     entity_obstruction::EntityIdentity,
     registry::BlockStateId,
-    world_movement::{EntityMovementWorld, MovementRequest, resolve_world_movement},
+    world_movement::{
+        CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
+        resolve_world_movement,
+    },
 };
 
 /// Open air: every cell is reachable and has no shape, so a scan visits all of
@@ -128,4 +131,138 @@ fn ordinary_movements_are_unchanged() {
             "movement {movement:?}"
         );
     }
+}
+
+/// Sparse collision world for large `no_world_collision` queries: one optional
+/// full block and one optional entity box, with empty sections skipped just as
+/// `SceneCollisions` skips air sections.
+struct SparseWorld {
+    block: Option<BlockPos>,
+    entity: Option<Aabb>,
+}
+impl BlockCollisionWorld for SparseWorld {
+    type Error = io::Error;
+    type Chunk = ();
+    fn collision_chunk(&mut self, _: ChunkPos) -> io::Result<Option<()>> {
+        Ok(Some(()))
+    }
+    fn collision_block(&mut self, _: (), p: BlockPos) -> io::Result<CollisionBlock> {
+        let solid = self.block == Some(p);
+        Ok(CollisionBlock {
+            state: BlockStateId(u32::from(solid)),
+            large_collision_shape: false,
+            moving_piston: false,
+            empty_shape: !solid,
+        })
+    }
+    fn is_suffocating(&mut self, _: (), _: CollisionBlock, _: BlockPos) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn context_shape(
+        &mut self,
+        _: CollisionBlock,
+        _: BlockPos,
+        _: &CollisionContext<'_>,
+    ) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::block())
+    }
+    fn may_reach_out(&mut self, _: (), _: i32) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn section_is_empty(&mut self, _: (), section_y: i32) -> io::Result<bool> {
+        Ok(self.block.is_none_or(|b| (b.y >> 4) != section_y))
+    }
+    fn missing_chunks_stay_missing(&self) -> bool {
+        true
+    }
+}
+impl EntityMovementWorld for SparseWorld {
+    type Error = io::Error;
+    fn entity_collisions(
+        &mut self,
+        _: EntityIdentity,
+        bounds: Aabb,
+    ) -> io::Result<Vec<VoxelShape>> {
+        let mut shapes = Vec::new();
+        if let Some(aabb) = self.entity
+            && aabb.intersects(bounds)
+        {
+            shapes.push(VoxelShape::from_box(aabb).map_err(io::Error::other)?);
+        }
+        Ok(shapes)
+    }
+    fn movement_border(&mut self, _: EntityIdentity, _: Aabb) -> io::Result<Option<VoxelShape>> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn large_no_collision_query_covers_box_past_budget_and_preserves_hits() {
+    // A 128 x 128 x 128 player box spans >2M candidate cells, past the old 1M budget.
+    let large = Aabb::new(Vec3::new(-64.0, 0.0, -64.0), Vec3::new(64.0, 128.0, 64.0));
+    let cells = scan_cells(large).expect("128^3 box fits in Cursor3D domain");
+    assert!(cells > 2_000_000, "expected >2M cells, got {cells}");
+
+    let check = |world: &mut SparseWorld, budget: usize| {
+        no_world_collision(
+            world,
+            CollisionCheckRequest {
+                entity: EntityIdentity(0),
+                context: CollisionContext::empty(false),
+                bounds: large,
+                candidate_budget: budget,
+            },
+        )
+        .expect("no_world_collision must cover the candidate box without VisitBudget")
+    };
+
+    assert!(check(
+        &mut SparseWorld {
+            block: None,
+            entity: None
+        },
+        1_000_000
+    ));
+    assert!(check(
+        &mut SparseWorld {
+            block: None,
+            entity: None
+        },
+        10
+    ));
+    assert!(!check(
+        &mut SparseWorld {
+            block: Some(BlockPos::new(50, 100, -40)),
+            entity: None,
+        },
+        1_000_000,
+    ));
+    assert!(!check(
+        &mut SparseWorld {
+            block: None,
+            entity: Some(Aabb::new(
+                Vec3::new(50.0, 100.0, 50.0),
+                Vec3::new(51.0, 101.0, 51.0),
+            )),
+        },
+        1_000_000,
+    ));
+
+    // Also verify a world without empty-section skipping walks past a tiny budget.
+    let medium = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(20.0, 20.0, 20.0));
+    let medium_cells = scan_cells(medium).expect("20^3 box fits in Cursor3D domain");
+    let mut open = OpenAir { cells: 0 };
+    assert!(
+        no_world_collision(
+            &mut open,
+            CollisionCheckRequest {
+                entity: EntityIdentity(0),
+                context: CollisionContext::empty(false),
+                bounds: medium,
+                candidate_budget: 10,
+            },
+        )
+        .expect("must not fail with VisitBudget")
+    );
+    assert!(open.cells > 10 && open.cells <= medium_cells);
 }
