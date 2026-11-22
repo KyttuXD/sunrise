@@ -153,6 +153,34 @@ pub struct Sprites {
     /// ([`Sprites::materials`]).
     materials: std::sync::OnceLock<crate::atlas_sources::Materials>,
 }
+/// A decoded sprite whose animation has been validated, before a render layer is assigned.
+pub(crate) struct PreparedSprite {
+    decoded: crate::sprite_cache::Decoded,
+    metadata: Option<AnimationMetadata>,
+    clip: Option<AnimationClip>,
+}
+impl TryFrom<crate::sprite_cache::Decoded> for PreparedSprite {
+    type Error = Box<dyn std::error::Error>;
+
+    fn try_from(decoded: crate::sprite_cache::Decoded) -> Result<Self> {
+        let metadata = decoded
+            .animation
+            .as_deref()
+            .map(AnimationMetadata::from_json)
+            .transpose()?;
+        let clip = metadata
+            .as_ref()
+            .map(|m| m.clip(decoded.frames.len() as u32))
+            .transpose()?
+            .flatten();
+        Ok(Self {
+            decoded,
+            metadata,
+            clip,
+        })
+    }
+}
+
 /// Where a sprite's pixels are looked up: as a model's material (the items atlas, then the
 /// blocks atlas), in the blocks atlas alone, or as a texture file read on its own.
 #[derive(Clone, Copy)]
@@ -440,16 +468,33 @@ impl Sprites {
     /// Load a sprite id or resource file into [`Sprites::files`] without substituting the
     /// missing texture on error and without a synthetic byte cap.
     pub fn try_insert_texture_file(&mut self, name: &str) -> Result<u32> {
-        if let Some(layer) = self.files.get(name) {
-            return Ok(*layer);
+        let prepared = self.prepare_texture_file(name)?;
+        self.commit_texture_file(name, prepared)
+    }
+    /// Decode and validate without taking a layer; `None` means the file already has one.
+    pub(crate) fn prepare_texture_file(&self, name: &str) -> Result<Option<PreparedSprite>> {
+        if self.files.contains_key(name) {
+            return Ok(None);
         }
         let path = if name.contains(':') {
             crate::atlas_sources::texture_resource(name, "textures")
         } else {
             name.to_owned()
         };
-        let bytes = self.source.read(&path)?;
-        self.load(name, Lookup::File(&bytes))
+        Ok(Some(
+            Self::decode_file(&self.source, &path, name)?.try_into()?,
+        ))
+    }
+    pub(crate) fn commit_texture_file(
+        &mut self,
+        name: &str,
+        prepared: Option<PreparedSprite>,
+    ) -> Result<u32> {
+        if let Some(&layer) = self.files.get(name) {
+            return Ok(layer);
+        }
+        let prepared = prepared.ok_or("prepared sprite lost its file layer")?;
+        self.register_in_slot(Slot::Files, name, prepared)
     }
     /// Load a sprite id or resource file only when its PNG fits the byte limit,
     /// including cached layers. The checked bytes are reused when decoding.
@@ -626,14 +671,21 @@ impl Sprites {
                 decoded
             }
         };
-        let slot = self.slot_of(lookup, name);
+        self.register_in_slot(self.slot_of(lookup, name), name, decoded.try_into()?)
+    }
+    fn register_in_slot(
+        &mut self,
+        slot: Slot,
+        name: &str,
+        prepared: PreparedSprite,
+    ) -> Result<u32> {
         if slot == Slot::Layers {
-            return self.register(name, decoded);
+            return self.register(name, prepared);
         }
         // `register` names the layer in `layers`: the blocks atlas's sprite of that name, if
         // any, keeps its place.
         let blocks = self.layers.get(name).copied();
-        let layer = self.register(name, decoded)?;
+        let layer = self.register(name, prepared)?;
         match blocks {
             Some(blocks) => self.layers.insert(name.to_owned(), blocks),
             None => self.layers.remove(name),
@@ -657,7 +709,7 @@ impl Sprites {
             Some(decoded) => decoded,
             None => Self::decode_file(&self.source, resource, resource)?,
         };
-        self.register(resource, decoded)
+        self.register(resource, decoded.try_into()?)
     }
     /// The tiles of the texture `name` (`ns:path`) cut into a `columns` x `rows` grid, row by
     /// row from the top left: a Fusion connecting texture's sheet. Each tile is its own layer
@@ -743,7 +795,7 @@ impl Sprites {
                     frames,
                 };
                 let tile_name = format!("fusion/{}#{tile}", name.replace(':', "/"));
-                self.register(&tile_name, decoded).map(Some)
+                self.register(&tile_name, decoded.try_into()?).map(Some)
             })
             .collect::<Result<Vec<_>>>()?;
         // Where Fusion doesn't draw the sheet (items, other models), the lone tile rather than
@@ -903,26 +955,28 @@ impl Sprites {
                 has_transparent: false,
                 opaque: true,
                 translucent: false,
-            },
+            }
+            .try_into()?,
         )
     }
     /// Give a decoded texture its layer (or the one an identical still has).
     #[sunrise_mod_api_macros::replaceable]
-    fn register(&mut self, name: &str, decoded: crate::sprite_cache::Decoded) -> Result<u32> {
+    fn register(&mut self, name: &str, prepared: PreparedSprite) -> Result<u32> {
+        let PreparedSprite {
+            decoded,
+            metadata: animation,
+            clip,
+        } = prepared;
         let crate::sprite_cache::Decoded {
             side,
             frames,
-            animation: animation_text,
             strategy,
             alpha_cutoff_bias,
             has_transparent,
             opaque,
             translucent,
+            ..
         } = decoded;
-        let animation = animation_text
-            .as_deref()
-            .map(AnimationMetadata::from_json)
-            .transpose()?;
         let count = frames.len() as u32;
         let layer = u32::try_from(self.native.len())?;
         let pbr = match name.split_once(':') {
@@ -974,12 +1028,7 @@ impl Sprites {
         }
         let frames = Arc::new(frames);
         let mut initial = 0;
-        if let Some(clip) = animation
-            .as_ref()
-            .map(|m| m.clip(count))
-            .transpose()?
-            .flatten()
-        {
+        if let Some(clip) = clip {
             initial = clip.sample(0).frame as usize;
             self.animations.push(SpriteAnimation {
                 layer,

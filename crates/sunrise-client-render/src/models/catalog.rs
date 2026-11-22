@@ -895,6 +895,7 @@ mod tests {
             ResourceSource::archive(&jar)?,
         );
         let mut sprites = Sprites::with_disk_cache(&root);
+        sprites.keep_apart(["demo:block/stone".to_owned()]);
         let mut catalog = StateModels::load(&root, &registry, &["demo:stone"], &mut sprites)?;
         let base = sprites.layers["demo:block/stone"];
         let picked = catalog.collect(BlockStateId(0), BlockPos::new(0, 0, 0))?;

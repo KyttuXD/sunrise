@@ -390,6 +390,13 @@ impl RenderAssets {
         } else {
             crate::sprites::Sprites::for_server(root.source().clone())
         };
+        // The shader pairs by layer. Before any insert, keep each registered base sprite on
+        // its own layer even if an unrelated sprite has exactly the same pixels.
+        sprites.keep_apart(
+            emissive_sprites
+                .iter()
+                .map(|entry| entry.answer.base.to_string()),
+        );
         for name in MATERIALS {
             sprites.insert(&format!("minecraft:block/{name}"))?;
         }

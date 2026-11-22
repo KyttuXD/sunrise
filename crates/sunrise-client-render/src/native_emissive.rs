@@ -23,76 +23,81 @@ fn tile_file(name: &str) -> Option<&str> {
     name.strip_suffix(".png")
 }
 
-/// Resolve mod-registered emissive sprite pairs against the sprites already loaded in this
-/// resource generation.
-///
-/// Missing base sprites and missing or corrupt overlay textures are logged per registration and
-/// skipped without discarding other entries. When two registrations target the same base layer,
-/// the later registration replaces the earlier one (matching `TextureManager.register` and
-/// `SpriteSourceList`) with a warning naming both mods.
-pub fn resolve_registered(
+/// Resolve mod-registered emissive pairs by sprite id before allocating any overlay layers.
+/// A later valid overlay for the same id replaces the old one (`TextureManager.register`), but
+/// an unreadable replacement leaves the previous candidate intact. The first distinct bases
+/// with usable overlays take the GPU uniform slots, in registration order.
+pub(crate) fn resolve_registered(
     registrations: &[Answered<EmissiveSpriteRegistration>],
     sprites: &mut Sprites,
 ) -> BTreeMap<u32, u32> {
-    let mut by_base: BTreeMap<u32, (u32, &'static str, String, String)> = BTreeMap::new();
+    struct Overlay {
+        base_layer: u32,
+        mod_id: &'static str,
+        id: String,
+        prepared: Option<crate::sprites::PreparedSprite>,
+    }
+    let mut by_base: BTreeMap<&mod_api::Identifier, Overlay> = BTreeMap::new();
     for entry in registrations {
-        let base_id = entry.answer.base.to_string();
-        let overlay_id = entry.answer.overlay.to_string();
-        let Some(&base_layer) = sprites.layers.get(&base_id) else {
+        let base = &entry.answer.base;
+        let overlay = &entry.answer.overlay;
+        let Some(&base_layer) = sprites.layers.get(&base.to_string()) else {
             log::warn!(
-                "Sunrise: mod '{}' registered emissive overlay '{}' for unknown base sprite '{}'; skipping",
+                "Sunrise: mod '{}' registered emissive overlay '{overlay}' for unknown base sprite '{base}'; skipping",
                 entry.mod_id,
-                overlay_id,
-                base_id
             );
             continue;
         };
-        let overlay_layer = match sprites.try_insert_texture_file(&overlay_id) {
-            Ok(layer) => layer,
+        if by_base.len() == MAX && !by_base.contains_key(base) {
+            log::warn!(
+                "Sunrise: mod '{}' emissive overlay '{overlay}' for '{base}' skipped: GPU uniform table (Globals.emissive_layers) has {MAX} slots",
+                entry.mod_id,
+            );
+            continue;
+        }
+        let id = overlay.to_string();
+        let prepared = match sprites.prepare_texture_file(&id) {
+            Ok(prepared) => prepared,
             Err(error) => {
                 log::warn!(
-                    "Sunrise: mod '{}' emissive overlay '{}' for '{}' skipped: {error}",
+                    "Sunrise: mod '{}' emissive overlay '{overlay}' for '{base}' skipped: {error}",
                     entry.mod_id,
-                    overlay_id,
-                    base_id
                 );
                 continue;
             }
         };
-        if let Some((_, prev_mod, prev_base, prev_overlay)) = by_base.insert(
-            base_layer,
-            (
-                overlay_layer,
-                entry.mod_id,
-                base_id.clone(),
-                overlay_id.clone(),
-            ),
+        if let Some(previous) = by_base.insert(
+            base,
+            Overlay {
+                base_layer,
+                mod_id: entry.mod_id,
+                id,
+                prepared,
+            },
         ) {
             log::warn!(
-                "Sunrise: mod '{}' emissive overlay '{}' for '{}' replaces '{}' registered by mod '{}' for '{}' (layer {})",
+                "Sunrise: mod '{}' emissive overlay '{overlay}' for '{base}' replaces '{}' registered by mod '{}'",
                 entry.mod_id,
-                overlay_id,
-                base_id,
-                prev_overlay,
-                prev_mod,
-                prev_base,
-                base_layer
+                previous.id,
+                previous.mod_id,
             );
         }
     }
-    if by_base.len() > MAX {
-        let dropped = by_base.len() - MAX;
-        log::warn!(
-            "Sunrise: {} mod emissive overlays exceed GPU uniform capacity {} (Globals.emissive_layers); skipping {} extra layer(s)",
-            by_base.len(),
-            MAX,
-            dropped
-        );
-    }
     by_base
         .into_iter()
-        .take(MAX)
-        .map(|(base, (overlay, _, _, _))| (base, overlay))
+        .filter_map(|(base, overlay)| {
+            match sprites.commit_texture_file(&overlay.id, overlay.prepared) {
+                Ok(layer) => Some((overlay.base_layer, layer)),
+                Err(error) => {
+                    log::warn!(
+                        "Sunrise: mod '{}' emissive overlay '{}' for '{base}' skipped: {error}",
+                        overlay.mod_id,
+                        overlay.id,
+                    );
+                    None
+                }
+            }
+        })
         .collect()
 }
 
@@ -188,13 +193,9 @@ fn assemble_table(
 ) -> Vec<[u32; 4]> {
     let mut by_base: BTreeMap<u32, [u32; 4]> = mod_pairs
         .into_iter()
-        .take(MAX)
         .map(|(b, o)| (b, [b, o, 0, 0]))
         .collect();
     for (base, overlay) in optifine {
-        if by_base.len() >= MAX {
-            break;
-        }
         if let (Some(&b), Some(&o)) = (layers.get(base), files.get(overlay)) {
             by_base.entry(b).or_insert([b, o | CUTOUT, 0, 0]);
         }
@@ -429,7 +430,63 @@ mod tests {
                 [layer_b, optifine_b | CUTOUT, 0, 0]
             ]
         );
+        assert!(!sprites.files.contains_key("mod_a:overlay/first"));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn identical_pixels_do_not_share_emissive_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("assets/demo/textures");
+        png(&dir.join("block/a.png"), 1);
+        png(&dir.join("block/b.png"), 1);
+        png(&dir.join("glow/a.png"), 2);
+        png(&dir.join("glow/b.png"), 3);
+        let source = ResourceSource::directory(root.path().into());
+        let regs = [
+            registration("demo", "demo:block/a", "demo:glow/a"),
+            registration("demo", "demo:block/b", "demo:glow/b"),
+        ];
+        for regs in [&regs[..1], &regs[..]] {
+            let mut sprites = Sprites::new(source.clone());
+            sprites.keep_apart(regs.iter().map(|entry| entry.answer.base.to_string()));
+            let a = sprites.insert("demo:block/a").unwrap();
+            let b = sprites.insert("demo:block/b").unwrap();
+            assert_ne!(a, b);
+            let table = load_layers(&source, regs, &mut sprites);
+            assert_eq!(table.len(), regs.len());
+            assert_eq!(table[0], [a, sprites.files["demo:glow/a"], 0, 0]);
+            if regs.len() == 2 {
+                assert_eq!(table[1], [b, sprites.files["demo:glow/b"], 0, 0]);
+                assert_ne!(table[0][1], table[1][1]);
+            }
+        }
+    }
+
+    #[test]
+    fn only_final_gpu_rows_get_layers_and_bad_replacement_leaves_previous() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("assets/demo/textures");
+        let source = ResourceSource::directory(root.path().into());
+        let mut sprites = Sprites::new(source.clone());
+        let mut regs = Vec::new();
+        for i in 0..=MAX as u16 {
+            png(&dir.join(format!("block/b{i}.png")), i);
+            png(&dir.join(format!("glow/g{i}.png")), 200 + i);
+            let base = format!("demo:block/b{i}");
+            sprites.insert(&base).unwrap();
+            regs.push(registration("demo", &base, &format!("demo:glow/g{i}")));
+        }
+        png(&dir.join("glow/winner.png"), 400);
+        regs.push(registration("winner", "demo:block/b0", "demo:glow/winner"));
+        regs.push(registration("broken", "demo:block/b0", "demo:glow/missing"));
+        let bases = sprites.count();
+        let table = load_layers(&source, &regs, &mut sprites);
+        assert_eq!(table.len(), MAX);
+        assert_eq!(sprites.count(), bases + MAX);
+        assert_eq!(table[0][1], sprites.files["demo:glow/winner"]);
+        assert!(!sprites.files.contains_key("demo:glow/g0"));
+        assert!(!sprites.files.contains_key(&format!("demo:glow/g{MAX}")));
     }
 
     #[test]
