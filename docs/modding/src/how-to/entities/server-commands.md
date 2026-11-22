@@ -313,7 +313,9 @@ with `Command::executes_client(|host, command| { /* ... */ Some(1) })` and serve
 handle argument kinds (`player`, `players`, `entity`, `entities`, `dimension`) are refused.
 Client and server commands can share a root in chat. Typed and unattended commands try the
 client dispatcher first; an unknown command or argument proceeds to the server, while a
-client argument error or failure stays local.
+client argument error or failure stays local. Slash commands submitted by a client executor run
+later. If one would call an executor already in the submission chain, it fails locally instead
+of calling that executor again or sending the command to the server.
 
 ### Completing one token of a greedy text
 

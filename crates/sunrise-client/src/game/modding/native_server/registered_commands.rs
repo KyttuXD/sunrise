@@ -55,18 +55,26 @@ pub(in crate::game) enum PendingClientCommandKind {
     Unattended,
 }
 
+/// An invocation path, shared by all submissions from the same executor. Use the retained
+/// registration identity rather than a parsed node, which can change on a tree refresh.
+pub(in crate::game) struct ClientCommandChain {
+    pub(super) executor: RetainedCallback,
+    pub(super) parent: Option<Arc<Self>>,
+}
+
 pub(in crate::game) struct PendingClientCommand {
-    pub(in crate::game) command: String,
-    pub(in crate::game) kind: PendingClientCommandKind,
+    pub(super) command: String,
+    pub(super) kind: PendingClientCommandKind,
+    pub(super) chain: Arc<ClientCommandChain>,
 }
 
 /// The client's own native mod commands, bound to the current client dispatcher generation.
 pub(in crate::game) struct NativeClientCommandState {
     pub(in crate::game) dispatcher: sunrise_client::command::Dispatcher,
     pub(super) executors: Vec<Option<Arc<RegisteredClientExecutor>>>,
-    /// True while a client command executor is on the call stack. Slash submissions made
-    /// inside an executor wait for the client event loop instead of re-entering synchronously.
-    pub(in crate::game) executing: bool,
+    /// Present while an executor runs; nested slash submissions inherit this path and wait
+    /// for the client event loop instead of re-entering synchronously.
+    pub(super) active_chain: Option<Arc<ClientCommandChain>>,
     pub(in crate::game) pending_commands: Vec<PendingClientCommand>,
 }
 
@@ -75,13 +83,25 @@ impl Default for NativeClientCommandState {
         Self {
             dispatcher: sunrise_client::command::Dispatcher::new(),
             executors: Vec::new(),
-            executing: false,
+            active_chain: None,
             pending_commands: Vec::new(),
         }
     }
 }
 
 impl NativeClientCommandState {
+    pub(in crate::game) fn defer(&mut self, command: &str, kind: PendingClientCommandKind) -> bool {
+        let Some(chain) = self.active_chain.clone() else {
+            return false;
+        };
+        self.pending_commands.push(PendingClientCommand {
+            command: command.to_owned(),
+            kind,
+            chain,
+        });
+        true
+    }
+
     pub(in crate::game) fn install(
         &mut self,
         dispatcher: sunrise_client::command::Dispatcher,
