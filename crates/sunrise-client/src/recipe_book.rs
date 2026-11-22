@@ -644,11 +644,12 @@ impl ClientBook {
     }
 }
 
-/// How a server's packet names things: an item by its registry id, a recipe
-/// book category by its id, and the items of a tag.
+/// How a server's packet names items, recipe book categories, data components,
+/// and the items of a tag.
 pub struct PacketNames<'a> {
     pub item: &'a dyn Fn(i32) -> Option<String>,
     pub category: &'a dyn Fn(i32) -> Option<String>,
+    pub component: &'a dyn Fn(i32) -> Option<String>,
     pub tag: &'a dyn Fn(&str) -> Vec<String>,
 }
 impl PacketNames<'_> {
@@ -658,20 +659,19 @@ impl PacketNames<'_> {
             HolderSet::Items(ids) => ids.iter().filter_map(|&id| (self.item)(id)).collect(),
         }
     }
-    /// The stacks a slot display shows, in order (`SlotDisplay.resolveForStacks`):
-    /// what a display builds from a component or a dye is not reproduced, it
-    /// shows its source.
+    /// The stacks a slot display shows, in order. Packet ghosts have item definitions
+    /// for `SlotDisplay.OnlyWithComponent.resolve`; ID-only previews keep the source.
     fn stacks(
         &self,
         display: &SlotDisplay,
         out: &mut Vec<ItemStack>,
         decode_stack: &impl Fn(&sunrise_protocol::item::Stack) -> Option<ItemStack>,
-        fuel_registry: Option<&Items>,
+        ghost_items: Option<&Items>,
     ) {
         match display {
             SlotDisplay::Empty => {}
             SlotDisplay::AnyFuel => {
-                if let Some(items) = fuel_registry {
+                if let Some(items) = ghost_items {
                     out.extend(fuel_ghost_stacks(items));
                 }
             }
@@ -680,21 +680,31 @@ impl PacketNames<'_> {
             SlotDisplay::Tag(set) => {
                 out.extend(self.holder_set(set).iter().map(|n| ItemStack::new(n, 1)))
             }
+            SlotDisplay::OnlyWithComponent(source, component) if let Some(items) = ghost_items => {
+                let Some(component) = (self.component)(*component) else {
+                    return;
+                };
+                let start = out.len();
+                self.stacks(source, out, decode_stack, ghost_items);
+                // Filter this source, not any earlier child of an enclosing composite.
+                out.extract_if(start.., |stack| {
+                    !stack.carries_component(items.get(&stack.item), &component)
+                })
+                .for_each(drop);
+            }
             SlotDisplay::WithAnyPotion(source) | SlotDisplay::OnlyWithComponent(source, _) => {
-                self.stacks(source, out, decode_stack, fuel_registry)
+                self.stacks(source, out, decode_stack, ghost_items)
             }
-            SlotDisplay::Dyed { target, .. } => {
-                self.stacks(target, out, decode_stack, fuel_registry)
-            }
+            SlotDisplay::Dyed { target, .. } => self.stacks(target, out, decode_stack, ghost_items),
             SlotDisplay::SmithingTrim { base, .. } => {
-                self.stacks(base, out, decode_stack, fuel_registry)
+                self.stacks(base, out, decode_stack, ghost_items)
             }
             SlotDisplay::WithRemainder { input, .. } => {
-                self.stacks(input, out, decode_stack, fuel_registry)
+                self.stacks(input, out, decode_stack, ghost_items)
             }
             SlotDisplay::Composite(list) => list
                 .iter()
-                .for_each(|d| self.stacks(d, out, decode_stack, fuel_registry)),
+                .for_each(|d| self.stacks(d, out, decode_stack, ghost_items)),
         }
     }
     /// The stonecutter list a server sent (`SelectableRecipe.SingleInputSet`s), as recipes in its
@@ -940,9 +950,19 @@ pub fn ghost_from_display(
 #[cfg(test)]
 #[test]
 fn furnace_ghost_uses_independent_packet_slots_and_the_specific_fuel() {
+    use sunrise_protocol::item::{Stack, persistent::builtin_component_id};
+
+    let fuel_component = "minecraft:cooking_fuel";
+    let fuel_id = builtin_component_id(fuel_component).unwrap();
     let display = RecipeDisplay::Furnace {
         ingredient: SlotDisplay::Item(1),
-        fuel: SlotDisplay::Item(2),
+        fuel: SlotDisplay::OnlyWithComponent(
+            Box::new(SlotDisplay::Composite(vec![
+                SlotDisplay::ItemStack(Stack::new(2, 1)),
+                SlotDisplay::Item(4),
+            ])),
+            fuel_id,
+        ),
         result: SlotDisplay::Item(3), // Not resolvable by this client's registry.
         station: SlotDisplay::Empty,
         duration: 200,
@@ -952,11 +972,21 @@ fn furnace_ghost_uses_independent_packet_slots_and_the_specific_fuel() {
         item: &|id| match id {
             1 => Some("minecraft:iron_ore".into()),
             2 => Some("minecraft:charcoal".into()),
+            4 => Some("minecraft:iron_ingot".into()),
             _ => None,
         },
         category: &|_| None,
+        component: &|id| (id == fuel_id).then(|| fuel_component.into()),
         tag: &|_| Vec::new(),
     };
+    let mut charcoal = ItemStack::new("minecraft:charcoal", 1);
+    charcoal.data_mut().set_loot_component(
+        fuel_component,
+        &Some(Tag::compound([
+            ("burn_time", Tag::Int(1)),
+            ("speed_multiplier", Tag::Float(1.0)),
+        ])),
+    );
     for fuel_empty in [false, true] {
         let ghosts = ghost_from_display(
             &display,
@@ -965,14 +995,14 @@ fn furnace_ghost_uses_independent_packet_slots_and_the_specific_fuel() {
             1,
             fuel_empty,
             &Items::empty(),
-            |_| None,
+            |stack| (stack.item == 2).then(|| charcoal.clone()),
         );
         let shown: Vec<_> = ghosts
             .iter()
             .map(|ghost| (ghost.target, ghost.items.as_slice()))
             .collect();
         let input = [ItemStack::new("minecraft:iron_ore", 1)];
-        let fuel = [ItemStack::new("minecraft:charcoal", 1)];
+        let fuel = [charcoal.clone()];
         let mut expected = vec![(GhostTarget::Input, input.as_slice())];
         if fuel_empty {
             expected.push((GhostTarget::Fuel, fuel.as_slice()));
@@ -2183,6 +2213,7 @@ mod tests {
             &PacketNames {
                 item: &item_name,
                 category: &category_name,
+                component: &|_| None,
                 tag: &tags,
             },
         );
@@ -2228,6 +2259,7 @@ mod tests {
         PacketNames {
             item: &item_name,
             category: &category_name,
+            component: &|_| None,
             tag: tags,
         }
     }
@@ -2470,6 +2502,7 @@ mod tests {
             &PacketNames {
                 item: &item_name,
                 category: &no_category,
+                component: &|_| None,
                 tag: &tags,
             },
         );

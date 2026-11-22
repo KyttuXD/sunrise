@@ -31,9 +31,9 @@ pub trait PlayerRecipesBackend {
 pub trait PlayerRecipesBackendMut {
     /// Side: server.
     /// Set a registered custom book's authoritative pair. Inside a transaction the write is
-    /// rolled back on abort; synchronization and the settings-change hook wait for the
-    /// outermost commit. Returns false for an unavailable player or unknown key.
-    /// An unchanged pair succeeds without notification.
+    /// rolled back on abort; the outermost commit synchronizes and notifies only the final
+    /// changed pair for each player and book. Returns false for an unavailable player or
+    /// unknown key. An unchanged pair succeeds without notification.
     fn player_set_recipe_book_settings(
         &mut self,
         player: PlayerRef,
