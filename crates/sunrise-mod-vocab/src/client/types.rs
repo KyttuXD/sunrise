@@ -608,20 +608,22 @@ pub struct SoundPlay {
     pub identifier: String,
     /// The mixer group it plays on.
     pub source: SoundSource,
-    /// Its own volume, before the source's and the master's.
+    /// Finite base volume, before sound-file scaling and `SoundEngine.calculateVolume`.
+    /// A volume above 1 can increase attenuation distance before the final volume is clamped.
     pub volume: f32,
-    /// Its pitch, 1.0 unchanged.
+    /// Finite base pitch; 1.0 is unchanged before sound-file scaling. The engine clamps the
+    /// scaled pitch (`SoundEngine.calculatePitch`).
     pub pitch: f32,
-    /// Where it plays, in blocks; meaningless when `relative`.
+    /// Where it plays, in world blocks or as an offset from the listener when `relative`.
     pub position: [f64; 3],
     /// It restarts when it ends.
     pub looping: bool,
-    /// Ticks between a looping sound's repeats (`SoundInstance.getDelay`): 0 loops it
-    /// seamlessly, more plays it again that many ticks after it ends.
+    /// A positive value schedules a repeat that many ticks after a looping sound ends.
+    /// Zero or a negative value loops automatically (`SoundEngine.requiresManualLooping`).
     pub delay: i32,
     /// How it fades with distance.
     pub attenuation: SoundAttenuation,
-    /// It plays at the listener, wherever they move.
+    /// Its position is an offset from the listener, wherever they move.
     pub relative: bool,
     /// How the mixer shapes it: its own gain, filters and reverb sends ([`SoundEffects`], with
     /// every field's range). [`SoundEffects::NONE`] by default, which changes nothing.
@@ -654,8 +656,8 @@ pub struct SoundPlay {
 /// The cutoffs are in hertz whatever the output's sample rate, so the same value is valid on
 /// every device. NaN, infinities and anything outside a range are refused, never clamped
 /// ([`SoundEffects::valid`]): the `play_sound` edit at the start, the live refresh of a ticking
-/// sound and `play_local_sound` all run that one check, and a refused value plays nothing, as a
-/// bad volume does. Inside the mixer, a direct-sound cutoff above the output's Nyquist frequency
+/// sound and `play_local_sound` all run that one check, and a refused value plays nothing (or
+/// stops a live sound). Inside the mixer, a direct-sound cutoff above the output's Nyquist frequency
 /// (half its sample rate; the mixer stops at 0.49 of the rate) works as that limit: on a 32 kHz
 /// output, `lowpass` 18000 filters as 15680 would. That limit depends on the device, not on the
 /// value, and is not a refusal.
@@ -775,7 +777,7 @@ impl SoundPlay {
     pub fn with_effects(self, effects: SoundEffects) -> Self {
         Self { effects, ..self }
     }
-    /// The same sound looping, `delay` ticks between its repeats.
+    /// The same sound looping, with a pause of `delay` ticks between repeats if positive.
     pub fn looping(self, delay: i32) -> Self {
         Self {
             looping: true,
@@ -785,8 +787,8 @@ impl SoundPlay {
     }
 }
 
-/// A sound a client mod started with `play_local_sound`, to follow and control: `state`, `stop`
-/// and `fade`. Each handle names one play and is never reused. Once the sound has ended, been
+/// A sound a client mod started with `play_local_sound`, to follow and control: `state`, `stop`,
+/// `fade`, `move_to` and `set_pitch`. Each handle names one play and is never reused. Once the sound has ended, been
 /// stopped or been cleared (leaving or changing levels stops every sound), the handle is stale: it
 /// reads [`SoundState::Stopped`] and its writes do nothing. It stays valid across a change of
 /// output device, which keeps the sounds playing.
@@ -810,7 +812,7 @@ pub enum SoundState {
     Waiting,
     /// Playing (`SoundEngine.isActive`).
     Playing,
-    /// Over: it ended, was stopped, faded to 0 or was cleared. It never plays again.
+    /// Over: it ended, was stopped, faded out or was cleared. It never plays again.
     Stopped,
 }
 

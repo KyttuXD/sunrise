@@ -851,17 +851,29 @@ impl Backend for MixerBackend {
 #[cfg(test)]
 fn stereo_gains(right: f32, up: f32, forward: f32) -> [f32; 2] {
     let length = (right * right + up * up + forward * forward).sqrt();
-    stereo_gains_with_length(right, up, forward, length)
+    stereo_gains_with_length([right, up, forward].map(f64::from), f64::from(length)).unwrap()
 }
-/// `stereo_gains` for a direction of known `length`.
+/// `stereo_gains` for a direction of known `length`, or `None` for unreadable geometry.
 #[inline]
-fn stereo_gains_with_length(right: f32, up: f32, forward: f32, length: f32) -> [f32; 2] {
-    if length <= f32::EPSILON {
-        return stereo_gains_with_length(0.0, 0.0, 1.0, 1.0);
-    }
-    let u = (up / length).clamp(-1.0, 1.0);
+fn stereo_gains_with_length(direction: [f64; 3], length: f64) -> Option<[f32; 2]> {
+    let [right, up, forward] = direction;
+    let narrow = [right as f32, up as f32, forward as f32, length as f32];
+    let (u, mut azimuth) = if narrow.into_iter().all(f32::is_finite) {
+        let [right, up, forward, length] = narrow;
+        if length <= f32::EPSILON {
+            (0.0, 0.0)
+        } else {
+            (up / length, right.atan2(forward))
+        }
+    } else if length.is_finite() && direction.into_iter().all(f64::is_finite) {
+        // Finite channel coordinates can have projections or a length outside f32.
+        // Compute the direction before narrowing; ordinary pans retain f32 rounding.
+        ((up / length) as f32, right.atan2(forward) as f32)
+    } else {
+        return None;
+    };
+    let u = u.clamp(-1.0, 1.0);
     let cos_elev = (1.0 - u * u).max(0.0).sqrt();
-    let mut azimuth = right.atan2(forward);
     if azimuth.abs() < std::f32::consts::FRAC_PI_2 {
         azimuth = (azimuth.abs() * 1.5)
             .min(std::f32::consts::FRAC_PI_2)
@@ -870,14 +882,24 @@ fn stereo_gains_with_length(right: f32, up: f32, forward: f32, length: f32) -> [
     let (sin_az, cos_az) = azimuth.sin_cos();
     let side = sin_az * cos_elev;
     let front = cos_az * cos_elev * 0.095_660_8;
-    [0.5 - 0.5 * side + front, 0.5 + 0.5 * side + front]
+    Some([0.5 - 0.5 * side + front, 0.5 + 0.5 * side + front])
 }
 /// The gain OpenAL applies for distance (`AL_LINEAR_DISTANCE` with reference
 /// distance 0 and rolloff 1: the distance clamps to the max distance).
-fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
+fn distance_gain(linear: Option<f32>, distance: f64) -> f32 {
     match linear {
         None => 1.0,
-        Some(max) if max > 0.0 => (1.0 - distance.min(max) / max).clamp(0.0, 1.0),
+        Some(max) if max > 0.0 => {
+            let distance = distance.min(f64::from(max));
+            let narrow = distance as f32;
+            // An unbounded reach must not turn a finite distance into infinity / infinity.
+            let fraction = if narrow.is_finite() {
+                narrow / max
+            } else {
+                (distance / f64::from(max)) as f32
+            };
+            (1.0 - fraction).clamp(0.0, 1.0)
+        }
         Some(_) => 0.0,
     }
 }
@@ -997,7 +1019,7 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         }),
     );
     let shared = mixer.cameras.len() > 1;
-    let dot = |a: [f64; 3], b: [f64; 3]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) as f32;
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     // Gains and pans per source for this buffer.
     let mut voices = std::mem::take(&mut mixer.voices);
     voices.clear();
@@ -1057,23 +1079,35 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             if zero {
                 (0.0, [0.0, 0.0])
             } else {
-                let distance = d_sqr.sqrt() as f32;
-                let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
-                let [mut left, mut right] = if c.relative {
-                    stereo_gains_with_length(d[0] as f32, d[1] as f32, -d[2] as f32, distance)
+                let distance = d_sqr.sqrt();
+                let direction = if c.relative {
+                    [d[0], d[1], -d[2]]
                 } else {
-                    stereo_gains_with_length(dot(d, right), dot(d, up), dot(d, forward), distance)
+                    [dot(d, right), dot(d, up), dot(d, forward)]
                 };
-                if shared {
-                    let middle = (left + right) * 0.5;
-                    left = middle + (left - middle) * 0.5;
-                    right = middle + (right - middle) * 0.5;
+                if let Some([mut left, mut right]) = stereo_gains_with_length(direction, distance) {
+                    let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
+                    if shared {
+                        let middle = (left + right) * 0.5;
+                        left = middle + (left - middle) * 0.5;
+                        right = middle + (right - middle) * 0.5;
+                    }
+                    (gain, [left * gain, right * gain])
+                } else {
+                    (0.0, [0.0, 0.0])
                 }
-                (gain, [left * gain, right * gain])
             }
         };
+        // Keep an unreadable voice out of the shared output and reverb buses,
+        // but keep advancing its playhead.
+        let gains = [left, right, gain];
+        let gains = if gains.into_iter().all(f32::is_finite) {
+            gains
+        } else {
+            [0.0; 3]
+        };
         let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
-        voices.push((*id, [left, right, gain], step));
+        voices.push((*id, gains, step));
     }
     // A mod's muffle: the sounds it doesn't exempt mix into a bus of their own first.
     let muffling = mixer.muffle.active();
@@ -1970,7 +2004,8 @@ impl Audio {
             let level = fade.level();
             if fade.left == 0 {
                 self.muffle = None;
-                self.engine.set_unmuffled(Vec::new(), &mut self.backend);
+                self.engine
+                    .set_unmuffled(Default::default(), &mut self.backend);
             }
             self.set_muffle_level(level);
         }
@@ -2005,7 +2040,7 @@ impl Audio {
                 .map(|e| crate::sound_events::normalize(e))
                 .collect()
         } else {
-            Vec::new()
+            Default::default()
         };
         self.engine.set_unmuffled(exempt, &mut self.backend);
         self.muffle = on.then_some(MuffleFade {
@@ -2127,7 +2162,7 @@ impl Audio {
         let instance =
             SoundInstance::at(&event, source, volume, pitch, LegacyRandom::new(seed), at);
         let id = self.engine.add(instance, false);
-        self.engine.play_delayed(id, ticks);
+        self.engine.play_delayed(id, i64::from(ticks));
     }
     /// A client mod's sound (`ClientHost::play_local_sound`), as its `SoundPlay` gives it,
     /// starting `after` sound-engine ticks from now (`SoundEngine.playDelayed`) or at once.
@@ -2159,7 +2194,7 @@ impl Audio {
         } else {
             self.sync_volumes();
             let id = self.engine.add(instance, false);
-            self.engine.play_delayed(id, after as i32);
+            self.engine.play_delayed(id, i64::from(after));
             id
         }
     }
@@ -2171,7 +2206,7 @@ impl Audio {
     pub fn stop_mod_sound(&mut self, id: InstanceId) {
         self.engine.stop_for_good(id, &mut self.backend);
     }
-    /// A client mod's `SoundRef::fade`; a fade to 0 at once stops it as `stop_mod_sound` does.
+    /// A client mod's `SoundRef::fade`; an immediate nonpositive target stops the sound.
     pub fn fade_mod_sound(&mut self, id: InstanceId, volume: f32, ticks: u32) {
         if ticks == 0 && volume <= 0.0 {
             self.stop_mod_sound(id);
@@ -2197,7 +2232,7 @@ impl Audio {
         *self.heard.entry(instance.identifier.clone()).or_default() += 1;
         self.sync_volumes();
         let id = self.engine.add(instance, false);
-        self.engine.play_delayed(id, ticks);
+        self.engine.play_delayed(id, i64::from(ticks));
     }
     /// `play` for this client only: a sound a packet's handler plays
     /// (`playLocalSound`), which the guests play from that packet themselves.
@@ -2791,6 +2826,82 @@ mod tests {
             started: None,
             unmuffled: false,
             fx: fx::VoiceFx::default(),
+        }
+    }
+
+    #[test]
+    fn an_unreadable_pan_does_not_silence_other_voices() {
+        let clear = || stereo_channel(vec![0.25; 6], None, [0.0; 3], false);
+        let mut mixer = Mixer::default();
+        mixer.channels.insert(1, clear());
+        let mut plain = [0.0; 4];
+        mix(&mut mixer, &mut plain, 2, 48_000);
+        assert_eq!(plain, [0.25; 4]);
+
+        mixer.channels.insert(1, clear());
+        mixer
+            .channels
+            .insert(2, channel(vec![0.5; 4], None, [f32::NAN, 0.0, 0.0], false));
+        let mut mixed = [0.0; 4];
+        mix(&mut mixer, &mut mixed, 2, 48_000);
+        assert_eq!(mixed, plain);
+        assert_eq!(mixer.channels[&2].position, 2.0);
+    }
+
+    #[test]
+    fn a_readable_extreme_position_pans_alongside_an_ordinary_voice() {
+        let max = f64::from(f32::MAX);
+        let axis = f32::MAX * 0.75;
+        let poses = [
+            // Nearly level with the pitched listener: 2 MAX left, 0.75 sqrt(2) MAX forward.
+            // This exceeds the stereo decoder's 60-degree full-left angle.
+            (
+                [-max, 0.0, 0.0],
+                45.0,
+                [f32::MAX, -axis, axis],
+                false,
+                [0.75, 0.25],
+            ),
+            // Directly left at 60 degrees elevation: 1 MAX left and sqrt(3) MAX up.
+            // The elevation halves the left-right spread, so the gains are 0.75 and 0.25.
+            (
+                [0.0, (1.0 - 3.0_f64.sqrt()) * max, 0.0],
+                0.0,
+                [f32::MAX, f32::MAX, 0.0],
+                false,
+                [0.625, 0.375],
+            ),
+            // Listener-relative right and ahead (Z negated), ignoring the listener pose:
+            // length sqrt(1.25) MAX > f32::MAX, azimuth atan2(1, 0.5) > 60 degrees -> full right.
+            (
+                [max, 0.0, 0.0],
+                45.0,
+                [f32::MAX, 0.0, -(f32::MAX * 0.5)],
+                true,
+                [0.25, 0.75],
+            ),
+        ];
+        for (listener, listener_pitch, at, relative, [left, right]) in poses {
+            for (linear, expected) in [
+                (None, [left, right, left, right]),
+                (Some(f32::MAX), [0.25; 4]),
+                (Some(f32::INFINITY), [left, right, left, right]),
+            ] {
+                let mut mixer = Mixer {
+                    listener,
+                    listener_pitch,
+                    ..Mixer::default()
+                };
+                mixer
+                    .channels
+                    .insert(1, stereo_channel(vec![0.25; 6], None, [0.0; 3], false));
+                let mut voice = channel(vec![0.5; 4], linear, at, false);
+                voice.relative = relative;
+                mixer.channels.insert(2, voice);
+                let mut mixed = [0.0; 4];
+                mix(&mut mixer, &mut mixed, 2, 48_000);
+                assert_eq!(mixed, expected);
+            }
         }
     }
 
@@ -3572,7 +3683,12 @@ mod tests {
         // Two sounds already playing, and one exempt sound started under the muffle.
         audio.play("ambient.cave", None, 1.0, 1.0);
         audio.play("hztest:ear.ringing", None, 1.0, 1.0);
-        assert!(audio.muffle(0.8, 1.0, 4, &["hztest:ear.ringing"]));
+        let exempt: Vec<_> = (0..65)
+            .map(|n| format!("hztest:other.{n}"))
+            .chain(std::iter::once("hztest:ear.ringing".to_owned()))
+            .collect();
+        let exempt: Vec<_> = exempt.iter().map(String::as_str).collect();
+        assert!(audio.muffle(0.8, 1.0, 4, &exempt));
         audio.play("hztest:ear.ringing", None, 1.0, 1.0);
         assert_eq!(marks(&audio), [(1, false), (2, true), (3, true)]);
         assert!(close(level(&audio), [0.8, 1.0]));
@@ -3627,8 +3743,14 @@ mod tests {
         let ctx = TickContext::default();
         let click = mod_api::SoundPlay::ui("minecraft:ui.button.click");
         let sound = audio.play_mod_sound(&click, 2);
+        let long = audio.play_mod_sound(&click, u32::MAX);
         assert_eq!(audio.mod_sound_state(sound), Waiting);
         audio.tick(false, &ctx);
+        assert_eq!(
+            audio.mod_sound_state(long),
+            Waiting,
+            "the long delay did not wrap"
+        );
         assert_eq!(audio.mod_sound_state(sound), Waiting, "one tick of two");
         audio.tick(false, &ctx);
         assert_eq!(audio.mod_sound_state(sound), Playing);
@@ -3654,17 +3776,29 @@ mod tests {
         let play = mod_api::SoundPlay::at(
             "minecraft:ui.button.click",
             mod_api::SoundSource::Blocks,
-            [1.0, 2.0, 3.0],
+            [31_000_000.0, 2.0, 3.0],
         )
-        .looping(0);
+        .with_volume(-1.0)
+        .with_pitch(3.0)
+        .looping(-1);
         let sound = audio.play_mod_sound(&play, 0);
-        audio.move_mod_sound(sound, [10.0, 20.0, 30.0]);
-        audio.set_mod_sound_pitch(sound, 1.5);
+        let channel = audio.engine.channel(sound).unwrap();
+        {
+            let mixer = audio.backend.mixer.lock().unwrap();
+            let voice = &mixer.channels[&channel];
+            assert_eq!(voice.at, [31_000_000.0, 2.0, 3.0]);
+            assert_eq!((voice.gain, voice.pitch), (0.0, 2.0));
+            assert!(voice.looping);
+        }
+        audio.move_mod_sound(sound, [10.0, 32_000_000.0, 30.0]);
+        audio.set_mod_sound_pitch(sound, -1.0);
         audio.tick(false, &ctx);
-        let instance = audio.engine.instance(sound).expect("the same instance");
-        assert_eq!(instance.position, [10.0, 20.0, 30.0]);
-        assert_eq!(instance.pitch, 1.5);
-        assert_eq!(audio.mod_sound_state(sound), Playing, "not restarted");
+        assert_eq!(audio.engine.channel(sound), Some(channel), "not restarted");
+        let mixer = audio.backend.mixer.lock().unwrap();
+        let voice = &mixer.channels[&channel];
+        assert_eq!(voice.at, [10.0, 32_000_000.0, 30.0]);
+        assert_eq!(voice.pitch, 0.5);
+        assert_eq!(audio.mod_sound_state(sound), Playing);
     }
 
     #[test]
@@ -3701,7 +3835,7 @@ mod tests {
         let other = audio.play_mod_sound(&mod_api::SoundPlay::ui("minecraft:ui.button.click"), 0);
         audio.fade_mod_sound(other, 0.3, 0);
         assert_eq!(volume_of(&audio, other), Some(0.3));
-        audio.fade_mod_sound(other, 0.0, 0);
+        audio.fade_mod_sound(other, -1.0, 0);
         for _ in 0..2 {
             audio.tick(false, &ctx);
         }
@@ -3733,6 +3867,19 @@ mod tests {
         audio.stop_mod_sound(sound);
         audio.tick(false, &ctx);
         assert_eq!(audio.mod_sound_state(sound), Stopped);
+    }
+
+    #[test]
+    fn a_fade_between_extreme_finite_volumes_stays_finite() {
+        let mut audio = live_audio();
+        let ctx = TickContext::default();
+        let play = mod_api::SoundPlay::ui("minecraft:ui.button.click").with_volume(-f32::MAX);
+        let sound = audio.play_mod_sound(&play, 0);
+        audio.fade_mod_sound(sound, f32::MAX, 2);
+        audio.tick(false, &ctx);
+        assert_eq!(volume_of(&audio, sound), Some(0.0));
+        audio.tick(false, &ctx);
+        assert_eq!(volume_of(&audio, sound), Some(f32::MAX));
     }
 
     /// A mod sound at volume 0 starts silent and keeps its handle, so a fade raises it.
