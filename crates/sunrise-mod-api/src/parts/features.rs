@@ -9,23 +9,26 @@ pub mod tests {
     #[cfg(test)]
     use crate::*;
 
+    #[cfg(test)]
+    struct Tree;
+
+    #[cfg(test)]
+    impl mod_api::FeatureType for Tree {
+        fn place(
+            &self,
+            _: &mut dyn mod_api::FeatureContext,
+            _: [i32; 3],
+        ) -> Result<bool, mod_api::FeatureError> {
+            Ok(false)
+        }
+    }
+
     /// A feature type twice, one in an unowned namespace, one without a name, one taking a
-    /// vanilla feature type's id, one with an invalid schema, one with a reference field and
-    /// one with a nested field (whose map keys could be references): every invalid registration
-    /// is refused at startup, naming the mod.
+    /// vanilla feature type's id, one with an invalid schema and one with a reference field:
+    /// every invalid registration is refused at startup, naming the mod.
     #[test]
     pub(crate) fn invalid_feature_types_refuse_registration() {
         use mod_api::{DatapackField, DatapackFieldKind, DatapackValue};
-        struct Tree;
-        impl mod_api::FeatureType for Tree {
-            fn place(
-                &self,
-                _: &mut dyn mod_api::FeatureContext,
-                _: [i32; 3],
-            ) -> Result<bool, mod_api::FeatureError> {
-                Ok(false)
-            }
-        }
         let height = || {
             vec![DatapackField::with_default(
                 "height",
@@ -75,19 +78,6 @@ pub mod tests {
                     )],
                     Tree,
                 );
-                r.register_feature_type(
-                    "nested",
-                    vec![DatapackField::required(
-                        "by_spell",
-                        DatapackFieldKind::Map {
-                            key: mod_api::DatapackKeyKind::Reference {
-                                registry: "test:spell".into(),
-                            },
-                            value: Box::new(DatapackFieldKind::Bool),
-                        },
-                    )],
-                    Tree,
-                );
             }
         }
         let errors = install_parts(
@@ -96,18 +86,34 @@ pub mod tests {
             |_| false,
         )
         .unwrap_err();
-        assert_eq!(errors.len(), 7, "{errors:?}");
+        assert_eq!(errors.len(), 6, "{errors:?}");
         assert!(errors[0].contains("test registered feature type test:tree twice"));
         assert!(errors[1].contains("namespace"));
         assert!(errors[2].contains("invalid identifier \"test:\""));
         assert!(errors[3].contains("namespace"), "{}", errors[3]);
         assert!(errors[4].contains("test:doubled: invalid config schema: InvalidFieldName"));
         assert!(errors[5].contains("test:linked: config field \"next\" is a Reference"));
-        assert!(
-            errors[6].contains("test:nested: config field \"by_spell\" is nested"),
-            "{}",
-            errors[6]
+    }
+
+    #[test]
+    fn a_nested_config_is_refused_without_adding_the_feature() {
+        use mod_api::{DatapackField, DatapackFieldKind, DatapackKeyKind};
+        let mut registrar = PartRegistrar::new("test");
+        registrar.add_feature_type(
+            "nested",
+            vec![DatapackField::required(
+                "by_spell",
+                DatapackFieldKind::Map {
+                    key: DatapackKeyKind::Reference {
+                        registry: "test:spell".into(),
+                    },
+                    value: Box::new(DatapackFieldKind::Bool),
+                },
+            )],
+            Arc::new(Tree),
         );
+        assert_eq!(registrar.refused.len(), 1);
+        assert!(registrar.feature_types.is_empty());
     }
 }
 
