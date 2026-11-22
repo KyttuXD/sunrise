@@ -1092,16 +1092,12 @@ mod content_tests {
                     items.iter().map(|i| (*i).to_owned()).collect(),
                 )
             };
-            event.additions.push(add(
+            event.register(add(
                 "minecraft:furnace_input",
                 &["minecraft:emerald", "minecraft:air"],
             ));
-            event
-                .additions
-                .push(add("minecraft:no_such_set", &["minecraft:dirt"]));
-            event
-                .additions
-                .push(add("brewing_reagent", &["minecraft:diamond"]));
+            event.register(add("minecraft:no_such_set", &["minecraft:dirt"]));
+            event.register(add("brewing_reagent", &["minecraft:diamond"]));
         }
     }
 

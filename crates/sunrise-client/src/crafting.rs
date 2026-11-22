@@ -1687,13 +1687,17 @@ pub struct ResolvedSources {
     /// reports them and refuses the whole candidate generation.
     failures: Vec<(String, String)>,
 }
-/// The items mods added to the recipe property sets
-/// (`RecipeManager.RECIPE_PROPERTY_SETS`) in one load, by set key without
-/// its `minecraft:` prefix (`furnace_input`). The one answer every reader of
-/// the sets takes: the cooking, station and brewing acceptance and the
-/// network copy.
+/// Each recipe property set's additions and first contributing mod in one load,
+/// by set key without its `minecraft:` prefix (`furnace_input`). Cooking, station
+/// and brewing acceptance and the network copy all read this answer.
 #[derive(Clone, Debug, Default)]
-pub struct PropertyAdditions(HashMap<String, HashSet<String>>);
+pub struct PropertyAdditions(HashMap<String, PropertySetAddition>);
+
+#[derive(Clone, Debug)]
+struct PropertySetAddition {
+    first_mod: &'static str,
+    items: HashSet<String>,
+}
 #[cfg(test)]
 #[path = "crafting/property_sets_tests.rs"]
 mod property_sets_tests;
@@ -1703,8 +1707,10 @@ impl PropertyAdditions {
     fn ask(context: &sunrise_world::native_load_context::LoadContext) -> Self {
         let mut asked = Vec::new();
         native_hooks::native_recipe_property_sets(context, &mut asked);
-        let mut sets = HashMap::<String, HashSet<String>>::new();
-        for addition in asked {
+        let mut sets = HashMap::new();
+        for entry in asked {
+            let mod_id = entry.mod_id;
+            let addition = entry.answer;
             let key = addition
                 .set
                 .strip_prefix("minecraft:")
@@ -1714,15 +1720,26 @@ impl PropertyAdditions {
                     .iter()
                     .any(|(set, ..)| *set == key)
             {
-                log::warn!("recipe_property_sets: unknown set {}", addition.set);
+                log::warn!(
+                    "recipe_property_sets: {mod_id}: unknown set {}",
+                    addition.set
+                );
                 continue;
             }
-            let set = sets.entry(key.to_owned()).or_default();
+            let set = sets
+                .entry(key.to_owned())
+                .or_insert_with(|| PropertySetAddition {
+                    first_mod: mod_id,
+                    items: HashSet::new(),
+                });
             for item in addition.items {
                 if item == "minecraft:air" {
-                    log::warn!("recipe_property_sets: air skipped in {key}");
+                    log::warn!(
+                        "recipe_property_sets: {mod_id}: air skipped in {key} (first contributed by {})",
+                        set.first_mod
+                    );
                 } else {
-                    set.insert(item);
+                    set.items.insert(item);
                 }
             }
         }
@@ -1730,7 +1747,7 @@ impl PropertyAdditions {
     }
     /// The items mods added to the set `key` (`furnace_input`).
     pub fn get(&self, key: &str) -> Option<&HashSet<String>> {
-        self.0.get(key)
+        self.0.get(key).map(|set| &set.items)
     }
     /// Custom sets, with fully qualified keys. Vanilla additions are read by
     /// their owning recipe projections instead.
@@ -1738,7 +1755,7 @@ impl PropertyAdditions {
         self.0
             .iter()
             .filter(|(key, _)| key.contains(':'))
-            .map(|(key, items)| (key.as_str(), items))
+            .map(|(key, set)| (key.as_str(), &set.items))
     }
     /// Whether a mod added `item` to the set `key`.
     pub fn adds(&self, key: &str, item: &str) -> bool {

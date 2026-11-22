@@ -449,7 +449,7 @@ pub(crate) mod built {
     }
 }
 
-/// Saved-world resolution records and listener-boundary attribution.
+/// Saved-world resolution records and scoped `ModMismatchEvent` operations.
 #[path = "mismatch_resolution.rs"]
-pub mod mismatch_resolution;
+mod mismatch_resolution;
 pub use mismatch_resolution::ModMismatchResolution;

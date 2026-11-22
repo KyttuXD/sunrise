@@ -23,7 +23,7 @@ impl mod_api::Hooks for Sets {
             ("foreign:input", vec!["minecraft:diamond"]),
             ("minecraft:furnace_input", vec!["minecraft:diamond"]),
         ] {
-            event.additions.push(mod_api::RecipePropertyAddition::new(
+            event.register(mod_api::RecipePropertyAddition::new(
                 key,
                 items.into_iter().map(str::to_owned).collect(),
             ));
@@ -38,12 +38,16 @@ impl mod_api::Hooks for Extend {
         _: &dyn mod_api::DataLoadContext,
         event: &mut mod_api::RecipePropertySetsEvent<'_>,
     ) {
-        event.additions.push(mod_api::RecipePropertyAddition::new(
+        event.register(mod_api::RecipePropertyAddition::new(
             "pot:input",
+            vec!["minecraft:diamond".into(), "minecraft:emerald".into()],
+        ));
+        event.register(mod_api::RecipePropertyAddition::new(
+            "pot:foreign_new",
             vec!["minecraft:diamond".into()],
         ));
-        event.additions.push(mod_api::RecipePropertyAddition::new(
-            "pot:foreign_new",
+        event.register(mod_api::RecipePropertyAddition::new(
+            "minecraft:unknown_property_test",
             vec!["minecraft:diamond".into()],
         ));
     }
@@ -66,7 +70,14 @@ fn custom_sets_survive_dispatch_and_sync_but_new_foreign_keys_do_not() {
         ]
         .into(),
         || {
+            crate::test_log::install();
+            crate::test_log::clear();
             let resolved = ResolvedSources::resolve(vec![], &Items::empty(), &context).unwrap();
+            assert_eq!(resolved.property_additions.0["pot:input"].first_mod, "pot");
+            assert!(crate::test_log::records().iter().any(|(level, message)| {
+                *level == log::Level::Warn
+                    && message.contains("extension: unknown set minecraft:unknown_property_test")
+            }));
             assert!(resolved.property_additions.get("foreign:input").is_none());
             assert!(resolved.property_additions.get("pot:foreign_new").is_none());
             assert!(

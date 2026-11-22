@@ -150,7 +150,7 @@ pub enum StackCount {
     Trim,
 }
 
-/// How a registration collector exposes its append-only output.
+/// How a collector exposes its append-only output.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationAppend {
@@ -158,6 +158,9 @@ pub enum RegistrationAppend {
     Register,
     /// The vocabulary crate supplies the event methods in an inherent impl.
     Custom,
+    /// The vocabulary crate supplies attributed append-only methods in an inherent impl;
+    /// dispatch sets `pub(super) mod_id: &'static str` on the event before each listener.
+    Attributed,
 }
 
 /// One hook point: a moment the game tells mods about.
@@ -180,9 +183,7 @@ pub struct Hook {
     /// A listener about one mod's own things: the event field naming that mod, whose
     /// subscription alone is told.
     pub owner: Option<String>,
-    /// Validate a collector's edits at the per-listener ownership boundary.
-    pub collect_validator: Option<String>,
-    /// Hide the output vector of a registration collector behind append-only methods.
+    /// Hide the output vector of a collector behind append-only methods.
     pub registration_append: Option<RegistrationAppend>,
     /// Mutable registrar field, or `host` for a direct listener whose owner journals its writes.
     pub staged_surface: Option<String>,
@@ -360,7 +361,6 @@ struct ModApiEntry {
     key: Option<String>,
     answered_by: Option<AnsweredBy>,
     owner: Option<String>,
-    collect_validator: Option<String>,
     registration_append: Option<RegistrationAppend>,
     staged_surface: Option<String>,
     output_validator: Option<String>,
@@ -507,15 +507,15 @@ impl Hook {
                     .into(),
             });
         }
-        // A validator checks the entries a mod edits in place; an answered collector's mods
-        // only push into their own batch.
-        if let Some(validator) = &api.collect_validator
-            && (api.contract != Contract::Collect
-                || scope.is_some()
-                || answered_by_mod
-                || syn::parse_str::<syn::Path>(validator).is_err())
+        if api.registration_append == Some(RegistrationAppend::Attributed)
+            && (api.contract != Contract::Collect || scope.is_some() || answered_by_mod)
         {
-            return Err(CatalogError::InvalidContract(name));
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error:
+                    "registration_append = \"attributed\" requires a global non-answered collect hook"
+                        .into(),
+            });
         }
         if let Some(validator) = &api.output_validator
             && (api.contract != Contract::Cancel
@@ -544,7 +544,6 @@ impl Hook {
             out: api.out,
             answered_by_mod,
             owner: api.owner,
-            collect_validator: api.collect_validator,
             registration_append: api.registration_append,
             staged_surface: api.staged_surface,
             inert: entry.inert,
@@ -832,7 +831,6 @@ impl Declared {
                             "key",
                             "answered_by",
                             "owner",
-                            "collect_validator",
                             "registration_append",
                             "staged_surface",
                             "output_validator",
@@ -994,7 +992,6 @@ impl Hook {
             out: None,
             answered_by_mod: false,
             owner: None,
-            collect_validator: None,
             registration_append: None,
             staged_surface: None,
             inert: None,

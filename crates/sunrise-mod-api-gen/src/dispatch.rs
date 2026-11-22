@@ -428,21 +428,35 @@ pub(super) fn emit<'a>(
                 }
                 _ => None,
             };
+            let context_ok = mode == RegistrationAppend::Attributed
+                || hook.context == Some(PhaseContext::Registration);
+            let attributed_ok = mode != RegistrationAppend::Attributed
+                || (scoped.is_none() && !answered && !hook.event_per_listener);
             let Some(entry) = entry.filter(|_| {
-                hook.context == Some(PhaseContext::Registration)
+                context_ok
+                    && attributed_ok
                     && contract == Contract::Collect
                     && !collect_cancel
                     && declaration.is_none()
                     && !is_render
             }) else {
                 return Err(format!(
-                    "{name}: registration_append requires a non-cancelling RegistrationContext collect with a mutable Vec output"
+                    "{name}: registration_append requires a non-cancelling collect with a mutable Vec output (and RegistrationContext unless attributed)"
                 ));
             };
             Some((mode, entry))
         } else {
             None
         };
+        let attributed_append = matches!(
+            registration_append,
+            Some((RegistrationAppend::Attributed, _))
+        );
+        if attributed_append && args.iter().any(|(arg, _)| arg == "mod_id") {
+            return Err(format!(
+                "{name}: an attributed append hook's event has its own `mod_id` field"
+            ));
+        }
         if !is_render {
             hook_ids.push_str(&format!("{hook_id},\n"));
             hook_constants.push_str(&format!(
@@ -520,6 +534,10 @@ pub(super) fn emit<'a>(
         let collected = output
             .as_ref()
             .filter(|_| contract == Contract::Collect && !answered_return);
+        if attributed_append {
+            fields.push_str("pub(super) mod_id: &'static str,\n");
+            inits.push("mod_id: \"\"".to_owned());
+        }
         for (name, ty) in args.iter().chain(collected) {
             let mut owned_ty = (*ty).clone();
             struct OwnedLootContext;
@@ -625,7 +643,9 @@ pub(super) fn emit<'a>(
             let append = registration_append.filter(|_| Some(name.as_str()) == out);
             let visibility = match append {
                 Some((RegistrationAppend::Register, _)) => "",
-                Some((RegistrationAppend::Custom, _)) => "pub(super)",
+                Some((RegistrationAppend::Custom | RegistrationAppend::Attributed, _)) => {
+                    "pub(super)"
+                }
                 None if task_registration
                     || matches!(
                         (event_type.as_str(), name.as_str()),
@@ -711,7 +731,7 @@ pub(super) fn emit<'a>(
         let wire_comment = if declaration.is_some() {
             "// no wire: this event borrows a declaration sink and its diagnostics.\n"
         } else if registration_append.is_some() {
-            "// no wire: this event borrows the registration staging vector.\n"
+            "// no wire: this event borrows the append-only staging vector.\n"
         } else if staged.is_some() && !staged_host {
             "// no wire: this event borrows the current listener's staging surface.\n"
         } else {
@@ -1048,6 +1068,9 @@ pub(super) fn emit<'a>(
             Some((RegistrationAppend::Custom, _)) => {
                 "Use its registration methods to add entries without changing earlier registrations."
             }
+            Some((RegistrationAppend::Attributed, _)) => {
+                "Use its scoped methods to record attributed entries without changing earlier ones."
+            }
             None => {
                 "Each field is that hook's argument of the same name, described in the hook's doc."
             }
@@ -1214,10 +1237,7 @@ pub(super) fn emit<'a>(
         } else {
             ""
         };
-        let run_with = |mod_id_expr: &str,
-                        on_abort: &str,
-                        extra_restore: &str,
-                        expression: &str| {
+        let run = |mod_id_expr: &str, on_abort: &str, expression: &str| {
             let invocation = format!(
                 "super::runtime::invoke(HookId::{hook_id}, \"{name}\", {mod_id_expr}, || {expression})"
             );
@@ -1234,7 +1254,6 @@ pub(super) fn emit<'a>(
             if restore_statement.is_empty()
                 && discard_batch.is_empty()
                 && stack_restore.is_empty()
-                && extra_restore.is_empty()
                 && report_panic.is_empty()
             {
                 match on_abort {
@@ -1244,11 +1263,8 @@ pub(super) fn emit<'a>(
                 }
             }
             format!(
-                "match {invocation} {{ Some(answer) => answer, None => {{ {report_panic}{restore_statement}{discard_batch}{stack_restore}{extra_restore}{on_abort} }} }}"
+                "match {invocation} {{ Some(answer) => answer, None => {{ {report_panic}{restore_statement}{discard_batch}{stack_restore}{on_abort} }} }}"
             )
-        };
-        let run = |mod_id_expr: &str, on_abort: &str, expression: &str| {
-            run_with(mod_id_expr, on_abort, "", expression)
         };
         let listener_call = |callee: &str| {
             let expression = format!("{callee}.{name}({invoke})");
@@ -1344,18 +1360,8 @@ pub(super) fn emit<'a>(
                     "{plain_call}; {o}.extend({event}.{o}.drain(..).map(|answer| Answered {{ answer, mod_id: {mod_id_expr} }}));",
                     o = out.unwrap()
                 ),
-                Contract::Collect if hook.collect_validator.is_some() => {
-                    let validator = hook.collect_validator.as_ref().unwrap();
-                    let output = out.unwrap();
-                    let validated_call = run_with(
-                        mod_id_expr,
-                        on_abort,
-                        &format!("*{event}.{output} = previous; "),
-                        &format!("{callee}.{name}({invoke})"),
-                    );
-                    format!(
-                        "let previous = {event}.{output}.clone(); {validated_call}; {validator}({mod_id_expr}, &previous, {event}.{output});"
-                    )
+                Contract::Collect if attributed_append => {
+                    format!("{event}.mod_id = {mod_id_expr}; {plain_call};")
                 }
                 _ => format!("{plain_call};"),
             };

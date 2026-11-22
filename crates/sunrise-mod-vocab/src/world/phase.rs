@@ -921,12 +921,6 @@ pub struct LoadedMods {
 }
 
 impl LoadedMods {
-    #[cfg(test)]
-    pub(crate) fn from_entries(entries: Arc<[PackageInfo]>) -> Self {
-        let authority = Arc::new(crate::parts::NamespaceAuthority::from_packages(&entries));
-        Self { entries, authority }
-    }
-
     pub(crate) fn new() -> Self {
         #[cfg(test)]
         if let Some((entries, authority)) = TEST_PACKAGES.with_borrow(Clone::clone) {

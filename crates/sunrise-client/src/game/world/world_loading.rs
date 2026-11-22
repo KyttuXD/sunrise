@@ -1749,22 +1749,24 @@ mod tests {
         impl Hooks for Migrating {
             fn mod_mismatch(&self, _: HostSide, event: &mut ModMismatchEvent<'_>) {
                 self.0.lock().unwrap().push(event.mismatches.to_vec());
-                event.resolved.push("mismatch_test".to_owned().into());
+                event.mark_resolved("mismatch_test");
             }
         }
-        struct Erasing;
+        struct Duplicate;
         #[mod_api::__subscriptions]
-        impl Hooks for Erasing {
+        impl Hooks for Duplicate {
             fn mod_mismatch(&self, _: HostSide, event: &mut ModMismatchEvent<'_>) {
-                assert_eq!(event.resolved[0].resolver, "mismatch_test");
-                event.resolved.clear();
+                assert!(event.was_resolved("mismatch_test"));
+                assert_eq!(event.resolver("mismatch_test"), Some("mismatch_test"));
+                event.mark_resolved("mismatch_test");
             }
         }
         struct Observing;
         #[mod_api::__subscriptions]
         impl Hooks for Observing {
             fn mod_mismatch(&self, _: HostSide, event: &mut ModMismatchEvent<'_>) {
-                assert_eq!(event.resolved[0].resolver, "mismatch_test");
+                assert_eq!(event.resolver("mismatch_test"), Some("mismatch_test"));
+                assert_eq!(event.resolved()[0].resolver, "mismatch_test");
             }
         }
         let dir = std::env::current_dir()
@@ -1831,7 +1833,7 @@ mod tests {
         mod_platform::testing::with_mods(
             vec![
                 ModEntry::new("mismatch_test", Box::new(Migrating(heard.clone()))),
-                ModEntry::new("erasing", Box::new(Erasing)),
+                ModEntry::new("duplicate", Box::new(Duplicate)),
                 ModEntry::new("observing", Box::new(Observing)),
             ]
             .into(),

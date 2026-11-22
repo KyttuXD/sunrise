@@ -221,16 +221,14 @@ pub enum PipelineDrawError {
     CapacityExceeded,
 }
 
-/// Stamp the owning mod onto every pipeline `owner` added in `register_render_pipelines`.
-/// Duplicate IDs are rejected when the engine freezes the collected registrations at startup.
-pub(crate) fn validate_render_pipelines(
-    owner: &str,
-    previous: &[RenderPipeline],
-    pipelines: &mut [RenderPipeline],
-) {
-    let start = previous.len().min(pipelines.len());
-    for pipeline in &mut pipelines[start..] {
-        pipeline.owner = owner.to_owned();
+impl crate::RegisterRenderPipelinesEvent<'_> {
+    /// Register one render pipeline without exposing earlier registrations.
+    ///
+    /// The entry is attributed to this listener immediately. Any valid identifier is accepted
+    /// here; duplicate IDs are refused when the engine freezes the registrations at startup.
+    pub fn register(&mut self, mut entry: RenderPipeline) {
+        entry.owner = self.mod_id.to_owned();
+        self.pipelines.push(entry);
     }
 }
 
@@ -253,16 +251,16 @@ mod tests {
 
     #[test]
     fn stamps_owner_on_new_pipelines_across_namespaces_and_preserves_duplicates_for_freeze() {
-        let mut previous = vec![pipeline("other:glow")];
-        validate_render_pipelines("first_mod", &[], &mut previous);
-        let mut pipelines = previous.clone();
-        pipelines.extend([
-            pipeline("minecraft:glow"),
-            pipeline("other:beam"),
-            pipeline("other:glow"),
-            pipeline("mine:beam"),
-        ]);
-        validate_render_pipelines("owning_mod", &previous, &mut pipelines);
+        let mut pipelines = Vec::new();
+        let mut event = crate::RegisterRenderPipelinesEvent {
+            mod_id: "first_mod",
+            pipelines: &mut pipelines,
+        };
+        event.register(pipeline("other:glow"));
+        event.mod_id = "owning_mod";
+        for id in ["minecraft:glow", "other:beam", "other:glow", "mine:beam"] {
+            event.register(pipeline(id));
+        }
         assert_eq!(
             ids(&pipelines),
             [
@@ -281,14 +279,24 @@ mod tests {
 
     #[test]
     fn a_mod_can_register_more_than_vanillas_pipeline_count() {
-        let mut pipelines: Vec<_> = (0..131).map(|i| pipeline(&format!("mine:p{i}"))).collect();
-        validate_render_pipelines("mine", &[], &mut pipelines);
+        let mut pipelines = Vec::new();
+        {
+            let mut event = crate::RegisterRenderPipelinesEvent {
+                mod_id: "mine",
+                pipelines: &mut pipelines,
+            };
+            for i in 0..131 {
+                event.register(pipeline(&format!("mine:p{i}")));
+            }
+        }
         assert_eq!(pipelines.len(), 131);
         assert_eq!(pipelines.last().unwrap().id.to_string(), "mine:p130");
 
-        let previous = pipelines.clone();
-        pipelines.push(pipeline("next:glow"));
-        validate_render_pipelines("next", &previous, &mut pipelines);
+        crate::RegisterRenderPipelinesEvent {
+            mod_id: "next",
+            pipelines: &mut pipelines,
+        }
+        .register(pipeline("next:glow"));
         assert_eq!(pipelines.len(), 132);
     }
 }

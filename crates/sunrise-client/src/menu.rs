@@ -3551,7 +3551,7 @@ pub(crate) mod tests {
             event: &mut mod_api::RecipePropertySetsEvent<'_>,
         ) {
             for set in ["furnace_input", "brewing_reagent", "smithing_addition"] {
-                event.additions.push(mod_api::RecipePropertyAddition::new(
+                event.register(mod_api::RecipePropertyAddition::new(
                     set,
                     vec!["minecraft:apple".to_owned()],
                 ));

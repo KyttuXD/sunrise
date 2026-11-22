@@ -1,14 +1,15 @@
 //! Client render pipeline registration.
 
 pub trait Hooks {
-    /// Register the mod's own render pipelines, once at client startup (NeoForge's
+    /// Register render pipelines, once at client startup (NeoForge's
     /// `RegisterRenderPipelinesEvent`; 1.21.1 mods used `RegisterShadersEvent`): call
-    /// `event.register(pipeline)` with each [`RenderPipeline`]. The game builds them with its own
-    /// at startup and again on every resource reload. An id outside the mod's own or served
-    /// (`served_by`) namespaces, or one already registered, is logged with the mod and dropped. A
-    /// required pipeline whose shader is missing or doesn't build fails the load: the game does
-    /// not start, and a reload fails and keeps the previous resources. An
-    /// [optional](RenderPipeline::optional()) one is logged and resolves to
+    /// `event.register(pipeline)` with each [`RenderPipeline`]. The game builds them alongside its
+    /// own at startup and on every resource reload. Any valid id is accepted by the registrar.
+    /// The engine refuses duplicate mod pipeline IDs at startup, even across required and optional
+    /// entries, and checks each against the corresponding vanilla registry, as in NeoForge's
+    /// `RenderPipelines.registerCustomPipelines`. A required pipeline whose shader is missing or
+    /// doesn't build fails the load: the game does not start, and a reload fails and keeps the
+    /// previous resources. An [optional](RenderPipeline::optional()) one is logged and resolves to
     /// [`RenderPipelineError::Invalid`].
     #[notes = r#"## Render pipelines
 
@@ -75,11 +76,10 @@ game reaches."#]
         side = "client",
         contract = "collect",
         out = "pipelines",
-        registration_append = "register",
-        collect_validator = "crate::client::render_pipeline::validate_render_pipelines",
+        registration_append = "attributed",
         context = "registration",
         neoforge = "RegisterRenderPipelinesEvent",
-        version = 2
+        version = 4
     )]
     fn register_render_pipelines(pipelines: &mut Vec<mod_api::RenderPipeline>);
 }
