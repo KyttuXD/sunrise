@@ -36,58 +36,137 @@ pub struct Display {
     pub announce: bool,
     pub hidden: bool,
 }
-/// A `LootItemCondition.CODEC` predicate decoded and bound at advancement load
-/// from its `"type"` discriminator and the active datapack predicate registry.
-#[derive(Clone, Debug)]
-pub enum BoundCondition {
-    Inverted(Box<BoundCondition>),
-    AllOf(Vec<BoundCondition>),
-    AnyOf(Vec<BoundCondition>),
+/// A `LootItemCondition.CODEC` predicate bound at advancement load. Named
+/// holders share their bound node throughout a load, as with `Holder.Reference`.
+#[derive(Clone)]
+pub struct BoundCondition(Arc<BoundConditionNode>);
+
+#[derive(Debug)]
+enum BoundConditionKind {
+    Inverted,
+    AllOf,
+    AnyOf,
     Leaf { kind: String, data: Value },
 }
 
+struct BoundConditionNode {
+    kind: BoundConditionKind,
+    terms: Vec<BoundCondition>,
+    looking_at: bool,
+    nbt: bool,
+    facts: FactsAsked,
+}
+
+impl std::fmt::Debug for BoundCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundCondition")
+            .field("kind", &self.0.kind)
+            .field("term_count", &self.0.terms.len())
+            .finish()
+    }
+}
+
+impl Drop for BoundConditionNode {
+    fn drop(&mut self) {
+        // Dropping the last owner of a chain must be as stack-safe as binding it.
+        let mut pending = std::mem::take(&mut self.terms);
+        while let Some(term) = pending.pop() {
+            if let Some(mut node) = Arc::into_inner(term.0) {
+                pending.append(&mut node.terms);
+            }
+        }
+    }
+}
+
 impl BoundCondition {
-    /// Evaluate the exact condition decoded by `LootItemCondition.CODEC` at load.
+    fn new(kind: BoundConditionKind, terms: Vec<Self>) -> Self {
+        let (mut looking_at, mut nbt, mut facts) = match &kind {
+            BoundConditionKind::Leaf { data, .. } => (
+                has_json_key(data, &["looking_at"]),
+                has_json_key(data, &["nbt", "minecraft:nbt"]),
+                facts_asked_in(data),
+            ),
+            _ => (false, false, FactsAsked::default()),
+        };
+        for term in &terms {
+            looking_at |= term.0.looking_at;
+            nbt |= term.0.nbt;
+            facts = facts.or(term.0.facts);
+        }
+        Self(Arc::new(BoundConditionNode {
+            kind,
+            terms,
+            looking_at,
+            nbt,
+            facts,
+        }))
+    }
+
+    /// `AllOfCondition`, `AnyOfCondition` and `InvertedLootItemCondition`:
+    /// evaluate in list order and stop as soon as the current group has an answer.
     pub fn test(&self, ctx: &Entities, w: &dyn World) -> bool {
-        match self {
-            Self::Inverted(term) => !term.test(ctx, w),
-            Self::AllOf(terms) => terms.iter().all(|term| term.test(ctx, w)),
-            Self::AnyOf(terms) => terms.iter().any(|term| term.test(ctx, w)),
-            Self::Leaf { kind, data } => condition_leaf_typed(kind, data, ctx, w),
+        enum Resume<'a> {
+            Invert,
+            Group {
+                all: bool,
+                rest: std::slice::Iter<'a, BoundCondition>,
+            },
         }
-    }
-
-    fn any_leaf(&self, predicate: &mut impl FnMut(&Value) -> bool) -> bool {
-        match self {
-            Self::Inverted(term) => term.any_leaf(predicate),
-            Self::AllOf(terms) | Self::AnyOf(terms) => {
-                terms.iter().any(|term| term.any_leaf(predicate))
+        let mut stack = Vec::new();
+        let mut node = self.0.as_ref();
+        loop {
+            let mut result = match &node.kind {
+                BoundConditionKind::Leaf { kind, data } => condition_leaf_typed(kind, data, ctx, w),
+                BoundConditionKind::Inverted => {
+                    stack.push(Resume::Invert);
+                    node = &node.terms[0].0;
+                    continue;
+                }
+                BoundConditionKind::AllOf | BoundConditionKind::AnyOf => {
+                    let all = matches!(&node.kind, BoundConditionKind::AllOf);
+                    let mut rest = node.terms.iter();
+                    if let Some(next) = rest.next() {
+                        stack.push(Resume::Group { all, rest });
+                        node = &next.0;
+                        continue;
+                    }
+                    all
+                }
+            };
+            loop {
+                match stack.last_mut() {
+                    None => return result,
+                    Some(Resume::Invert) => result = !result,
+                    Some(Resume::Group { all, rest }) => {
+                        if *all == result
+                            && let Some(next) = rest.next()
+                        {
+                            node = &next.0;
+                            break;
+                        }
+                    }
+                }
+                stack.pop();
             }
-            Self::Leaf { data, .. } => predicate(data),
-        }
-    }
-
-    fn facts_asked(&self) -> FactsAsked {
-        match self {
-            Self::Inverted(term) => term.facts_asked(),
-            Self::AllOf(terms) | Self::AnyOf(terms) => {
-                terms.iter().fold(FactsAsked::default(), |acc, term| {
-                    acc.or(term.facts_asked())
-                })
-            }
-            Self::Leaf { data, .. } => facts_asked_in(data),
         }
     }
 }
 
 fn has_json_key(v: &Value, keys: &[&str]) -> bool {
-    match v {
-        Value::Array(list) => list.iter().any(|item| has_json_key(item, keys)),
-        Value::Object(map) => map
-            .iter()
-            .any(|(k, v)| keys.contains(&k.as_str()) || has_json_key(v, keys)),
-        _ => false,
+    let mut pending = vec![v];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Object(map) => {
+                if keys.iter().any(|&key| map.contains_key(key)) {
+                    return true;
+                }
+                pending.extend(map.values());
+            }
+            Value::Array(list) => pending.extend(list),
+            _ => {}
+        }
     }
+    false
 }
 
 #[derive(Clone, Debug)]
@@ -378,9 +457,7 @@ impl Tree {
                 let json = c.conditions.json();
                 json.contains("\"looking_at\"")
                     || reference.iter().any(|r| json.contains(r))
-                    || c.player.as_ref().is_some_and(|p| {
-                        p.any_leaf(&mut |data| has_json_key(data, &["looking_at"]))
-                    })
+                    || c.player.as_ref().is_some_and(|p| p.0.looking_at)
             })
             .map(|c| c.trigger.clone())
             .collect();
@@ -402,10 +479,7 @@ impl Tree {
         self.nbt_triggers = (self.list.iter().flat_map(|a| &a.criteria))
             .filter(|c| {
                 let json = c.conditions.json();
-                keys.iter().any(|k| json.contains(k))
-                    || c.player.as_ref().is_some_and(|p| {
-                        p.any_leaf(&mut |data| has_json_key(data, &["nbt", "minecraft:nbt"]))
-                    })
+                keys.iter().any(|k| json.contains(k)) || c.player.as_ref().is_some_and(|p| p.0.nbt)
             })
             .map(|c| c.trigger.clone())
             .collect();
@@ -440,7 +514,7 @@ impl Tree {
                 FactsAsked::default()
             };
             if let Some(player) = &c.player {
-                asked = asked.or(player.facts_asked());
+                asked = asked.or(player.0.facts);
             }
             if asked == FactsAsked::default() {
                 continue;
@@ -3079,44 +3153,46 @@ mod tests {
             "bare ids not read as minecraft: {failed:?}"
         );
     }
+    struct Weather<F>(F);
+    impl<F: Fn() -> (bool, bool)> World for Weather<F> {
+        fn is_loaded(&self, pos: [i32; 3]) -> bool {
+            Flat.is_loaded(pos)
+        }
+        fn dimension(&self) -> &str {
+            Flat.dimension()
+        }
+        fn weather(&self) -> (bool, bool) {
+            (self.0)()
+        }
+        fn biome(&self, pos: [i32; 3]) -> String {
+            Flat.biome(pos)
+        }
+        fn structures(&self, pos: [i32; 3]) -> Vec<String> {
+            Flat.structures(pos)
+        }
+        fn block(&self, pos: [i32; 3]) -> (String, BTreeMap<String, String>) {
+            Flat.block(pos)
+        }
+        fn fluid(&self, pos: [i32; 3]) -> Option<String> {
+            Flat.fluid(pos)
+        }
+        fn can_see_sky(&self, pos: [i32; 3]) -> bool {
+            Flat.can_see_sky(pos)
+        }
+        fn light(&self, pos: [i32; 3]) -> i32 {
+            Flat.light(pos)
+        }
+        fn smokey(&self, pos: [i32; 3]) -> bool {
+            Flat.smokey(pos)
+        }
+        fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
+            Flat.in_tag(registry, tag, id)
+        }
+    }
+
     #[test]
     fn custom_criteria_decode_the_player_field_but_leave_custom_fields_opaque() {
-        struct Raining;
-        impl World for Raining {
-            fn is_loaded(&self, pos: [i32; 3]) -> bool {
-                Flat.is_loaded(pos)
-            }
-            fn dimension(&self) -> &str {
-                Flat.dimension()
-            }
-            fn weather(&self) -> (bool, bool) {
-                (true, false)
-            }
-            fn biome(&self, pos: [i32; 3]) -> String {
-                Flat.biome(pos)
-            }
-            fn structures(&self, pos: [i32; 3]) -> Vec<String> {
-                Flat.structures(pos)
-            }
-            fn block(&self, pos: [i32; 3]) -> (String, BTreeMap<String, String>) {
-                Flat.block(pos)
-            }
-            fn fluid(&self, pos: [i32; 3]) -> Option<String> {
-                Flat.fluid(pos)
-            }
-            fn can_see_sky(&self, pos: [i32; 3]) -> bool {
-                Flat.can_see_sky(pos)
-            }
-            fn light(&self, pos: [i32; 3]) -> i32 {
-                Flat.light(pos)
-            }
-            fn smokey(&self, pos: [i32; 3]) -> bool {
-                Flat.smokey(pos)
-            }
-            fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
-                Flat.in_tag(registry, tag, id)
-            }
-        }
+        let raining = Weather(|| (true, false));
         let ctx = Entities {
             this: None,
             origin: [0.0; 3],
@@ -3159,7 +3235,7 @@ mod tests {
         assert_eq!(bound.conditions["custom"]["terms"], false);
         let player = bound.player.unwrap();
         assert!(!player.test(&ctx, &Flat));
-        assert!(player.test(&ctx, &Raining));
+        assert!(player.test(&ctx, &raining));
 
         let nested_conflicting = definition(serde_json::json!({
             "type": "minecraft:all_of",
@@ -3178,7 +3254,7 @@ mod tests {
             .player
             .unwrap();
         assert!(!player.test(&ctx, &Flat));
-        assert!(player.test(&ctx, &Raining));
+        assert!(player.test(&ctx, &raining));
 
         // Unresolved predicate references (top-level and nested) fail at load;
         // valid references in the active registry bind and evaluate.
@@ -3223,7 +3299,7 @@ mod tests {
         .player
         .unwrap();
         assert!(!bound_ref.test(&ctx, &Flat));
-        assert!(bound_ref.test(&ctx, &Raining));
+        assert!(bound_ref.test(&ctx, &raining));
 
         // Loading a data directory binds references against `data/<ns>/predicate/`.
         let dir = tempfile::tempdir().unwrap();
@@ -3253,7 +3329,95 @@ mod tests {
             .as_ref()
             .unwrap();
         assert!(!good.test(&ctx, &Flat));
-        assert!(good.test(&ctx, &Raining));
+        assert!(good.test(&ctx, &raining));
+    }
+
+    #[test]
+    fn custom_player_predicates_share_deep_overlay_holders_and_short_circuit_in_order() {
+        use serde_json::json;
+        use std::cell::Cell;
+        use sunrise_world::loot::PackOverlay;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        let mut put =
+            |key: String, data: Value| files.push((key, vec![data.to_string().into_bytes()]));
+        // Each holder is a separate, shallow JSON document. The resulting graph is deep.
+        const DEPTH: usize = 4_096;
+        for i in 0..DEPTH {
+            put(
+                format!("predicate/test:node{i}"),
+                json!({"type": "inverted", "term": format!("test:node{}", i + 1)}),
+            );
+        }
+        put(
+            format!("predicate/test:node{DEPTH}"),
+            json!({"type": "all_of", "terms": [
+                {"type": "any_of", "terms": [
+                    {"type": "weather_check", "raining": true}, "test:skipped"
+                ]},
+                {"type": "weather_check", "thundering": true},
+                {"type": "inverted", "term": {"type": "all_of", "terms": [
+                    {"type": "weather_check", "raining": true}, "test:skipped"
+                ]}}
+            ]}),
+        );
+        put(
+            "predicate/test:skipped".into(),
+            json!({"type": "weather_check"}),
+        );
+        put("predicate/test:cycle_a".into(), json!("test:cycle_b"));
+        put("predicate/test:cycle_b".into(), json!("test:cycle_a"));
+        for (id, player) in [
+            ("one", json!("test:node0")),
+            (
+                "shared",
+                json!({"type": "all_of", "terms": ["test:node0", "test:node0"]}),
+            ),
+            (
+                "cyclic",
+                json!({"type": "any_of", "terms": ["test:skipped", "test:cycle_a"]}),
+            ),
+        ] {
+            put(
+                format!("advancement/test:{id}"),
+                json!({"criteria": {"seen": {
+                    "trigger": "test:connected", "conditions": {"player": player}
+                }}}),
+            );
+        }
+
+        let tree = Tree::load_with(root.path(), &PackOverlay::new(&files));
+        assert!(tree.get("test:cyclic").is_none());
+        let player = tree.get("test:one").unwrap().criteria[0]
+            .player
+            .as_ref()
+            .unwrap();
+        let shared = tree.get("test:shared").unwrap().criteria[0]
+            .player
+            .as_ref()
+            .unwrap();
+        // A reference in another criterion and duplicate incoming edges share the registry node.
+        assert!(Arc::ptr_eq(&player.0, &shared.0.terms[0].0));
+        assert!(Arc::ptr_eq(&player.0, &shared.0.terms[1].0));
+
+        let ctx = Entities {
+            this: None,
+            origin: [0.0; 3],
+            tool: None,
+            event_block: None,
+            target: None,
+            interacting: None,
+        };
+        let calls = Cell::new(0);
+        let weather = Weather(|| {
+            let i = calls.get();
+            calls.set(i + 1);
+            [(true, false), (false, true), (false, false)][i]
+        });
+        assert!(player.test(&ctx, &weather));
+        assert_eq!(calls.get(), 3);
+        drop(tree);
     }
 
     /// A bare trigger, item or recipe id reaches the indexes as `minecraft:`.

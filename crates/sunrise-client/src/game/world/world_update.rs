@@ -218,7 +218,7 @@ impl Game<'_> {
             log::warn!("Sunrise: failed to save unloaded chunks: {e}");
         }
         sunrise_client::spans::time("spawn_fresh_chunks", || self.spawn_fresh_chunks());
-        self.ask_loaded_light_emission();
+        self.ask_loaded_light_emission(0);
         // Vanilla saves the chunk before its unload hook and drops its block entities afterwards.
         sunrise_client::spans::time("mods_chunks_changed", || {
             self.native_chunks_loaded();

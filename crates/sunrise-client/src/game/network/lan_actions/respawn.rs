@@ -239,7 +239,7 @@ impl Game<'_> {
                             || chunk.0.abs().max(chunk.1.abs()) > MAX_CHUNK
                         {
                             false
-                        } else if self.streaming.load_full_column(&mut self.world, chunk) {
+                        } else if self.load_full_column(chunk) {
                             self.is_anchor(self.world.block(x, y, z))
                         } else {
                             log::error!(

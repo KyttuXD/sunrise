@@ -5,6 +5,7 @@ pub(super) struct PredicateSource<'a, 'o> {
     predicates: Option<&'a HashMap<String, Value>>,
     loaded_predicates: Option<HashMap<String, Value>>,
     captured_types: Option<sunrise_world::loot::types::Types>,
+    bound: HashMap<String, BoundCondition>,
     data: Option<&'a Path>,
     overlay: Option<&'a sunrise_world::loot::PackOverlay<'o>>,
 }
@@ -18,6 +19,7 @@ impl<'a, 'o> PredicateSource<'a, 'o> {
             predicates: None,
             loaded_predicates: None,
             captured_types: None,
+            bound: HashMap::new(),
             data: Some(data),
             overlay: Some(overlay),
         }
@@ -28,6 +30,7 @@ impl<'a, 'o> PredicateSource<'a, 'o> {
             predicates: Some(predicates),
             loaded_predicates: None,
             captured_types: None,
+            bound: HashMap::new(),
             data: None,
             overlay: None,
         }
@@ -39,12 +42,13 @@ impl<'a, 'o> PredicateSource<'a, 'o> {
             predicates: None,
             loaded_predicates: Some(HashMap::new()),
             captured_types: None,
+            bound: HashMap::new(),
             data: None,
             overlay: None,
         }
     }
 
-    fn resolve(&mut self) -> (&HashMap<String, Value>, &sunrise_world::loot::types::Types) {
+    fn bind_player(&mut self, value: &Value) -> Result<BoundCondition, String> {
         let predicates = match self.predicates {
             Some(predicates) => predicates,
             None => self
@@ -57,7 +61,10 @@ impl<'a, 'o> PredicateSource<'a, 'o> {
         let types = self
             .captured_types
             .get_or_insert_with(sunrise_world::loot::types::Types::capture);
-        (predicates, types)
+        types
+            .validate_condition_field(value, predicates, "conditions.player")
+            .map_err(|error| error.to_string())?;
+        Ok(bind_condition(value, predicates, &mut self.bound))
     }
 }
 
@@ -132,12 +139,7 @@ pub(super) fn parse_with(
             if player.is_null() {
                 Ok(None)
             } else {
-                let (predicates, loot_types) = source.resolve();
-                loot_types
-                    .validate_condition_field(player, predicates, "conditions.player")
-                    .map_err(|error| error.to_string())
-                    .and_then(|()| bind_condition(player, predicates))
-                    .map(Some)
+                source.bind_player(player).map(Some)
             }
         } else {
             Err("conditions: expected an object".into())
@@ -251,56 +253,76 @@ fn validate_builtin_conditions(c: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Bind a validated `LootItemCondition.CODEC` value from its `"type"` discriminator
-/// and active predicate registry, matching `RegistryFileCodec.decode`.
+/// Bind the already validated graph in postorder. Keep each named node in the
+/// load's identity map; every incoming edge clones only its shared pointer.
 fn bind_condition(
-    v: &Value,
+    root: &Value,
     predicates: &HashMap<String, Value>,
-) -> Result<BoundCondition, String> {
-    if let Some(id) = v.as_str() {
-        let id = sunrise_core::identifier::Identifier::parse(id)
-            .map_err(|reason| reason.to_string())?
-            .to_string();
-        let target = predicates
-            .get(&id)
-            .ok_or_else(|| format!("unknown predicate reference {id}"))?;
-        return bind_condition(target, predicates);
+    bound: &mut HashMap<String, BoundCondition>,
+) -> BoundCondition {
+    enum Work<'a> {
+        Visit(&'a Value),
+        FinishReference(String),
+        FinishGroup(BoundConditionKind, usize),
     }
-    let kind = v
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "expected typed loot condition".to_owned())?;
-    let kind = sunrise_core::identifier::Identifier::parse(kind)
-        .map_err(|reason| reason.to_string())?
-        .to_string();
-    match kind.as_str() {
-        "minecraft:inverted" => Ok(BoundCondition::Inverted(Box::new(bind_condition(
-            &v["term"], predicates,
-        )?))),
-        "minecraft:all_of" => Ok(BoundCondition::AllOf(bind_condition_set(
-            &v["terms"],
-            predicates,
-        )?)),
-        "minecraft:any_of" => Ok(BoundCondition::AnyOf(bind_condition_set(
-            &v["terms"],
-            predicates,
-        )?)),
-        _ => Ok(BoundCondition::Leaf {
-            kind,
-            data: v.clone(),
-        }),
+    let mut pending = vec![Work::Visit(root)];
+    let mut values = Vec::new();
+    while let Some(work) = pending.pop() {
+        match work {
+            Work::Visit(value) => {
+                if let Some(id) = value.as_str() {
+                    let id = full(id.strip_prefix(':').unwrap_or(id));
+                    if let Some(node) = bound.get(&*id) {
+                        values.push(node.clone());
+                    } else {
+                        let target = &predicates[&*id];
+                        pending.push(Work::FinishReference(id.into_owned()));
+                        pending.push(Work::Visit(target));
+                    }
+                    continue;
+                }
+                let kind = value["type"].as_str().expect("validated condition type");
+                let kind = full(kind.strip_prefix(':').unwrap_or(kind));
+                let (group, terms) = match kind.as_ref() {
+                    "minecraft:inverted" => (
+                        BoundConditionKind::Inverted,
+                        std::slice::from_ref(&value["term"]),
+                    ),
+                    "minecraft:all_of" | "minecraft:any_of" => {
+                        let group = if kind == "minecraft:all_of" {
+                            BoundConditionKind::AllOf
+                        } else {
+                            BoundConditionKind::AnyOf
+                        };
+                        let terms = &value["terms"];
+                        let terms = match terms {
+                            Value::Array(list) => list.as_slice(),
+                            one => std::slice::from_ref(one),
+                        };
+                        (group, terms)
+                    }
+                    _ => {
+                        values.push(BoundCondition::new(
+                            BoundConditionKind::Leaf {
+                                kind: kind.into_owned(),
+                                data: value.clone(),
+                            },
+                            Vec::new(),
+                        ));
+                        continue;
+                    }
+                };
+                pending.push(Work::FinishGroup(group, terms.len()));
+                pending.extend(terms.iter().rev().map(Work::Visit));
+            }
+            Work::FinishReference(id) => {
+                bound.insert(id, values.last().expect("bound predicate").clone());
+            }
+            Work::FinishGroup(group, count) => {
+                let terms = values.split_off(values.len() - count);
+                values.push(BoundCondition::new(group, terms));
+            }
+        }
     }
-}
-
-fn bind_condition_set(
-    v: &Value,
-    predicates: &HashMap<String, Value>,
-) -> Result<Vec<BoundCondition>, String> {
-    match v {
-        Value::Array(list) => list
-            .iter()
-            .map(|term| bind_condition(term, predicates))
-            .collect(),
-        other => Ok(vec![bind_condition(other, predicates)?]),
-    }
+    values.pop().expect("bound root condition")
 }

@@ -2236,7 +2236,7 @@ impl Game<'_> {
         let registry = self.pack.assets.registry;
         let state = if !in_bounds {
             registry.default_state("minecraft:void_air")
-        } else if self.streaming.load_full_column(&mut self.world, column) {
+        } else if self.load_full_column(column) {
             self.world
                 .chunks
                 .get(&column)

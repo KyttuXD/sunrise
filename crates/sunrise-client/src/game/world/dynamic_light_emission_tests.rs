@@ -403,6 +403,64 @@ fn a_dynamic_light_part_answers_by_position_for_declared_blocks_only() {
     );
 }
 
+#[test]
+#[ignore = "daily"]
+fn a_full_read_prepares_a_saved_columns_dynamic_light() {
+    use sunrise_client::{
+        level_loading::Status,
+        save::{Persistent, SaveDir},
+        streaming::Streaming,
+        testgen::TestTerrain,
+    };
+
+    with_lights(
+        "game::dynamic_light_emission_tests::a_full_read_prepares_a_saved_columns_dynamic_light",
+        |game, _, States { lamp, .. }, depth| {
+            let scratch = tempfile::tempdir().unwrap();
+            let registry = game.pack.assets.registry;
+            let biomes = game.res.biomes();
+            let save = Arc::new(SaveDir::new(
+                scratch.path().to_owned(),
+                game.world.shape,
+                Some(game.res.shared_items()),
+            ));
+            let column = (20, 22);
+            let [x, y, z] = [column.0 * 16 + 1, 64, column.1 * 16 + 2];
+            let mut chunk = Chunk::empty(column.0, column.1);
+            chunk.set(1, y, 2, lamp.0);
+            assert!(!chunk.lit);
+            save.save(&[Arc::new(chunk)], registry, biomes).unwrap();
+            let mut streaming = Streaming::new(
+                Arc::new(Persistent {
+                    inner: Arc::new(TestTerrain::new(registry, biomes).unwrap()),
+                    save,
+                    registry: game.pack.assets.clone(),
+                    biomes: biomes.clone(),
+                }),
+                game.pack.context.clone(),
+                1,
+            );
+            streaming.radius = -1;
+            streaming.mesh = false;
+            let previous = std::mem::replace(&mut game.streaming, streaming);
+
+            assert!(!game.world.chunks.contains_key(&column));
+            assert!(game.load_full_column(column));
+            assert_eq!(
+                game.streaming
+                    .latest_status(&game.world, column.0, column.1),
+                Some(Status::Full)
+            );
+            assert_eq!(game.world.light(x, y, z) & 15, 12);
+            assert_eq!(game.world.light(x + 1, y, z) & 15, 11);
+            assert_eq!(depth.take(), [[x, y, z]]);
+            game.ask_loaded_light_emission(0);
+            assert!(depth.take().is_empty());
+            game.streaming = previous;
+        },
+    );
+}
+
 /// `check_light` asks a declared block's part again once at the next update however often it
 /// is called, and asks nothing of an undeclared block; it is refused on a client and for another
 /// dimension's handle. A server's light update asks a client's part again, for the changed

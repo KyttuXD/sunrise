@@ -3035,19 +3035,11 @@ impl Streaming {
 
     /// Resolve a single FULL column for an authoritative read, as `ServerChunkCache.getChunk`
     /// does with its UNKNOWN ticket. This request is not a ticking or saved `/forceload` ticket.
-    pub fn load_full_column(&mut self, world: &mut World, column: (i32, i32)) -> bool {
-        let is_full = |streaming: &Self, world: &World| {
-            streaming.lit.contains(&column)
-                && world.chunks.get(&column).is_some_and(|chunk| chunk.lit)
-        };
-        if is_full(self, world) {
-            return true;
-        }
-        if self.paused {
-            return world.chunks.contains_key(&column);
-        }
-        if self.remote || self.shared.aborted.load(Ordering::Relaxed) {
-            return false;
+    /// `None` starts a request that the level owner drives with `plan_update` and
+    /// `finish_full_column_step`; `Some` is the result of a completed or refused read.
+    pub fn begin_full_column(&mut self, world: &mut World, column: (i32, i32)) -> Option<bool> {
+        if let Some(result) = self.full_column_result(world, column) {
+            return Some(result);
         }
         // Extra areas finish through radius + 1. Request just the target at FULL.
         self.extra.push((column, -1));
@@ -3055,9 +3047,36 @@ impl Streaming {
         if world.chunks.contains_key(&column) && !self.lighting.contains_key(&column) {
             world.dirty_light.insert(column);
         }
-        let loaded = self.wait_for_column(world, is_full);
-        self.extra.pop();
-        loaded
+        None
+    }
+
+    fn full_column_result(&self, world: &World, column: (i32, i32)) -> Option<bool> {
+        if self.lit.contains(&column) && world.chunks.get(&column).is_some_and(|chunk| chunk.lit) {
+            Some(true)
+        } else if self.paused {
+            Some(world.chunks.contains_key(&column))
+        } else if self.remote || self.shared.aborted.load(Ordering::Relaxed) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Finish the plan after the owner prepares the light emission of newly received columns.
+    pub fn finish_full_column_step(
+        &mut self,
+        world: &mut World,
+        column: (i32, i32),
+        plan: StreamingUpdate,
+    ) -> Option<bool> {
+        self.finish_waiting_column(world, plan);
+        let result = self.full_column_result(world, column);
+        if result.is_some() {
+            self.extra.pop();
+        } else {
+            self.wait(std::time::Duration::from_millis(5));
+        }
+        result
     }
 
     fn wait_for_column(
@@ -3069,19 +3088,23 @@ impl Streaming {
             if self.shared.aborted.load(Ordering::Relaxed) {
                 return false;
             }
-            // Pump the existing generation queue. Keep unloads for the
-            // normal owner update, which saves entities and notifies mods.
-            let mut plan = self.plan_update(world);
-            plan.sweep = false;
-            plan.far.clear();
-            let (meshes, unloaded) = self.finish_update(world, plan);
-            debug_assert!(unloaded.is_empty());
-            self.free(meshes);
+            let plan = self.plan_update(world);
+            self.finish_waiting_column(world, plan);
             if !ready(self, world) {
                 self.wait(std::time::Duration::from_millis(5));
             }
         }
         true
+    }
+
+    fn finish_waiting_column(&mut self, world: &mut World, mut plan: StreamingUpdate) {
+        // Pump generation and lighting, but leave unloads to the owner update that
+        // saves entities and notifies mods.
+        plan.sweep = false;
+        plan.far.clear();
+        let (meshes, unloaded) = self.finish_update(world, plan);
+        debug_assert!(unloaded.is_empty());
+        self.free(meshes);
     }
 
     /// Release every `/forceload`ed chunk (`/forceload remove all`, a game-test

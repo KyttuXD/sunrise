@@ -7,15 +7,43 @@ use super::*;
 use sunrise_client::fast_hash::FxHashMap;
 
 impl Game<'_> {
-    /// The chunks the workers brought into this level in this update, asked before any
-    /// light job reads them (`Chunk::dynamic_pending`).
-    pub(super) fn ask_loaded_light_emission(&mut self) {
+    /// `ServerChunkCache.getChunk`: drive an authoritative FULL read on the level owner.
+    /// Receive columns, prepare their contextual emission, then schedule lighting.
+    pub(super) fn load_full_column(&mut self, column: (i32, i32)) -> bool {
+        if let Some(result) = self.streaming.begin_full_column(&mut self.world, column) {
+            return result;
+        }
+        let mut first = 0;
+        loop {
+            let plan = self.streaming.plan_update(&mut self.world);
+            self.ask_loaded_light_emission(first);
+            first = self.world.loaded_chunks.len();
+            if let Some(result) =
+                self.streaming
+                    .finish_full_column_step(&mut self.world, column, plan)
+            {
+                return result;
+            }
+        }
+    }
+
+    /// The chunks the workers brought into this level, asked before a light job reads them.
+    /// Leave their load notifications for the normal owner update.
+    pub(super) fn ask_loaded_light_emission(&mut self, first: usize) {
         if !self.pack.context.light.any_dynamic() {
             return;
         }
-        for i in 0..self.world.loaded_chunks.len() {
+        for i in first..self.world.loaded_chunks.len() {
             let (x, z, _) = self.world.loaded_chunks[i];
-            self.ask_chunk_light_emission((x, z));
+            let key = (x, z);
+            if self
+                .world
+                .chunks
+                .get(&key)
+                .is_some_and(|chunk| chunk.dynamic_pending)
+            {
+                self.ask_chunk_light_emission(key);
+            }
         }
     }
     /// Every `dynamic_light` cell of the resident chunk `key` asked, its answers replacing

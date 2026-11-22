@@ -190,6 +190,7 @@ impl Types {
             predicates,
             modifiers: &modifiers,
             visiting: HashSet::new(),
+            validated_predicates: HashMap::new(),
             validated: HashMap::new(),
             allowed: None,
         }
@@ -210,6 +211,7 @@ impl Types {
             predicates,
             modifiers,
             visiting: HashSet::new(),
+            validated_predicates: HashMap::new(),
             validated: HashMap::new(),
             allowed: None,
         };
@@ -220,7 +222,14 @@ impl Types {
         }
         walker.allowed = None;
         for (id, data) in predicates {
-            walker.entry(data, false, &resource("predicate", id))?;
+            if !walker.predicate_validated(id) {
+                walker.entry(data, false, &resource("predicate", id))?;
+                walker
+                    .validated_predicates
+                    .entry(None)
+                    .or_default()
+                    .insert(id.clone());
+            }
         }
         for (id, data) in modifiers {
             walker.entry(data, true, &resource("item_modifier", id))?;
@@ -238,6 +247,8 @@ fn invalid(path: &str, kind: &str, reason: impl std::fmt::Display) -> io::Error 
         format!("{path} (type {kind}): {reason}"),
     )
 }
+type AllowedParameters = Option<&'static [&'static str]>;
+
 struct Walker<'a> {
     types: &'a Types,
     tables: HashMap<&'a str, &'a Value>,
@@ -245,8 +256,9 @@ struct Walker<'a> {
     predicates: &'a HashMap<String, Value>,
     modifiers: &'a HashMap<String, Value>,
     visiting: HashSet<(bool, String)>,
+    validated_predicates: HashMap<AllowedParameters, HashSet<String>>,
     validated: HashMap<(bool, usize), Vec<String>>,
-    allowed: Option<&'static [&'static str]>,
+    allowed: AllowedParameters,
 }
 impl Walker<'_> {
     fn table(&mut self, table: &Value, path: &str) -> io::Result<()> {
@@ -328,28 +340,126 @@ impl Walker<'_> {
         }
         Ok(())
     }
-    fn entry(&mut self, data: &Value, function: bool, path: &str) -> io::Result<()> {
-        if let Some(id) = data.as_str() {
-            let id = sunrise_core::identifier::Identifier::parse(id)
-                .map_err(|reason| invalid(path, id, reason))?
-                .to_string();
-            let key = (function, id.clone());
-            if !self.visiting.insert(key.clone()) {
-                return Err(invalid(path, &id, "reference cycle"));
-            }
-            let value = if function {
-                self.modifiers.get(&id)
-            } else {
-                self.predicates.get(&id)
-            }
-            .ok_or_else(|| invalid(path, &id, "unknown reference"))?;
-            self.entry(value, function, &format!("{path} -> {id}"))?;
-            self.visiting.remove(&key);
-            return Ok(());
+    fn predicate_validated(&self, id: &str) -> bool {
+        self.validated_predicates
+            .get(&self.allowed)
+            .is_some_and(|ids| ids.contains(id))
+    }
+
+    /// `Validatable.validateHolder`: verify every reachable holder. Use a work
+    /// stack so a chain of references across separate JSON files is not Rust recursion.
+    fn entry(&mut self, data: &Value, function: bool, origin: &str) -> io::Result<()> {
+        enum Visit<'v> {
+            Entry(&'v Value, bool, String),
+            Set(&'v Value, bool, String),
+            Table(&'v Value, String),
+            Builtin(&'v Value, bool, String, String),
+            NestedList(String),
+            Leave((bool, String)),
         }
-        if function && data.is_array() {
-            return self.set(data, true, path);
+        let (predicates, modifiers) = (self.predicates, self.modifiers);
+        let mut pending = vec![Visit::Entry(data, function, origin.to_owned())];
+        while let Some(visit) = pending.pop() {
+            match visit {
+                Visit::Entry(data, function, path) => {
+                    if let Some(id) = data.as_str() {
+                        let id = sunrise_core::identifier::Identifier::parse(id)
+                            .map_err(|reason| invalid(&path, id, reason))?
+                            .to_string();
+                        if !function && self.predicate_validated(&id) {
+                            continue;
+                        }
+                        let key = (function, id);
+                        if !self.visiting.insert(key.clone()) {
+                            return Err(invalid(&path, &key.1, "reference cycle"));
+                        }
+                        let target = if function {
+                            modifiers.get(&key.1)
+                        } else {
+                            predicates.get(&key.1)
+                        }
+                        .ok_or_else(|| invalid(&path, &key.1, "unknown reference"))?;
+                        let path = if function {
+                            format!("{path} -> {}", key.1)
+                        } else {
+                            // Keep the origin and the defining file, not a path string
+                            // grown at every edge of a potentially very deep graph.
+                            format!("{origin} -> {}", resource("predicate", &key.1))
+                        };
+                        pending.push(Visit::Leave(key));
+                        pending.push(Visit::Entry(target, function, path));
+                    } else if function && data.is_array() {
+                        pending.push(Visit::Set(data, function, path));
+                    } else {
+                        let (kind, builtin) = self.validate_type(data, function, &path)?;
+                        let condition = if function && (builtin || self.types.conditional(&kind)) {
+                            data.get("condition").filter(|value| !value.is_null())
+                        } else {
+                            None
+                        };
+                        let condition_path = condition.map(|_| format!("{path}.condition"));
+                        if builtin {
+                            pending.push(Visit::Builtin(data, function, kind, path));
+                        }
+                        if let Some((condition, path)) = condition.zip(condition_path) {
+                            pending.push(Visit::Entry(condition, false, path));
+                        }
+                    }
+                }
+                Visit::Builtin(data, function, kind, path) => {
+                    let children = shapes::validate(data, function, &kind, &path)?;
+                    pending.extend(children.into_iter().rev().map(|child| match child.kind {
+                        shapes::ChildKind::Function => Visit::Entry(child.value, true, child.path),
+                        shapes::ChildKind::Condition => {
+                            Visit::Entry(child.value, false, child.path)
+                        }
+                        shapes::ChildKind::Set(function) => {
+                            Visit::Set(child.value, function, child.path)
+                        }
+                        shapes::ChildKind::Table => Visit::Table(child.value, child.path),
+                    }));
+                }
+                Visit::Leave(key) => {
+                    self.visiting.remove(&key);
+                    if !key.0 {
+                        self.validated_predicates
+                            .entry(self.allowed)
+                            .or_default()
+                            .insert(key.1);
+                    }
+                }
+                Visit::Set(data, function, path) => match data.as_array() {
+                    Some(list) => {
+                        for (i, value) in list.iter().enumerate().rev() {
+                            let path = format!("{path}[{i}]");
+                            pending.push(if value.is_array() {
+                                Visit::NestedList(path)
+                            } else {
+                                Visit::Entry(value, function, path)
+                            });
+                        }
+                    }
+                    None => pending.push(Visit::Entry(data, function, path)),
+                },
+                Visit::NestedList(path) => {
+                    return Err(invalid(&path, "holder_set", "nested bare list"));
+                }
+                Visit::Table(value, path) => {
+                    if let Some(id) = value.as_str() {
+                        self.reference_table(id, &path)?;
+                    }
+                }
+            }
         }
+        Ok(())
+    }
+
+    fn validate_type(
+        &mut self,
+        data: &Value,
+        function: bool,
+        path: &str,
+    ) -> io::Result<(String, bool)> {
         let kind = data
             .get("type")
             .and_then(Value::as_str)
@@ -386,46 +496,7 @@ impl Walker<'_> {
                 }
             }
         }
-        if function
-            && (builtin || self.types.conditional(kind))
-            && let Some(condition) = data.get("condition").filter(|value| !value.is_null())
-        {
-            self.entry(condition, false, &format!("{path}.condition"))?;
-        }
-        if builtin {
-            for child in shapes::validate(data, function, kind, path)? {
-                match child.kind {
-                    shapes::ChildKind::Function => self.entry(child.value, true, &child.path)?,
-                    shapes::ChildKind::Condition => self.entry(child.value, false, &child.path)?,
-                    shapes::ChildKind::Set(function) => {
-                        self.set(child.value, function, &child.path)?
-                    }
-                    shapes::ChildKind::Table => {
-                        if let Some(id) = child.value.as_str() {
-                            self.reference_table(id, &child.path)?;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    fn set(&mut self, data: &Value, function: bool, path: &str) -> io::Result<()> {
-        if let Some(list) = data.as_array() {
-            for (i, value) in list.iter().enumerate() {
-                if value.is_array() {
-                    return Err(invalid(
-                        &format!("{path}[{i}]"),
-                        "holder_set",
-                        "nested bare list",
-                    ));
-                }
-                self.entry(value, function, &format!("{path}[{i}]"))?;
-            }
-            Ok(())
-        } else {
-            self.entry(data, function, path)
-        }
+        Ok((qualified, builtin))
     }
 }
 fn builtin(kind: &str, function: bool) -> bool {
