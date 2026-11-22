@@ -679,10 +679,12 @@ impl World {
         self.chunks.contains_key(&(x >> 4, z >> 4))
     }
     /// Takes chunk `key` out of the level as it unloads, with the capability generations its
-    /// positions held.
+    /// positions held and any watered areas it masters.
     pub fn unload_chunk(&mut self, key: (i32, i32)) -> Option<Arc<Chunk>> {
         self.capability_generations.unload_chunk(key);
         let chunk = self.chunks.remove(&key)?;
+        // NeoForgeEventHandler.onChunkUnload removes boxes mastered by the departing chunk.
+        self.water_tickets.unload_chunk(key);
         self.retain_border(key, &chunk);
         Some(chunk)
     }

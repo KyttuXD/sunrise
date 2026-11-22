@@ -76,7 +76,10 @@ returns its id. `tickets` shows only that controller's saved block and entity ti
 tickets added in `level_load`. `tickets.block_tickets()` and `tickets.entity_tickets()` borrow
 read-only `BTreeMap` views of the original saved tickets for the whole call and stay unchanged
 after removals, while removals update the staged rows immediately. The server activates surviving
-tickets after all validators run.
+tickets after all validators run. Until then the saved holds have not loaded their chunks:
+do not treat an unloaded owner position as an absent block. Prune against authoritative
+saved ownership or against a loaded block you can confirm is not the owner.
+
 If a validator panics, the server reports the mod and skips only that validator for the rest of
 the session. Removals it already made still apply, and other controllers continue restoring and
 validating their tickets.

@@ -902,7 +902,7 @@ impl Game<'_> {
         tickets.restore_portal(save.load_portal_tickets());
         streaming.load_forced(
             save.load_forced_chunks(),
-            save.load_mod_tickets(mod_api::__ticket_controller_runtime::saved_controller_slot),
+            save.load_mod_tickets(mod_api::__private::ticket_controllers::saved_controller_slot),
         );
     }
 
@@ -2092,7 +2092,7 @@ mod tests {
             let nether = Dim::Nether;
             let end = Dim::End;
             let commanded_chunk = (4, -5);
-            let controller = mod_api::__ticket_controller_runtime::saved_controller_slot(
+            let controller = mod_api::__private::ticket_controllers::saved_controller_slot(
                 "startup_tickets:quarry",
             )
             .unwrap();
@@ -2110,7 +2110,7 @@ mod tests {
             SaveDir::new(dimension_dir(&world, nether.id()), nether.shape(), None)
                 .save_mod_tickets(
                     &tickets,
-                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                    mod_api::__private::ticket_controllers::saved_controller_name,
                 )
                 .unwrap();
 

@@ -1,6 +1,6 @@
 //! Concrete authoring extracted verbatim from the vocabulary layer.
 use super::*;
-use crate::__ticket_controller_runtime::{issue_controller, refused_controller};
+use crate::__private::ticket_controllers::{issue_controller, refused_controller};
 
 /// The ticket controllers `mods` register, for a test's mods.
 #[cfg(any(test, feature = "testing"))]
@@ -111,8 +111,8 @@ pub(crate) fn register(
         refused.push(format!("{mod_id} registered ticket controller {id} twice"));
         return refused_controller();
     }
-    let row = issue_controller(table.len() as u32, id.into(), mod_id, mod_index, validator);
-    let handle = row.handle;
+    let (handle, row) =
+        issue_controller(table.len() as u32, id.into(), mod_id, mod_index, validator);
     table.push(row);
     handle
 }

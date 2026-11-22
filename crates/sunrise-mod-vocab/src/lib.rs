@@ -22,12 +22,3 @@ mod generated {
 }
 
 include!(concat!(env!("OUT_DIR"), "/mod_api_exports_root.rs"));
-
-/// Engine-side chunk ticket registration, save I/O and activation, not re-exported to mods.
-#[doc(hidden)]
-pub mod __ticket_controller_runtime {
-    pub use crate::world::ticket_controller::{
-        active_controller_slot, issue_controller, refused_controller, saved_controller_name,
-        saved_controller_slot, validate_staged_tickets,
-    };
-}

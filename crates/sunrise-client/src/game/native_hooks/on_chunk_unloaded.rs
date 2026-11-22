@@ -22,15 +22,6 @@ impl Game<'_> {
         self.fire_chunk_unload(dimension, chunk);
         if let Some(level) = self.level(dimension) {
             self.forget_composter_chunk(level.dimension(), chunk);
-            // NeoForgeEventHandler.onChunkUnload: release every box mastered by this chunk.
-            let world = if dimension == self.dim.id() {
-                Some(&mut self.world)
-            } else {
-                self.levels.parked_world_mut_of(dimension)
-            };
-            if let Some(world) = world {
-                world.water_tickets.unload_chunk((chunk[0], chunk[1]));
-            }
         }
     }
     /// Chunk `chunk` of this server level `dimension` left it, after its last save: the

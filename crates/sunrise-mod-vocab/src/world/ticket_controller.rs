@@ -12,7 +12,8 @@ use std::{collections::BTreeMap, sync::Arc};
 /// after `level_load` and before the first tick, only when that controller has
 /// saved rows in the level. At startup all built-in levels are available before
 /// validation begins. Remove stale tickets through the borrowed validation view;
-/// the survivors force their chunks after validation. A panic is reported and
+/// the survivors force their chunks after validation. An owner chunk that is not loaded
+/// during validation is not evidence that its owner is gone. A panic is reported and
 /// disables only this validator for the session. A phase refusal is reported
 /// each time without disabling it. Neither undoes removals already made.
 pub type LoadingValidationCallback =
@@ -33,7 +34,7 @@ pub struct RegisteredTicketValidator {
 pub(crate) struct ControllerInfo {
     /// The namespaced id, `mymod:quarry`, which the tickets are saved under.
     pub(crate) id: &'static str,
-    pub(crate) handle: TicketController,
+    pub(crate) identity: usize,
     /// The controller's retained saved-ticket validator, if registered.
     pub(crate) validator: Option<RegisteredTicketValidator>,
 }
@@ -64,7 +65,7 @@ impl TicketController {
     fn info(self) -> Option<&'static ControllerInfo> {
         controllers()
             .get(self.slot as usize)
-            .filter(|info| info.handle == self)
+            .filter(|info| info.identity == self.identity)
     }
 }
 
@@ -75,21 +76,25 @@ pub fn issue_controller(
     mod_id: &'static str,
     mod_index: usize,
     validator: Option<Arc<LoadingValidationCallback>>,
-) -> crate::__private::parts_installation::ControllerInfoInput {
+) -> (
+    TicketController,
+    crate::__private::parts_installation::ControllerInfoInput,
+) {
     // The nonempty save name already lives for the session. Retain its allocation so even a
     // handle from an abandoned registration cannot alias a later registration at the same slot.
     let id: &'static str = Box::leak(id);
-    crate::__private::parts_installation::ControllerInfoInput {
-        id,
-        handle: TicketController {
-            slot,
-            identity: id.as_ptr() as usize,
+    let identity = id.as_ptr().addr();
+    (
+        TicketController { slot, identity },
+        crate::__private::parts_installation::ControllerInfoInput {
+            id,
+            identity,
+            validator: validator.map(|callback| RegisteredTicketValidator {
+                callback,
+                owner: CallbackOwner::for_index(mod_id, mod_index),
+            }),
         },
-        validator: validator.map(|callback| RegisteredTicketValidator {
-            callback,
-            owner: CallbackOwner::for_index(mod_id, mod_index),
-        }),
-    }
+    )
 }
 
 /// The inert handle returned for a refused registration.

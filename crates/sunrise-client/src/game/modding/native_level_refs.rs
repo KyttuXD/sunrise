@@ -3,7 +3,7 @@
 //! reach any loaded level; both-side reads also reach the client's current level.
 //! A handle of an earlier open or an unloaded block reads `None` (or `false`).
 use super::Game;
-use mod_api::{__ticket_controller_runtime, world::mod_chunk_tickets::ModTicket};
+use mod_api::{__private::ticket_controllers, world::mod_chunk_tickets::ModTicket};
 use mod_api::{
     BlockHit, BlockTransformPreview, ChunkRef, ChunkStatus, ClipBlock, ClipFluid, GlobalPos, Hand,
     Identifier, LevelRef, LightLayer, MapState, PlayerRef, RespawnData, TicketController, Vec3,
@@ -415,7 +415,7 @@ impl Game<'_> {
             return;
         };
         let staged = streaming.take_loaded_tickets();
-        let ready = __ticket_controller_runtime::validate_staged_tickets(self, level, staged);
+        let ready = ticket_controllers::validate_staged_tickets(self, level, staged);
         if let Some(streaming) = self.mod_ticket_streaming_mut(dim) {
             for ticket in ready {
                 streaming.set_mod_forced(ticket, true);
@@ -448,8 +448,7 @@ impl Game<'_> {
         forced: bool,
         natural_spawning: bool,
     ) -> bool {
-        let Some(controller) = __ticket_controller_runtime::active_controller_slot(controller)
-        else {
+        let Some(controller) = ticket_controllers::active_controller_slot(controller) else {
             return false;
         };
         if self.native_level_streaming(chunk.level()).is_none() || !chunk_in_world(chunk.pos()) {
@@ -481,7 +480,7 @@ impl Game<'_> {
         level: LevelRef,
         controller: TicketController,
     ) -> Option<Vec<(mod_api::TicketOwner, [i32; 2], bool)>> {
-        let controller = __ticket_controller_runtime::active_controller_slot(controller)?;
+        let controller = ticket_controllers::active_controller_slot(controller)?;
         let tickets = self.native_level_streaming(level)?.mod_tickets();
         Some(
             tickets
@@ -2191,7 +2190,7 @@ mod tests {
         ]
         .into()
     }
-    use mod_api::__ticket_controller_runtime::saved_controller_slot as known_slot;
+    use mod_api::__private::ticket_controllers::saved_controller_slot as known_slot;
 
     fn quarry() -> TicketController {
         QUARRY.get().unwrap()
@@ -2409,8 +2408,7 @@ mod tests {
             // This cross-border box has center x = -8.5, so its master is (-1, 0).
             let (min, max) = ([-20, 64, 0], [3, 65, 4]);
             let ticket = level.add_water_ticket(game, min, max).unwrap();
-            let secondary = game.world.unload_chunk((0, 0)).unwrap();
-            game.native_chunks_unloaded(&[secondary]);
+            game.world.unload_chunk((0, 0)).unwrap();
             assert!(level.has_water_ticket(game, [0, 64, 0]));
 
             game.world
@@ -2419,8 +2417,7 @@ mod tests {
             let overlap = level
                 .add_water_ticket(game, [1, 64, 0], [6, 65, 4])
                 .unwrap();
-            let master = game.world.unload_chunk((-1, 0)).unwrap();
-            game.native_chunks_unloaded(&[master]);
+            game.world.unload_chunk((-1, 0)).unwrap();
             assert!(!level.has_water_ticket(game, [0, 64, 0]));
             assert!(level.has_water_ticket(game, [1, 64, 0]));
             assert!(!ticket.remove(game));
@@ -2568,15 +2565,15 @@ mod tests {
             // controller name, cannot stand in for the installed registration's handle.
             let name = quarry().id();
             let slot = known_slot(name).unwrap();
-            let uninstalled = mod_api::__ticket_controller_runtime::issue_controller(
+            let uninstalled = mod_api::__private::ticket_controllers::issue_controller(
                 slot,
                 name.into(),
                 "machines",
                 0,
                 None,
             )
-            .handle;
-            let refused = mod_api::__ticket_controller_runtime::refused_controller();
+            .0;
+            let refused = mod_api::__private::ticket_controllers::refused_controller();
             let untouched = game.level_chunk_ref(level, [6, 6]).unwrap();
             for invalid in [uninstalled, refused] {
                 assert_ne!(invalid, quarry());
@@ -2991,7 +2988,7 @@ mod tests {
                 }
                 save.save_mod_tickets(
                     &saved_rows,
-                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                    mod_api::__private::ticket_controllers::saved_controller_name,
                 )
                 .unwrap();
                 game.enter_level(second).unwrap();
@@ -3029,7 +3026,7 @@ mod tests {
                 tickets.insert(saved("machines:quarry", [9, 64, 9], (8, 8)));
                 save.save_mod_tickets(
                     &tickets,
-                    mod_api::__ticket_controller_runtime::saved_controller_name,
+                    mod_api::__private::ticket_controllers::saved_controller_name,
                 )
                 .unwrap();
                 let back = game.dim;

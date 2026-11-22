@@ -2,6 +2,9 @@
 #[doc(hidden)]
 pub use crate::parts::tests as part_tests;
 pub use mod_vocab::__private::*;
+// The installed ticket store is engine-owned; the authoring crate can only issue controllers.
+#[allow(hidden_glob_reexports)]
+pub(crate) use mod_vocab::__private::ticket_controllers;
 
 /// Validate registrations above the engine, deriving lookup indexes below it.
 pub fn install_parts(

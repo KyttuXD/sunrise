@@ -1264,7 +1264,7 @@ pub(super) fn make_streaming(
     if options.execution_role.is_client() {
         streaming.load_forced(
             save.load_forced_chunks(),
-            save.load_mod_tickets(mod_api::__ticket_controller_runtime::saved_controller_slot),
+            save.load_mod_tickets(mod_api::__private::ticket_controllers::saved_controller_slot),
         );
     }
     streaming.radius = settings.render_distance;

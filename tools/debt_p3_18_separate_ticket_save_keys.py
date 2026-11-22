@@ -3,7 +3,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "crates/sunrise-client/src/game"
-RUNTIME = "mod_api::__ticket_controller_runtime"
+RUNTIME = "mod_api::__private::ticket_controllers"
 REPLACEMENTS = {
     "world/levels.rs": {
         "save.load_mod_tickets(|id| mod_api::TicketController::from_id(id).map(|c| c.slot()))":

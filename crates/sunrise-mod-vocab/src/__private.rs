@@ -5,6 +5,15 @@ use crate::*;
 #[path = "__private/registry_installation.rs"]
 mod registry_installation;
 
+/// Engine-side chunk ticket registration, save I/O and activation, not re-exported to mods.
+#[doc(hidden)]
+pub mod ticket_controllers {
+    pub use crate::world::ticket_controller::{
+        active_controller_slot, issue_controller, refused_controller, saved_controller_name,
+        saved_controller_slot, validate_staged_tickets,
+    };
+}
+
 /// The argument of a handler trait's hidden marks method. Its field is private, so no mod can
 /// make one: nothing outside this crate can call the method.
 // exhaustive: its field is private; nothing builds one
