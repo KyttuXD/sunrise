@@ -1467,8 +1467,24 @@ impl Game<'_> {
             let w = self.mob_world_base(&[]);
             self.mobs.iter().map(|m| m.on_climbable(&w)).collect()
         };
+        let inactive_equipment = (self.is_logical_server() && self.remote.is_none()).then(|| {
+            (
+                self.entity_ticking_area(),
+                world_items!(self),
+                &self.motion.attributes,
+            )
+        });
         for (m, climbing) in self.mobs.iter_mut().zip(climbing) {
             m.on_climbable = climbing;
+            // Keep an inactive mob's modifiers current without consuming its next body-tick
+            // observation. Eligible mobs collect in LivingEntity.detectEquipmentUpdates.
+            if let Some((ticking, items, catalog)) = &inactive_equipment
+                && !m.removed
+                && (!m.extra.equipment.is_empty() || m.extra.live.has_worn())
+                && !ticking(m.position.x.floor() as i32, m.position.z.floor() as i32)
+            {
+                super::living_attributes::collect_equipment(catalog, items, m);
+            }
         }
         let mut snapshot = std::mem::take(&mut self.creatures.seen_buf);
         snapshot.extend(self.mobs.iter().map(|m| seen(m, uuid, self.items())));

@@ -322,12 +322,15 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        let pos = Vec3::new(3.0, 64.0, 5.0);
-        game.mobs.push(Mob::new(41, zombie.clone(), pos, 0.0));
-        game.mobs.push(Mob::new(42, zombie, pos, 0.0));
+        for (id, x) in [(41, 3.0), (42, 6.0)] {
+            let mut mob = Mob::new(id, zombie.clone(), Vec3::new(x, 64.0, 5.0), 0.0);
+            mob.no_ai = true;
+            mob.no_gravity = true;
+            game.mobs.push(mob);
+        }
 
         // Naked mobs emit nothing and allocate no equipment history.
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
         assert!(!game.mobs[0].extra.live.has_worn());
         assert!(!game.mobs[1].extra.live.has_worn());
@@ -339,7 +342,7 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         chest.set_crafting_enchantments(vec![(Arc::from("minecraft:protection"), 2)]);
         finalize::set_item_stack(&mut game.mobs[1], CHEST, chest.clone());
 
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(
             take(heard),
             vec![(
@@ -357,7 +360,7 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         assert!(wearing_iron.0 > bare.0);
 
         // An unchanged tick with overlaid gear reports nothing.
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
 
         // The same comparison still refreshes armor and advances history
@@ -365,11 +368,11 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         let diamond = ItemStack::new("minecraft:diamond_chestplate", 1);
         assert!(mod_api::__private::set_mod_enabled("counter", false));
         game.mobs[1].set_equipment_stack(CHEST, Some(diamond.clone()));
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
         assert!(armor::values(&game.mobs[1]).0 > wearing_iron.0);
         assert!(mod_api::__private::set_mod_enabled("counter", true));
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
 
         // A handle write applies armor immediately without consuming the
@@ -377,7 +380,7 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         let mob = game.living(game.entity(42).unwrap()).unwrap();
         assert!(game.living_set_equipment(mob, EquipmentSlot::Chest, None));
         assert_eq!(armor::values(&game.mobs[1]), bare);
-        game.tick_equipment_attributes();
+        game.tick_creature_entities().unwrap();
         assert_eq!(
             take(heard),
             vec![(

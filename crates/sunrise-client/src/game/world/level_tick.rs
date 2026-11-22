@@ -205,7 +205,7 @@ impl Game<'_> {
         if !self.entity_attachments.is_empty() {
             self.prune_entity_attachments();
         }
-        self.tick_equipment_attributes();
+        self.refresh_stand_and_dragon_equipment_attributes();
         self.position_rider();
         self.tick_player_stat_counters();
         self.tick_scoreboard();

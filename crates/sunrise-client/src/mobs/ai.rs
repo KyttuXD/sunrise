@@ -29,7 +29,7 @@ use sunrise_core::{
     geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape},
     random::RandomSource,
 };
-use sunrise_world::native_load_context::LoopContext;
+use sunrise_world::native_load_context::{LoopContext, LoopSide};
 
 #[cfg(test)]
 mod inside_walk_tests {
@@ -1104,6 +1104,11 @@ pub enum Pause {
         /// `Entity.computeSpeed`, read before the tick moved the mob.
         known_speed: Vec3,
     },
+    /// The server found changed equipment before the living AI step.
+    Equipment {
+        was_on_fire: bool,
+        first: sunrise_core::equipment_slot::EquipmentSlot,
+    },
     /// A hit needs its owning level before the tick goes on.
     AfterDamage(DamageResume),
     /// A landing's farmland decision, before its superclass hurt.
@@ -1285,9 +1290,9 @@ pub fn tick(
             TickProgress::Paused(Pause::AfterDamage(resume)) => {
                 resume_after_damage(m, w, level, events, resume, None)
             }
-            TickProgress::Paused(Pause::Trample(_) | Pause::FallToPassengers(_)) => {
-                unreachable!("hostless travel cannot pause")
-            }
+            TickProgress::Paused(
+                Pause::Equipment { .. } | Pause::Trample(_) | Pause::FallToPassengers(_),
+            ) => unreachable!("a hostless tick cannot reach this pause"),
         };
     }
 }
@@ -1468,7 +1473,7 @@ pub(super) fn resume_after_damage(
     }
 }
 
-/// The tick after `Entity.baseTick`, up to the fox's consumption boundary.
+/// Update item use and detect equipment changes after `Entity.baseTick`.
 fn after_base_tick(
     m: &mut Mob,
     w: &MobWorld,
@@ -1495,6 +1500,30 @@ fn after_base_tick(
     if m.alive() {
         super::spear_use::update_using_item(m, w, known_speed, events);
     }
+    // LivingEntity.tick -> detectEquipmentUpdates, before the sleep check and aiStep.
+    if movement.is_some()
+        && !m.removed
+        && w.loop_context.side() == LoopSide::Server
+        && let Some(items) = w.items
+        && let Some(first) =
+            super::finalize::detect_equipment_updates(m, w.attributes, items, || {
+                mod_api::__private::enabled_listened(mod_api::HookId::LivingEquipmentChange)
+            })
+    {
+        return TickProgress::Paused(Pause::Equipment { was_on_fire, first });
+    }
+    resume_after_equipment(m, w, level, was_on_fire, events, movement)
+}
+
+/// Continue without redoing base tick, item use or equipment detection.
+pub(super) fn resume_after_equipment(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    was_on_fire: bool,
+    events: &mut Vec<MobEvent>,
+    movement: Option<&mut Option<MobMovement>>,
+) -> TickProgress {
     super::sulfur_cube::adopt_body(m);
     let sleep_answer = m
         .extra

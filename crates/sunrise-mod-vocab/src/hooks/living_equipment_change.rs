@@ -12,9 +12,12 @@ pub trait Hooks {
     /// slot held at the previous equipment check (none for empty) and `to` a lazy
     /// [`ItemStackView`] of what it holds now (call [`ItemStackView::project`]
     /// on demand for components or an owned copy). Once for each slot that
-    /// changed, in `EquipmentSlot` order, after the mobs' tick, so an entity
-    /// that joins the level wearing something counts from empty on its first
-    /// tick. It only hears: change the entity with its own helpers.
+    /// changed, in `EquipmentSlot` order. A mob's check runs during its body
+    /// tick after despawn, base tick and item use, before `aiStep` and
+    /// `entity_tick_post`. A canceled tick or a mob discarded before that
+    /// check reports nothing. An entity that joins wearing something counts
+    /// from empty on its first body tick. It only hears: change the entity
+    /// with its own helpers.
     ///
     /// Players are told the same way inside their server body tick
     /// (`ServerPlayer.doTick` -> `LivingEntity.detectEquipmentUpdates`), after

@@ -274,11 +274,18 @@ impl Game<'_> {
                         // The row's mob left the list at a boundary: the
                         // tick view must answer a removed handle with nothing.
                         snapshot[slot].removed = true;
-                        resume = None;
+                        let equipment_finished =
+                            matches!(resume.take(), Some(Pause::Equipment { .. }));
                         movement = None;
                         resume_selection = None;
                         resume_sampled = None;
                         cursor += 1;
+                        // A discard in the equipment event ended a tick that had already started.
+                        let mob = &snapshot[slot];
+                        if equipment_finished && round.alone_mob_post(&mob.kind) {
+                            tell_post = Some((mob.id, std::sync::Arc::clone(&mob.kind)));
+                            break;
+                        }
                         continue;
                     };
                     let m = &mut mobs[i];
@@ -523,8 +530,10 @@ impl Game<'_> {
                     // is made when nobody listens for target changes.
                     let selection = if resuming {
                         let mut selection = resume_selection.take();
-                        if matches!(resume, Some(Pause::AfterDamage(_)))
-                            && let Some(selection) = &mut selection
+                        if matches!(
+                            resume,
+                            Some(Pause::AfterDamage(_) | Pause::Equipment { .. })
+                        ) && let Some(selection) = &mut selection
                         {
                             selection.refresh_views(|player| {
                                 let (view, identity) = if player.connection == seen_guest {
@@ -625,6 +634,17 @@ impl Game<'_> {
                                 air,
                                 known_speed,
                                 resume_air_answer.take(),
+                                &mut events,
+                                &mut movement,
+                            )
+                        }
+                        Some(Pause::Equipment { was_on_fire, .. }) => {
+                            sunrise_client::mobs::riders::resume_after_equipment(
+                                &mut mobs,
+                                i,
+                                &w,
+                                &mut level,
+                                was_on_fire,
                                 &mut events,
                                 &mut movement,
                             )
@@ -882,8 +902,11 @@ impl Game<'_> {
             // can read or replace another actor's velocity. A section-only
             // or a told-alone yield must not change the normal end-of-pass
             // push ordering.
-            let settle =
-                pause.is_some() || stinging || retry_rider.is_some() || removing_vehicle.is_some();
+            // Equipment detection alone, like a tick hook, does not settle queued pushes.
+            let settle = (pause.is_some() && !matches!(pause, Some(Pause::Equipment { .. })))
+                || stinging
+                || retry_rider.is_some()
+                || removing_vehicle.is_some();
             if settle {
                 for m in &mut mobs {
                     sunrise_client::mobs::apply_mob_pushes(m, &mut pushes);
@@ -978,6 +1001,9 @@ impl Game<'_> {
                         }
                         Pause::Breathing { air, .. } => {
                             air_answer = self.ask_mob_breath(air);
+                        }
+                        Pause::Equipment { first, .. } => {
+                            self.detect_mob_equipment_updates(id, join, *first);
                         }
                         Pause::AfterDamage(_) => {
                             if sunrise_client::mobs::creaking::has_pending_hurt(&self.mobs[i]) {

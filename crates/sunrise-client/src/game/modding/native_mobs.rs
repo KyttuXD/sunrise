@@ -10,7 +10,6 @@ use super::{Game, commands::Target};
 use mod_api::{EquipmentSlot, HookId, ItemStackView, LivingRef, WorldEpoch};
 use sunrise_client::items::ItemStack;
 use sunrise_client::lan::guest::Guest;
-use sunrise_client::mobs::Mob;
 use sunrise_items::equipment::{BODY, Equipment, SADDLE};
 
 /// `LivingEntity.equipmentHasChanged` negated (`ItemStack.matches`).
@@ -20,13 +19,6 @@ pub(super) fn equipment_stack_matches(now: Option<&ItemStack>, prev: Option<&Ite
         (Some(now), Some(prev)) => now.matches(prev),
         _ => false,
     }
-}
-
-pub(super) fn mob_index_by_hint(mobs: &[Mob], hint: usize, id: u32) -> Option<usize> {
-    if mobs.get(hint).is_some_and(|m| m.id == id) {
-        return Some(hint);
-    }
-    mobs.iter().position(|m| m.id == id)
 }
 
 pub(super) fn guest_equipment_slot(g: &Guest, slot: EquipmentSlot) -> Option<&ItemStack> {

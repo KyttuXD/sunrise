@@ -1662,7 +1662,7 @@ pub(in crate::game) mod tests {
             game.armor_stands[0]
                 .equipment
                 .set(HEAD, Some(ItemStack::new("minecraft:diamond_helmet", 1)));
-            game.tick_equipment_attributes();
+            game.refresh_stand_and_dragon_equipment_attributes();
             let armor = stand.attribute_modifiers(game, "minecraft:armor").unwrap();
             assert!(
                 armor.iter().any(|m| (m.amount - 3.0).abs() < 1e-9),

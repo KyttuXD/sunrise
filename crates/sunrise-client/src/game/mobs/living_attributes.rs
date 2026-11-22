@@ -8,7 +8,7 @@ use std::sync::Arc;
 use sunrise_client::living_attributes::{ModifierChanges, ModifierSnapshot};
 use sunrise_client::mobs::{
     Mob,
-    finalize::{self, Attr, EquipmentRead, Op},
+    finalize::{self, Attr, Op, equipment_attribute_seed as equipment_seed},
 };
 use sunrise_core::equipment_slot::EquipmentSlot;
 use sunrise_items::items::Items;
@@ -32,13 +32,6 @@ pub(in crate::game) fn collect_equipment(catalog: &Arc<Catalog>, items: &Items, 
     );
     warn_failed(m.id, &m.kind.id, result);
     m.extra.live = live;
-}
-
-fn equipment_seed(m: &Mob) -> Vec<sunrise_core::nbt::Tag> {
-    sunrise_client::entity_nbt::attribute_entries(m)
-        .into_iter()
-        .map(|(_, entry)| entry)
-        .collect()
 }
 
 pub(super) fn modifier_invalidation_undo(
@@ -102,80 +95,57 @@ pub(in crate::game) fn write_unspawned_attribute(
 }
 
 impl Game<'_> {
-    /// `LivingEntity.tick`'s `detectEquipmentUpdates` for server mobs.
-    /// One borrowed comparison per slot feeds both NeoForge's notification
-    /// and vanilla's modifier refresh, whether or not anyone listens.
-    pub(super) fn tick_equipment_attributes(&mut self) {
+    /// `LivingEntity.detectEquipmentUpdates`, paused after base tick and item use.
+    /// With the owning level restored, observe each remaining slot in order so
+    /// an earlier listener's writes to a later slot are visible this tick.
+    pub(in crate::game) fn detect_mob_equipment_updates(
+        &mut self,
+        id: u32,
+        join: sunrise_client::join_seq::JoinSeq,
+        first: EquipmentSlot,
+    ) {
+        let mut deltas = Vec::new();
+        for &slot in &EquipmentSlot::ALL[first as usize..] {
+            let Some(i) = self
+                .mob_index
+                .find(&self.mobs, id)
+                .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+            else {
+                return;
+            };
+            let Some(change) = finalize::changed_equipment_slot(&self.mobs[i], slot) else {
+                continue;
+            };
+            let current = change.current.map(|read| read.project().into_owned());
+            if let Some(epoch) = self.living_equipment_notify_epoch() {
+                let previous = change.previous.cloned();
+                let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
+                self.dispatch_living_equipment_change(
+                    living,
+                    slot,
+                    previous.as_ref(),
+                    current.as_ref(),
+                );
+            }
+            deltas.push((slot, current));
+        }
+        if let Some(i) = self
+            .mob_index
+            .find(&self.mobs, id)
+            .filter(|&i| self.mobs[i].join == join && !self.mobs[i].removed)
+        {
+            let catalog = self.motion.attributes.clone();
+            let items = world_items!(self);
+            finalize::finish_equipment_tick(&mut self.mobs[i], &catalog, items, deltas);
+        }
+    }
+
+    /// Attribute upkeep for the separately simulated stands and dragon.
+    pub(super) fn refresh_stand_and_dragon_equipment_attributes(&mut self) {
         if self.remote.is_some() || self.options.execution_role.is_client() {
             return;
         }
         let catalog = self.motion.attributes.clone();
-        let notify_epoch = self.living_equipment_notify_epoch();
-        let ticking = self.entity_ticking_area();
-        // Removal marks mobs for the sweep, and new mobs append; do not tick
-        // entities admitted by a listener during this pass.
-        for hint in 0..self.mobs.len() {
-            let Some(m) = self.mobs.get(hint).filter(|m| !m.removed) else {
-                continue;
-            };
-            if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
-                continue;
-            }
-            if !ticking(m.position.x.floor() as i32, m.position.z.floor() as i32) {
-                collect_equipment(&catalog, world_items!(self), &mut self.mobs[hint]);
-                continue;
-            }
-            let id = m.id;
-            let living = notify_epoch
-                .map(|epoch| mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id)));
-            let mut deltas = Vec::new();
-            for slot in EquipmentSlot::ALL {
-                let Some(m) = super::native_mobs::mob_index_by_hint(&self.mobs, hint, id)
-                    .map(|i| &self.mobs[i])
-                    .filter(|m| !m.removed)
-                else {
-                    break;
-                };
-                let previous = m.extra.live.last_equipment(slot);
-                let current = finalize::equipment_slot(m, slot);
-                if EquipmentRead::matches_previous(current.as_ref(), previous) {
-                    continue;
-                }
-                let current = current.map(|read| read.project().into_owned());
-                if let Some(living) = living {
-                    let previous = previous.cloned();
-                    self.dispatch_living_equipment_change(
-                        living,
-                        slot,
-                        previous.as_ref(),
-                        current.as_ref(),
-                    );
-                }
-                deltas.push((slot, current));
-            }
-            let Some(i) = super::native_mobs::mob_index_by_hint(&self.mobs, hint, id)
-                .filter(|&i| !self.mobs[i].removed)
-            else {
-                continue;
-            };
-            sunrise_client::mobs::armor::prepare(&self.mobs[i], &catalog);
-            if deltas.is_empty() && !self.mobs[i].extra.live.has_pending_equipment() {
-                continue;
-            }
-            let items = world_items!(self);
-            let m = &mut self.mobs[i];
-            let mut live = std::mem::take(&mut m.extra.live);
-            let result = live.finish_equipment_tick(
-                &catalog,
-                &m.kind.id,
-                items,
-                deltas,
-                |slot| finalize::equipment_slot(m, slot),
-                || equipment_seed(m),
-            );
-            warn_failed(id, &m.kind.id, result);
-            m.extra.live = live;
-        }
         let items = world_items!(self);
         for a in self.armor_stands.iter_mut() {
             if a.equipment.is_empty() && !a.live.has_worn() {
@@ -637,6 +607,19 @@ mod tests {
         game.dragon.replace(dragon);
     }
 
+    fn detect_test_mob_equipment(game: &mut Game<'_>) {
+        let items = world_items!(game);
+        assert_eq!(
+            finalize::detect_equipment_updates(
+                &mut game.mobs[0],
+                &game.motion.attributes,
+                items,
+                || false,
+            ),
+            None
+        );
+    }
+
     fn read(game: &Game<'_>, id: u32, name: &str) -> (Option<f64>, Option<f64>) {
         let living = game.living(game.entity(id).unwrap()).unwrap();
         (
@@ -973,22 +956,22 @@ mod tests {
             spawn(game);
             let damage = "minecraft:attack_damage";
             game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             // +6 from the sword's `base_attack_damage` modifier; the base stays.
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
             // The same item again changes nothing (no duplicate modifier).
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
             // Another sword takes the first one's modifier off before its own.
             game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:netherite_sword"));
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(10.0), Some(3.0)));
             game.mobs[0].set_equipment_stack(MAINHAND, None);
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(3.0), Some(3.0)));
             // A sword on the head is in no slot its modifiers name.
             game.mobs[0].set_equipment_stack(HEAD, stack("minecraft:diamond_sword"));
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(3.0), Some(3.0)));
         });
     }
@@ -1007,11 +990,11 @@ mod tests {
                 .unwrap()
                 .equipment
                 .set(CHEST, stack("minecraft:diamond_chestplate"));
-            game.tick_equipment_attributes();
+            game.refresh_stand_and_dragon_equipment_attributes();
             assert_eq!(read(game, 13, armor), (Some(3.0), Some(0.0)));
             assert_eq!(read(game, 14, armor), (Some(8.0), Some(0.0)));
             game.armor_stands[0].equipment.set(HEAD, None);
-            game.tick_equipment_attributes();
+            game.refresh_stand_and_dragon_equipment_attributes();
             assert_eq!(read(game, 13, armor), (Some(0.0), Some(0.0)));
             assert_eq!(read(game, 14, armor), (Some(8.0), Some(0.0)));
         });
@@ -1083,11 +1066,11 @@ mod tests {
                 ])])),
             );
             game.mobs[0].set_equipment_stack(MAINHAND, Some(own));
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             // +1 from its own list, not the sword's +6.
             assert_eq!(read(game, 12, damage), (Some(4.0), Some(3.0)));
             game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
-            game.tick_equipment_attributes();
+            detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
         });
     }
@@ -1382,7 +1365,7 @@ mod tests {
                 let chestplate = stack("minecraft:netherite_chestplate");
                 game.mobs[0].set_equipment_stack(CHEST, chestplate);
                 game.refresh_gear_knockback_resistance();
-                game.tick_equipment_attributes();
+                detect_test_mob_equipment(game);
                 // Netherite's own 0.1, and the mod's 0.4.
                 let resistance = game.mobs[0].gear_knockback_resistance.unwrap();
                 assert!((resistance - 0.5).abs() < 1e-6, "{resistance}");

@@ -25,10 +25,12 @@ use super::{
 use crate::{
     enchant::Enchantments,
     items::{ItemStack, Items},
+    living_attributes::EquipmentDelta,
 };
 use serde_json::Value;
 use std::{borrow::Cow, fs, path::Path, sync::Arc};
 use sunrise_core::{equipment_slot::EquipmentSlot, geometry::Aabb, random::RandomSource};
+use sunrise_world::attributes::entity::Catalog;
 
 /// What a level's finalizeSpawn event decided for a mob another mob's
 /// finalizeSpawn created: the rider is dropped, added without its own rolls,
@@ -1380,6 +1382,82 @@ pub fn equipment_slot(m: &Mob, slot: EquipmentSlot) -> Option<EquipmentRead<'_>>
     let slot = slot as usize;
     let base = m.extra.slot_stack(slot)?;
     Some(stored_equipment(m, slot, base).unwrap_or_else(|| EquipmentRead::resident(base)))
+}
+
+/// A changed slot at `LivingEntity.collectEquipmentChanges`, still borrowed.
+pub struct EquipmentChange<'a> {
+    pub current: Option<EquipmentRead<'a>>,
+    pub previous: Option<&'a ItemStack>,
+}
+
+pub fn changed_equipment_slot(m: &Mob, slot: EquipmentSlot) -> Option<EquipmentChange<'_>> {
+    let previous = m.extra.live.last_equipment(slot);
+    let current = equipment_slot(m, slot);
+    (!EquipmentRead::matches_previous(current.as_ref(), previous))
+        .then_some(EquipmentChange { current, previous })
+}
+
+/// Detect at the body tick. Return the first changed slot if its callback
+/// needs the owning game; otherwise apply vanilla's changes without yielding.
+pub fn detect_equipment_updates(
+    m: &mut Mob,
+    catalog: &Arc<Catalog>,
+    items: &Items,
+    notify: impl FnOnce() -> bool,
+) -> Option<EquipmentSlot> {
+    if m.extra.equipment.is_empty() && !m.extra.live.has_worn() {
+        return None;
+    }
+    let mut changed = EquipmentSlot::ALL.into_iter().filter_map(|slot| {
+        let change = changed_equipment_slot(m, slot)?;
+        Some((slot, change.current))
+    });
+    let first = changed.next();
+    if let Some((slot, _)) = first.as_ref()
+        && notify()
+    {
+        return Some(*slot);
+    }
+    let deltas = first
+        .into_iter()
+        .chain(changed)
+        .map(|(slot, current)| (slot, current.map(|read| read.project().into_owned())))
+        .collect();
+    finish_equipment_tick(m, catalog, items, deltas);
+    None
+}
+
+pub fn equipment_attribute_seed(m: &Mob) -> Vec<sunrise_core::nbt::Tag> {
+    crate::entity_nbt::attribute_entries(m)
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .collect()
+}
+
+/// Settle only the observed deltas, plus slots whose live modifiers changed
+/// early (such as through a listener's equipment write).
+pub fn finish_equipment_tick(
+    m: &mut Mob,
+    catalog: &Arc<Catalog>,
+    items: &Items,
+    deltas: Vec<EquipmentDelta>,
+) {
+    super::armor::prepare(m, catalog);
+    if deltas.is_empty() && !m.extra.live.has_pending_equipment() {
+        return;
+    }
+    let mut live = std::mem::take(&mut m.extra.live);
+    if let Err(error) = live.finish_equipment_tick(
+        catalog,
+        &m.kind.id,
+        items,
+        deltas,
+        |slot| equipment_slot(m, slot),
+        || equipment_attribute_seed(m),
+    ) {
+        log::warn!("equipment attributes of {} {}: {error}", m.kind.id, m.id);
+    }
+    m.extra.live = live;
 }
 
 /// The whole stack a mob keeps in `slot` (damage, name, components, count,
