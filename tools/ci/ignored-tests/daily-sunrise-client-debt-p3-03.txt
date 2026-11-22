@@ -1,0 +1,2 @@
+sunrise-client game::fishing::tests::retrieval_spawns_the_edited_catch_and_not_the_zero_count prepared resources
+sunrise-client game::spill::tests::block_interaction_lends_the_actual_tool_actor_state_and_level prepared resources

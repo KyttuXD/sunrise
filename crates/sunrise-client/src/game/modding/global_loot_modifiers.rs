@@ -133,7 +133,7 @@ impl GlobalLootModifier for ApiAddTable {
         context: &mut dyn mod_api::LootModifierContext,
         generated: &mut mod_api::LootList<'_>,
     ) -> Result<(), LootModifierError> {
-        context.append_raw(&self.table, generated)
+        context.append_split(&self.table, generated)
     }
 }
 
@@ -177,18 +177,22 @@ impl mod_api::LootModifierContext for RollAdapter<'_> {
         table: &Identifier,
         generated: &mut mod_api::LootList<'_>,
     ) -> Result<(), LootModifierError> {
-        let target = generated
-            .downcast_mut::<Vec<loot::LootStack>>()
-            .ok_or_else(|| {
-                LootModifierError::new(
-                    "append_raw",
-                    "target list is not backed by the active loot evaluator",
-                )
-            })?;
         mod_api::__private::game::CallbackOwner::call_engine(|| {
-            self.roll.append_raw(&table.to_string(), target)
+            self.roll
+                .append_raw(&table.to_string(), generated.engine_access())
         })
         .map_err(|error| LootModifierError::new("append_raw", error))
+    }
+    fn append_split(
+        &mut self,
+        table: &Identifier,
+        generated: &mut mod_api::LootList<'_>,
+    ) -> Result<(), LootModifierError> {
+        mod_api::__private::game::CallbackOwner::call_engine(|| {
+            self.roll
+                .append_split(&table.to_string(), generated.engine_access())
+        })
+        .map_err(|error| LootModifierError::new("append_split", error))
     }
 }
 impl mod_api::RandomSource for RollAdapter<'_> {
@@ -481,8 +485,11 @@ mod tests {
                             .collect::<Vec<_>>(),
                         [
                             ("minecraft:diamond", -3),
-                            ("minecraft:gold_ingot", 200),
+                            ("minecraft:gold_ingot", 64),
                             ("minecraft:gold_ingot", 205),
+                            ("minecraft:gold_ingot", 64),
+                            ("minecraft:gold_ingot", 64),
+                            ("minecraft:gold_ingot", 8),
                         ]
                     );
                     assert_eq!(
@@ -533,7 +540,7 @@ mod tests {
         let raw_table = json!({
             "pools": [
                 {"rolls": 1, "entries": [{"type": "minecraft:loot_table", "value": "test:raw"}]},
-                {"rolls": 1, "entries": [{"type": "minecraft:item", "name": "minecraft:gold_ingot", "modifier": {"type": "minecraft:set_count", "count": 200}}]}
+                {"rolls": 1, "entries": [{"type": "minecraft:item", "name": "minecraft:gold_ingot", "modifier": [{"type": "minecraft:set_count", "count": 200}, {"type": "minecraft:set_components", "components": {"minecraft:max_stack_size": 64}}]}]}
             ]
         });
         let overlay = [
@@ -611,8 +618,11 @@ mod tests {
                         .collect::<Vec<_>>(),
                     [
                         ("minecraft:diamond", -3),
-                        ("minecraft:gold_ingot", 200),
+                        ("minecraft:gold_ingot", 64),
                         ("minecraft:gold_ingot", 205),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 8),
                     ]
                 );
                 assert_eq!(
@@ -635,8 +645,11 @@ mod tests {
                         .collect::<Vec<_>>(),
                     [
                         ("minecraft:diamond", 0),
-                        ("minecraft:gold_ingot", 200),
+                        ("minecraft:gold_ingot", 64),
                         ("minecraft:gold_ingot", 205),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 8),
                     ]
                 );
                 assert_eq!(
@@ -644,7 +657,7 @@ mod tests {
                     <(u64, Option<f64>)>::from(&expected_rng)
                 );
 
-                // The retained ApiAddTable instance uses the same engine append_raw path.
+                // The retained stock instance applies the same splitter without another pass.
                 let api_add = manager
                     .get(&Identifier::parse("chain:add").unwrap())
                     .unwrap();
@@ -674,7 +687,10 @@ mod tests {
                         ("minecraft:diamond", 64),
                         ("minecraft:diamond", 64),
                         ("minecraft:diamond", 2),
-                        ("minecraft:gold_ingot", 200),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 64),
+                        ("minecraft:gold_ingot", 8),
                     ]
                 );
             },

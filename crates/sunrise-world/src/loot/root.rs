@@ -1,5 +1,6 @@
 //! Non-raw loot table completion, distinct from nested raw evaluation.
 use super::*;
+use global_modifiers::{Generated, LootListAccess, LootStackAccess};
 
 impl<R: RandomSource + Clone> Context<'_, R> {
     /// Every non-raw entry point completes here with its original context and
@@ -17,8 +18,9 @@ impl<R: RandomSource + Clone> Context<'_, R> {
         if generation.is_empty() {
             return items;
         }
-        generation.apply(self, &mut items);
-        items
+        let mut generated = Generated(items);
+        generation.apply(self, &mut generated);
+        generated.0
     }
 }
 
@@ -56,21 +58,52 @@ impl<R: RandomSource + Clone> global_modifiers::ModifierRoll for Context<'_, R> 
     fn condition(&mut self, condition: &types::PreparedCondition) -> bool {
         self.condition_with_bindings(condition.value(), Some(condition.rules()))
     }
-    fn roll_raw(&mut self, id: &str, visit: &mut dyn FnMut(&LootStack)) -> Result<(), String> {
-        let mut output = Vec::new();
-        self.append_raw(id, &mut output)?;
-        for stack in &output {
-            visit(stack);
-        }
-        Ok(())
-    }
-    fn append_raw(&mut self, id: &str, generated: &mut Vec<LootStack>) -> Result<(), String> {
+    fn roll_raw(
+        &mut self,
+        id: &str,
+        visit: &mut dyn FnMut(&dyn LootStackAccess),
+    ) -> Result<(), String> {
         let table = self
             .data
             .tables
             .get(id)
             .ok_or_else(|| format!("table: missing loot table {id}"))?;
-        self.table_raw(id, table, &mut |_, stack| generated.push(stack));
+        let mut raw = Vec::new();
+        global_modifiers::in_engine(|| {
+            self.table_raw(id, table, &mut |_, stack| raw.push(stack));
+        });
+        for stack in &raw {
+            visit(stack);
+        }
+        Ok(())
+    }
+    fn append_raw(&mut self, id: &str, generated: &mut dyn LootListAccess) -> Result<(), String> {
+        self.append_subtable(id, generated, |_, stack, target| target.push(stack))
+    }
+    fn append_split(&mut self, id: &str, generated: &mut dyn LootListAccess) -> Result<(), String> {
+        self.append_subtable(id, generated, LootData::split)
+    }
+}
+
+impl<R: RandomSource + Clone> Context<'_, R> {
+    fn append_subtable(
+        &mut self,
+        id: &str,
+        generated: &mut dyn LootListAccess,
+        mut emit: impl FnMut(&LootData, LootStack, &mut Vec<LootStack>),
+    ) -> Result<(), String> {
+        let target = generated
+            .as_any_mut()
+            .downcast_mut::<Generated<LootStack>>()
+            .ok_or("target list is not backed by the active loot evaluator")?;
+        let table = self
+            .data
+            .tables
+            .get(id)
+            .ok_or_else(|| format!("table: missing loot table {id}"))?;
+        self.table_raw(id, table, &mut |context, stack| {
+            emit(context.data, stack, &mut target.0)
+        });
         Ok(())
     }
 }

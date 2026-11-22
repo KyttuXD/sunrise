@@ -510,11 +510,11 @@ mod tests {
             ("test:value".into(), Some(Tag::Byte(7))),
             ("test:value".into(), Some(Tag::ByteArray(vec![8]))),
         ];
-        let mut list = Vec::new();
+        let mut list = engine::global_modifiers::Generated::<engine::LootStack>(Vec::new());
         loot_list(&mut list).push(value).unwrap();
-        assert_eq!(list[0].count, -3);
+        assert_eq!(list.0[0].count, -3);
         assert_eq!(
-            list[0].components,
+            list.0[0].components,
             vec![
                 ("test:value".into(), Some(Tag::Byte(7))),
                 ("test:value".into(), Some(Tag::ByteArray(vec![8]))),
@@ -527,9 +527,9 @@ mod tests {
         let mut value =
             mod_api::LootStack::new(mod_api::__private::item_key("minecraft:stick").unwrap(), 1);
         value.components = vec![("test:removed".into(), None)];
-        let mut list = Vec::new();
+        let mut list = engine::global_modifiers::Generated::<engine::LootStack>(Vec::new());
         loot_list(&mut list).push(value).unwrap();
-        assert_eq!(list[0].components, vec![("test:removed".into(), None)]);
+        assert_eq!(list.0[0].components, vec![("test:removed".into(), None)]);
     }
 
     struct ScopedInvalid(std::sync::Arc<std::sync::atomic::AtomicBool>);

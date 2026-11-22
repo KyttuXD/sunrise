@@ -183,6 +183,13 @@ pub trait LootModifierContext {
         table: &Identifier,
         generated: &mut LootList<'_>,
     ) -> Result<(), LootModifierError>;
+    /// Like [`Self::append_raw`], but run the subtable's stack splitter before appending.
+    /// This is `neoforge:add_table`'s operation; it does not run a second modifier pass.
+    fn append_split(
+        &mut self,
+        table: &Identifier,
+        generated: &mut LootList<'_>,
+    ) -> Result<(), LootModifierError>;
 }
 
 #[cfg(test)]

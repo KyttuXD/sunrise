@@ -525,12 +525,9 @@ fn queried_ability_tags_use_prepared_item_sets() {
 
 #[test]
 fn root_modifiers_chain_before_unsigned_caller_consumption() {
-    use sunrise_world::loot::{
-        LootStack,
-        global_modifiers::{
-            AddTableModifier, DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile,
-            ModifierRoll,
-        },
+    use sunrise_world::loot::global_modifiers::{
+        AddTableModifier, DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile,
+        ModifierRoll,
     };
     struct Stage(u8);
     impl ModifierApply for Stage {
@@ -575,7 +572,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
                             .map(|i| generated.get(i).unwrap())
                             .map(|stack| stack.count())
                             .collect::<Vec<_>>(),
-                        [205, -3, 200]
+                        [205, -3, 64, 64, 64, 8]
                     );
                     let mut expected = LegacyRandom::new(31);
                     expected.next_long();
@@ -590,7 +587,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         "modifier":[{"type":"minecraft:set_count","count":130},{"type":"minecraft:set_components","components":{"minecraft:max_stack_size":64}}]});
     let raw = json!({"pools":[
         {"rolls":1,"entries":[{"type":"minecraft:loot_table","value":"test:raw"}]},
-        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot","modifier":{"type":"minecraft:set_count","count":200}}]}
+        {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot","modifier":[{"type":"minecraft:set_count","count":200},{"type":"minecraft:set_components","components":{"minecraft:max_stack_size":64}}]}]}
     ]});
     let mut items = data(vec![
         ("minecraft:entities/zombie", root.clone()),
@@ -662,7 +659,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         };
         assert_eq!(
             drops.iter().map(|stack| stack.count).collect::<Vec<_>>(),
-            [205, 0, 200],
+            [205, 0, 64, 64, 64, 8],
             "adapter {adapter}"
         );
         assert_eq!(
@@ -674,11 +671,8 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
 
 #[test]
 fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unsplit() {
-    use sunrise_world::loot::{
-        LootStack,
-        global_modifiers::{
-            DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
-        },
+    use sunrise_world::loot::global_modifiers::{
+        DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
     };
     struct Dynamic;
     impl ModifierApply for Dynamic {
@@ -768,7 +762,7 @@ fn roll_as_caller(
 ) -> (usize, Seen) {
     use std::sync::Mutex;
     use sunrise_world::loot::{
-        LootPlace, LootStack,
+        LootPlace,
         global_modifiers::{
             DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
         },
@@ -983,4 +977,65 @@ fn an_interaction_drop_copies_components_from_the_interacting_entity() {
         )]))
     );
     assert_eq!(roll(None), None, "no interacting entity, nothing to copy");
+}
+
+#[test]
+fn a_noop_modifier_keeps_a_dynamic_written_book_intact() {
+    use sunrise_world::loot::global_modifiers::{
+        DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
+    };
+    struct NoOp;
+    impl ModifierApply for NoOp {
+        fn apply(
+            &self,
+            _: &mut dyn ModifierRoll,
+            generated: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
+            assert_eq!(
+                generated.get(0).unwrap().item_id(),
+                "minecraft:written_book"
+            );
+            Ok(())
+        }
+    }
+    let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:dynamic","name":"minecraft:contents"}]}]});
+    let mut items = data(vec![("minecraft:blocks/decorated_pot", table)]);
+    items.global_modifiers = Arc::new(GlobalLootModifiers::load(
+        [ModifierFile {
+            id: "test:noop".into(),
+            pack: "test".into(),
+            path: "noop.json".into(),
+            read: Box::new(|| Ok(br#"{"type":"test:noop"}"#.to_vec())),
+        }],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+        |_, _, _| {
+            Ok(DecodedModifier {
+                priority: 0,
+                condition: None,
+                apply: Arc::new(NoOp),
+            })
+        },
+        |error| panic!("{error}"),
+    ));
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:decorated_pot":0},"states":[["decorated_pot",false,false,"","minecraft:decorated_pot"]]}"#[..]).unwrap();
+    let mut book = ItemStack::new("minecraft:written_book", 1);
+    book.data_mut().written = Some(crate::item_data::WrittenBook {
+        title: "The catch".into(),
+        author: "Test".into(),
+        generation: 1,
+        pages: vec!["Keep the whole page.".into()],
+        page_tags: Vec::new(),
+        resolved: true,
+    });
+    let stacks = items.block_drops(
+        &registry,
+        BlockStateId(0),
+        BlockLootRoll {
+            dynamic: &[book.clone()],
+            ..Default::default()
+        },
+        &mut LegacyRandom::new(12),
+        None,
+    );
+    assert_eq!(stacks, [book]);
 }

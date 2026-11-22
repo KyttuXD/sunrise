@@ -3,6 +3,10 @@
 //! for the condition, entry and modifier types used by block drops).
 #[path = "ingredient_defaults.rs"]
 mod ingredient_defaults;
+#[path = "loot_candidate.rs"]
+mod loot_candidate;
+use loot_candidate::Candidate;
+
 #[path = "loot_query.rs"]
 mod loot_query;
 use crate::{Result, blocks::BlockFacts};
@@ -1887,7 +1891,7 @@ impl Items {
             location: roll.location,
             keep_empty: roll.keep_empty,
         };
-        let raw = ctx.evaluate(table, random);
+        let raw = ctx.evaluate_candidates(table, random);
         ctx.complete_root(Some(id), raw, random, Some(roll.dynamic))
     }
     /// Evaluate an entity's loot table (`minecraft:entities/<name>`).
@@ -1961,7 +1965,7 @@ impl Items {
         // LootTable.getRandomItemsRaw visits the table itself first.
         let raw = {
             let _guard = NestedRoll::enter(id)?;
-            ctx.evaluate(table, random)
+            ctx.evaluate_candidates(table, random)
         };
         Some(ctx.complete_root(Some(id), raw, random, None))
     }
@@ -2192,7 +2196,24 @@ impl<R: RandomSource> LootContext<'_, R> {
     }
     /// Raw evaluation: nested tables share this context, without splitting
     /// output or completing the queried table id.
+    #[cfg(test)]
     fn evaluate(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
+        self.evaluate_candidates(table, random)
+            .into_iter()
+            .map(|candidate| candidate.into_stack(self.items))
+            .collect()
+    }
+
+    fn evaluate_candidates(&self, table: &Value, random: &mut R) -> Vec<Candidate> {
+        self.evaluate_with_output(table, random, self.keep_empty)
+    }
+
+    fn evaluate_with_output(
+        &self,
+        table: &Value,
+        random: &mut R,
+        keep_empty: bool,
+    ) -> Vec<Candidate> {
         let ctx = self;
         let mut out = Vec::new();
         for pool in table["pools"].as_array().into_iter().flatten() {
@@ -2211,7 +2232,7 @@ impl<R: RandomSource> LootContext<'_, R> {
                 for (mut stack, emitted) in produced {
                     ctx.modifiers(&pool["modifier"], &mut stack, random);
                     ctx.modifiers(&table["modifier"], &mut stack, random);
-                    if stack.count > 0 || (ctx.keep_empty && emitted) {
+                    if stack.count() > 0 || (keep_empty && emitted) {
                         out.push(stack);
                     }
                 }
@@ -2610,7 +2631,7 @@ impl<R: RandomSource> LootContext<'_, R> {
             _ => false,
         }
     }
-    fn choose(&self, entries: &[Value], random: &mut R, produced: &mut Vec<(ItemStack, bool)>) {
+    fn choose(&self, entries: &[Value], random: &mut R, produced: &mut Vec<(Candidate, bool)>) {
         let mut candidates = Vec::new();
         for e in entries {
             self.expand(e, random, &mut candidates);
@@ -2633,18 +2654,19 @@ impl<R: RandomSource> LootContext<'_, R> {
             }
             chosen
         };
-        let (_, mut stack, entry_or_modifier, emitted) = candidates.swap_remove(pick);
+        let (_, stack, entry_or_modifier, emitted) = candidates.swap_remove(pick);
         if &*stack.item == NESTED {
             self.nested(entry_or_modifier, random, produced);
             return;
         }
-        self.modifiers(entry_or_modifier, &mut stack, random);
-        produced.push((stack, emitted));
+        let mut candidate = Candidate::from(stack);
+        self.modifiers(entry_or_modifier, &mut candidate, random);
+        produced.push((candidate, emitted));
     }
     /// `NestedLootTable.createItemStack`: the entry's table rolls in full
     /// (its pools and its own functions), then the entry's functions apply to
     /// each stack. A table already rolling further out adds nothing.
-    fn nested(&self, entry: &Value, random: &mut R, produced: &mut Vec<(ItemStack, bool)>) {
+    fn nested(&self, entry: &Value, random: &mut R, produced: &mut Vec<(Candidate, bool)>) {
         let (name, table) = match &entry["value"] {
             Value::String(name) => (name.as_str(), self.items.loot.get(name.as_str())),
             inline @ Value::Object(_) => ("<inline>", Some(inline)),
@@ -2655,7 +2677,7 @@ impl<R: RandomSource> LootContext<'_, R> {
             let Some(_guard) = NestedRoll::enter(name) else {
                 return;
             };
-            self.evaluate(table, random)
+            self.evaluate_with_output(table, random, true)
         };
         for mut stack in stacks {
             self.modifiers(&entry["modifier"], &mut stack, random);
@@ -2691,13 +2713,13 @@ impl<R: RandomSource> LootContext<'_, R> {
         }
     }
 
-    fn modifiers(&self, m: &Value, stack: &mut ItemStack, random: &mut R) {
+    fn modifiers(&self, m: &Value, candidate: &mut Candidate, random: &mut R) {
         let list = match m {
             Value::Array(a) => a.as_slice(),
             Value::Object(_) => std::slice::from_ref(m),
             Value::String(id) => {
                 if let Some(modifier) = self.items.loot_modifiers.get(id) {
-                    self.modifiers(modifier, stack, random);
+                    self.modifiers(modifier, candidate, random);
                 }
                 return;
             }
@@ -2712,105 +2734,17 @@ impl<R: RandomSource> LootContext<'_, R> {
             {
                 continue;
             }
-            match f["type"].as_str().or(f["function"].as_str()).unwrap_or("") {
+            let kind = f["type"].as_str().or(f["function"].as_str()).unwrap_or("");
+            match kind {
                 "minecraft:sequence" => {
                     for function in f["functions"].as_array().into_iter().flatten() {
-                        self.modifiers(function, stack, random);
-                    }
-                }
-                "minecraft:copy_custom_data" => {
-                    let original = self.effective_custom_data(stack);
-                    let place = sunrise_world::loot::current_native_loot_place();
-                    if let Some(data) = sunrise_world::loot::copy::copy_custom_data(
-                        f,
-                        original.as_deref(),
-                        |source| {
-                            sunrise_world::loot::copy::nbt_source(
-                                source,
-                                place.as_deref(),
-                                |target| self.named_entity(target).map(|(entity, _)| *entity),
-                            )
-                        },
-                    ) {
-                        apply_component_patch(
-                            stack,
-                            [(
-                                "minecraft:custom_data".into(),
-                                sunrise_core::nbt::Tag::Compound(data),
-                            )]
-                            .into_iter()
-                            .collect(),
-                        );
-                    }
-                }
-                "minecraft:set_custom_data" => {
-                    // Keep flattened SNBT for the shared custom-data codec;
-                    // JSON compounds use the same JsonOps conversion as world loot.
-                    let encoded = match &f["tag"] {
-                        Value::String(text) => {
-                            Some(sunrise_core::nbt::Tag::String(text.as_str().into()))
-                        }
-                        value => sunrise_world::loot::nbt_predicate_tag(value),
-                    };
-                    let Some(encoded) = encoded else {
-                        continue;
-                    };
-                    let Ok(tag) = sunrise_world::custom_data::borrow(&encoded) else {
-                        continue;
-                    };
-                    let mut data = self
-                        .effective_custom_data(stack)
-                        .map(std::borrow::Cow::into_owned)
-                        .unwrap_or_default();
-                    sunrise_world::nbt_path::merge_compound(&mut data, &tag);
-                    let id = if data.is_empty() {
-                        "!minecraft:custom_data"
-                    } else {
-                        "minecraft:custom_data"
-                    };
-                    apply_component_patch(
-                        stack,
-                        [(id.into(), sunrise_core::nbt::Tag::Compound(data))]
-                            .into_iter()
-                            .collect(),
-                    );
-                }
-                "minecraft:copy_components" => {
-                    let place = sunrise_world::loot::current_native_loot_place();
-                    let mut patch = sunrise_core::nbt::Compound::new();
-                    sunrise_world::loot::copy::copy_components(
-                        f,
-                        |source| match source {
-                            "block_entity" => place
-                                .as_ref()?
-                                .block_components
-                                .as_ref()
-                                .map(std::borrow::Cow::Borrowed),
-                            "tool" => self.held.map(|tool| {
-                                std::borrow::Cow::Owned(
-                                    sunrise_world::loot::copy::components_with_patch(
-                                        self.items.component_defaults.get(tool.item.as_ref()),
-                                        crate::item_data::component_snapshot(tool).as_ref(),
-                                    ),
-                                )
-                            }),
-                            target => self.named_entity(target).map(|(entity, _)| {
-                                sunrise_world::loot::copy::entity_components(entity)
-                            }),
-                        },
-                        |id, value| {
-                            patch.insert(id.as_str().into(), value.clone());
-                        },
-                    );
-                    if !patch.is_empty() {
-                        apply_component_patch(stack, patch);
+                        self.modifiers(function, candidate, random);
                     }
                 }
                 "minecraft:filtered" => {
-                    let candidate = loot_of(stack);
                     let pass = sunrise_world::loot::item_predicates::matches(
                         &f["item_filter"],
-                        &candidate,
+                        candidate.raw(),
                         |registry, tag, id| match registry {
                             "item" => self.items.item_in_tag(tag, id),
                             "enchantment" => self.items.enchantments.in_tag(tag, id),
@@ -2819,224 +2753,309 @@ impl<R: RandomSource> LootContext<'_, R> {
                     );
                     self.modifiers(
                         if pass { &f["on_pass"] } else { &f["on_fail"] },
-                        stack,
+                        candidate,
                         random,
                     );
                 }
-                "minecraft:set_count" => {
-                    let n = Self::int_number(&f["count"], random);
-                    let base = if f["add"].as_bool() == Some(true) {
-                        stack.count as i32
-                    } else {
-                        0
-                    };
-                    let total = base.saturating_add(n).max(0);
-                    stack.count = total as u32;
-                }
-                // SetItemDamageFunction.run: check damageability before the
-                // float provider, so ineligible stacks do not draw randomness.
-                "minecraft:set_damage" => {
-                    let component = |id| stack.data().and_then(|data| data.other(id));
-                    if stack.count == 0
-                        || component("minecraft:unbreakable").is_some()
-                        || component("!minecraft:max_damage").is_some()
-                        || component("!minecraft:damage").is_some()
-                    {
-                        continue;
-                    }
-                    let max = match component("minecraft:max_damage") {
-                        Some(sunrise_core::nbt::Tag::Int(value)) => {
-                            u32::try_from(*value).unwrap_or(0)
-                        }
-                        _ => self
-                            .items
-                            .get(&stack.item)
-                            .map_or(0, |info| info.max_damage),
-                    };
-                    if max == 0 {
-                        continue;
-                    }
-                    let base = if f["add"].as_bool() == Some(true) {
-                        1.0 - stack.damage as f32 / max as f32
-                    } else {
-                        0.0
-                    };
-                    let remaining = (Self::number(&f["damage"], random) + base).clamp(0.0, 1.0);
-                    stack.damage = ((1.0 - remaining) * max as f32).floor() as u32;
-                }
-                "minecraft:apply_bonus" => {
-                    let level = self.bonus_level(f["enchantment"].as_str().unwrap_or(""), random);
-                    let count = stack.count as i32;
-                    let params = &f["parameters"];
-                    stack.count = match f["formula"].as_str().unwrap_or("") {
-                        "minecraft:ore_drops" if level > 0 => {
-                            let bound = level.saturating_add(2);
-                            let bonus = (random.next_int_bound(bound).unwrap_or(0) - 1).max(0);
-                            count.saturating_mul(bonus + 1)
-                        }
-                        "minecraft:uniform_bonus_count" => {
-                            let multiplier = params["bonusMultiplier"]
-                                .as_number()
-                                .map(int_value)
-                                .unwrap_or(1) as i32;
-                            let bound = multiplier.saturating_mul(level).saturating_add(1).max(1);
-                            count.saturating_add(random.next_int_bound(bound).unwrap_or(0))
-                        }
-                        "minecraft:binomial_with_bonus_count" => {
-                            let (extra, p) = (
-                                params["extra"].as_number().map(int_value).unwrap_or(0) as i32,
-                                params["probability"].as_f64().unwrap_or(0.0) as f32,
-                            );
-                            let mut n = count;
-                            for _ in 0..level.saturating_add(extra) {
-                                if random.next_float() < p {
-                                    n = n.saturating_add(1);
-                                }
-                            }
-                            n
-                        }
-                        _ => count,
-                    }
-                    .max(0) as u32;
-                }
-                "minecraft:enchanted_count_increase" => {
-                    // Attacker's level x count, rounded (looting).
-                    let level =
-                        self.attacker_level(f["enchantment"].as_str().unwrap_or(""), random);
-                    if level > 0 {
-                        let add = level as f32 * Self::number(&f["count"], random);
-                        // ItemStack.grow: an int sum, which wraps as in Java.
-                        let count = (stack.count as i32).wrapping_add(add.round() as i32);
-                        stack.count = count.max(0) as u32;
-                        if let Some(limit) =
-                            f["limit"].as_number().map(int_value).filter(|l| *l > 0)
-                        {
-                            stack.count = stack.count.min(limit as u32);
-                        }
-                    }
-                }
-                // CopyBlockState: the listed properties of the broken block
-                // become the item's `block_state` component.
-                "minecraft:copy_state" => {
-                    use sunrise_core::nbt::Tag;
-                    let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
-                        Some(Tag::Compound(c)) => c.clone(),
-                        _ => Default::default(),
-                    };
-                    for name in f["properties"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                    {
-                        if let Some(value) = self.properties.get(name) {
-                            copied.insert(name.into(), Tag::String(value.as_str().into()));
-                        }
-                    }
-                    if !copied.is_empty() {
-                        stack
-                            .data_mut()
-                            .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
-                    }
-                }
-                // ApplyExplosionDecay: each item survives with 1 / radius.
-                "minecraft:explosion_decay" => {
-                    if let Some(radius) = self.explosion_radius {
-                        let probability = 1.0 / radius;
-                        stack.count = (0..stack.count)
-                            .filter(|_| random.next_float() <= probability)
-                            .count() as u32;
-                    }
-                }
-                // SetPotionFunction (the barter's fire resistance potions).
-                "minecraft:set_potion" => {
-                    if let Some(id) = f["id"].as_str() {
-                        *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
-                            .with_potion(id);
-                    }
-                }
-                // EnchantWithLevelsFunction: EnchantmentHelper.enchantItem on
-                // the context's random (the End cities' gear).
-                "minecraft:enchant_with_levels" => {
-                    let cost = Self::int_number(&f["levels"], random);
-                    let e = &self.items.enchantments;
-                    let pool = Self::enchant_pool(e, &f["options"]);
-                    let chosen = e.select(self.items, random, stack, cost, &pool);
-                    // EnchantmentHelper.enchantItem: a book becomes one
-                    // enchanted book (the fresh stack's count).
-                    if &*stack.item == "minecraft:book" {
-                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
-                    }
-                    for (id, level) in chosen {
-                        stack.enchant(&id, level);
-                    }
-                }
-                // EnchantRandomlyFunction: one enchantment the item accepts,
-                // at a level between its min and max.
-                "minecraft:enchant_randomly" => {
-                    let e = &self.items.enchantments;
-                    let book = &*stack.item == "minecraft:book";
-                    let only_compatible = f["only_compatible"].as_bool().unwrap_or(true);
-                    let options: Vec<Arc<str>> = Self::enchant_pool(e, &f["options"])
-                        .into_iter()
-                        .filter(|id| {
-                            book || !only_compatible || e.can_enchant(self.items, id, &stack.item)
-                        })
-                        .collect();
-                    if options.is_empty() {
-                        continue;
-                    }
-                    let id = options
-                        [random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
-                        .clone();
-                    let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
-                    // `Mth.nextInt(random, 1, max)`: a single-level
-                    // enchantment (Mending) returns 1 without drawing, so the
-                    // rolls after this one keep vanilla's sequence.
-                    let level = if max <= 1 {
-                        1
-                    } else {
-                        1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
-                    };
-                    if book {
-                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
-                    }
-                    stack.enchant(&id, level);
-                }
-                "minecraft:limit_count" => {
-                    let limit = &f["limit"];
-                    let mut count = stack.count as i32;
-                    if let Some(min) = limit.get("min").filter(|value| !value.is_null()) {
-                        count = count.max(Self::int_number(min, random));
-                    }
-                    if let Some(max) = limit.get("max").filter(|value| !value.is_null()) {
-                        count = count.min(Self::int_number(max, random));
-                    }
-                    stack.count = count.max(0) as u32;
-                }
-                // SetNameFunction.run: the component the target names
-                // (custom_name by default), set as a chest's roll sets it. As in
-                // the main loot engine, an `entity` resolver is not modelled.
-                "minecraft:set_name" if !f["name"].is_null() => {
-                    let target = f["target"].as_str().unwrap_or("custom_name");
-                    let id = format!("minecraft:{target}");
-                    stack.data_mut().set_loot_name(&id, &f["name"]);
-                    stack.tidy();
-                }
-                "minecraft:set_components" => apply_components(stack, &f["components"]),
                 k if k.contains(':') && !k.starts_with("minecraft:") => {
                     if let Some(bound) =
                         self.items.loot_bindings.function(self.local_bindings, k, f)
                     {
-                        let facts = self.roll_facts();
-                        mod_function(self.items, stack, |stack| {
-                            bound.apply(&facts, random, self.items, stack)
-                        });
+                        bound.apply(&self.roll_facts(), random, self.items, candidate.raw_mut());
                     }
                 }
-                _ => {}
+                _ => self.stock_modifier(kind, f, candidate, random),
             }
         }
+    }
+
+    fn stock_modifier(&self, kind: &str, f: &Value, candidate: &mut Candidate, random: &mut R) {
+        let (stack, signed_count) = candidate.stock(self.items);
+        match kind {
+            "minecraft:copy_custom_data" => {
+                let original = self.effective_custom_data(stack);
+                let place = sunrise_world::loot::current_native_loot_place();
+                if let Some(data) =
+                    sunrise_world::loot::copy::copy_custom_data(f, original.as_deref(), |source| {
+                        sunrise_world::loot::copy::nbt_source(source, place.as_deref(), |target| {
+                            self.named_entity(target).map(|(entity, _)| *entity)
+                        })
+                    })
+                {
+                    apply_component_patch(
+                        stack,
+                        [(
+                            "minecraft:custom_data".into(),
+                            sunrise_core::nbt::Tag::Compound(data),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    );
+                }
+            }
+            "minecraft:set_custom_data" => {
+                // Keep flattened SNBT for the shared custom-data codec;
+                // JSON compounds use the same JsonOps conversion as world loot.
+                let encoded = match &f["tag"] {
+                    Value::String(text) => {
+                        Some(sunrise_core::nbt::Tag::String(text.as_str().into()))
+                    }
+                    value => sunrise_world::loot::nbt_predicate_tag(value),
+                };
+                let Some(encoded) = encoded else {
+                    return;
+                };
+                let Ok(tag) = sunrise_world::custom_data::borrow(&encoded) else {
+                    return;
+                };
+                let mut data = self
+                    .effective_custom_data(stack)
+                    .map(std::borrow::Cow::into_owned)
+                    .unwrap_or_default();
+                sunrise_world::nbt_path::merge_compound(&mut data, &tag);
+                let id = if data.is_empty() {
+                    "!minecraft:custom_data"
+                } else {
+                    "minecraft:custom_data"
+                };
+                apply_component_patch(
+                    stack,
+                    [(id.into(), sunrise_core::nbt::Tag::Compound(data))]
+                        .into_iter()
+                        .collect(),
+                );
+            }
+            "minecraft:copy_components" => {
+                let place = sunrise_world::loot::current_native_loot_place();
+                let mut patch = sunrise_core::nbt::Compound::new();
+                sunrise_world::loot::copy::copy_components(
+                    f,
+                    |source| match source {
+                        "block_entity" => place
+                            .as_ref()?
+                            .block_components
+                            .as_ref()
+                            .map(std::borrow::Cow::Borrowed),
+                        "tool" => self.held.map(|tool| {
+                            std::borrow::Cow::Owned(
+                                sunrise_world::loot::copy::components_with_patch(
+                                    self.items.component_defaults.get(tool.item.as_ref()),
+                                    crate::item_data::component_snapshot(tool).as_ref(),
+                                ),
+                            )
+                        }),
+                        target => self.named_entity(target).map(|(entity, _)| {
+                            sunrise_world::loot::copy::entity_components(entity)
+                        }),
+                    },
+                    |id, value| {
+                        patch.insert(id.as_str().into(), value.clone());
+                    },
+                );
+                if !patch.is_empty() {
+                    apply_component_patch(stack, patch);
+                }
+            }
+            "minecraft:set_count" => {
+                let n = Self::int_number(&f["count"], random);
+                let base = if f["add"].as_bool() == Some(true) {
+                    *signed_count
+                } else {
+                    0
+                };
+                let total = base.saturating_add(n).max(0);
+                *signed_count = total;
+            }
+            // SetItemDamageFunction.run: check damageability before the
+            // float provider, so ineligible stacks do not draw randomness.
+            "minecraft:set_damage" => {
+                let component = |id| stack.data().and_then(|data| data.other(id));
+                if *signed_count <= 0
+                    || component("minecraft:unbreakable").is_some()
+                    || component("!minecraft:max_damage").is_some()
+                    || component("!minecraft:damage").is_some()
+                {
+                    return;
+                }
+                let max = match component("minecraft:max_damage") {
+                    Some(sunrise_core::nbt::Tag::Int(value)) => u32::try_from(*value).unwrap_or(0),
+                    _ => self
+                        .items
+                        .get(&stack.item)
+                        .map_or(0, |info| info.max_damage),
+                };
+                if max == 0 {
+                    return;
+                }
+                let base = if f["add"].as_bool() == Some(true) {
+                    1.0 - stack.damage as f32 / max as f32
+                } else {
+                    0.0
+                };
+                let remaining = (Self::number(&f["damage"], random) + base).clamp(0.0, 1.0);
+                stack.damage = ((1.0 - remaining) * max as f32).floor() as u32;
+            }
+            "minecraft:apply_bonus" => {
+                let level = self.bonus_level(f["enchantment"].as_str().unwrap_or(""), random);
+                let count = *signed_count;
+                let params = &f["parameters"];
+                *signed_count = match f["formula"].as_str().unwrap_or("") {
+                    "minecraft:ore_drops" if level > 0 => {
+                        let bound = level.saturating_add(2);
+                        let bonus = (random.next_int_bound(bound).unwrap_or(0) - 1).max(0);
+                        count.saturating_mul(bonus + 1)
+                    }
+                    "minecraft:uniform_bonus_count" => {
+                        let multiplier = params["bonusMultiplier"]
+                            .as_number()
+                            .map(int_value)
+                            .unwrap_or(1) as i32;
+                        let bound = multiplier.saturating_mul(level).saturating_add(1).max(1);
+                        count.saturating_add(random.next_int_bound(bound).unwrap_or(0))
+                    }
+                    "minecraft:binomial_with_bonus_count" => {
+                        let (extra, p) = (
+                            params["extra"].as_number().map(int_value).unwrap_or(0) as i32,
+                            params["probability"].as_f64().unwrap_or(0.0) as f32,
+                        );
+                        let mut n = count;
+                        for _ in 0..level.saturating_add(extra) {
+                            if random.next_float() < p {
+                                n = n.saturating_add(1);
+                            }
+                        }
+                        n
+                    }
+                    _ => count,
+                }
+                .max(0);
+            }
+            "minecraft:enchanted_count_increase" => {
+                // Attacker's level x count, rounded (looting).
+                let level = self.attacker_level(f["enchantment"].as_str().unwrap_or(""), random);
+                if level > 0 {
+                    let add = level as f32 * Self::number(&f["count"], random);
+                    // ItemStack.grow: an int sum, which wraps as in Java.
+                    let count = (*signed_count).wrapping_add(add.round() as i32);
+                    *signed_count = count.max(0);
+                    if let Some(limit) = f["limit"].as_number().map(int_value).filter(|l| *l > 0) {
+                        *signed_count = (*signed_count).min(limit as i32);
+                    }
+                }
+            }
+            // CopyBlockState: the listed properties of the broken block
+            // become the item's `block_state` component.
+            "minecraft:copy_state" => {
+                use sunrise_core::nbt::Tag;
+                let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
+                    Some(Tag::Compound(c)) => c.clone(),
+                    _ => Default::default(),
+                };
+                for name in f["properties"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    if let Some(value) = self.properties.get(name) {
+                        copied.insert(name.into(), Tag::String(value.as_str().into()));
+                    }
+                }
+                if !copied.is_empty() {
+                    stack
+                        .data_mut()
+                        .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
+                }
+            }
+            // ApplyExplosionDecay: each item survives with 1 / radius.
+            "minecraft:explosion_decay" => {
+                if let Some(radius) = self.explosion_radius {
+                    let probability = 1.0 / radius;
+                    *signed_count = (0..*signed_count)
+                        .filter(|_| random.next_float() <= probability)
+                        .count() as i32;
+                }
+            }
+            // SetPotionFunction (the barter's fire resistance potions).
+            "minecraft:set_potion" => {
+                if let Some(id) = f["id"].as_str() {
+                    *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
+                        .with_potion(id);
+                }
+            }
+            // EnchantWithLevelsFunction: EnchantmentHelper.enchantItem on
+            // the context's random (the End cities' gear).
+            "minecraft:enchant_with_levels" => {
+                let cost = Self::int_number(&f["levels"], random);
+                let e = &self.items.enchantments;
+                let pool = Self::enchant_pool(e, &f["options"]);
+                let chosen = e.select(self.items, random, stack, cost, &pool);
+                // EnchantmentHelper.enchantItem: a book becomes one
+                // enchanted book (the fresh stack's count).
+                if &*stack.item == "minecraft:book" {
+                    *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                    *signed_count = 1;
+                }
+                for (id, level) in chosen {
+                    stack.enchant(&id, level);
+                }
+            }
+            // EnchantRandomlyFunction: one enchantment the item accepts,
+            // at a level between its min and max.
+            "minecraft:enchant_randomly" => {
+                let e = &self.items.enchantments;
+                let book = &*stack.item == "minecraft:book";
+                let only_compatible = f["only_compatible"].as_bool().unwrap_or(true);
+                let options: Vec<Arc<str>> = Self::enchant_pool(e, &f["options"])
+                    .into_iter()
+                    .filter(|id| {
+                        book || !only_compatible || e.can_enchant(self.items, id, &stack.item)
+                    })
+                    .collect();
+                if options.is_empty() {
+                    return;
+                }
+                let id = options[random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
+                    .clone();
+                let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
+                // `Mth.nextInt(random, 1, max)`: a single-level
+                // enchantment (Mending) returns 1 without drawing, so the
+                // rolls after this one keep vanilla's sequence.
+                let level = if max <= 1 {
+                    1
+                } else {
+                    1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
+                };
+                if book {
+                    *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                    *signed_count = 1;
+                }
+                stack.enchant(&id, level);
+            }
+            "minecraft:limit_count" => {
+                let limit = &f["limit"];
+                let mut count = *signed_count;
+                if let Some(min) = limit.get("min").filter(|value| !value.is_null()) {
+                    count = count.max(Self::int_number(min, random));
+                }
+                if let Some(max) = limit.get("max").filter(|value| !value.is_null()) {
+                    count = count.min(Self::int_number(max, random));
+                }
+                *signed_count = count.max(0);
+            }
+            // SetNameFunction.run: the component the target names
+            // (custom_name by default), set as a chest's roll sets it. As in
+            // the main loot engine, an `entity` resolver is not modelled.
+            "minecraft:set_name" if !f["name"].is_null() => {
+                let target = f["target"].as_str().unwrap_or("custom_name");
+                let id = format!("minecraft:{target}");
+                stack.data_mut().set_loot_name(&id, &f["name"]);
+                stack.tidy();
+            }
+            "minecraft:set_components" => apply_components(stack, &f["components"]),
+            _ => {}
+        }
+        stack.count = (*signed_count).max(0) as u32;
     }
 }
 
@@ -3104,21 +3123,13 @@ fn apply_component_patch(stack: &mut ItemStack, patch: sunrise_core::nbt::Compou
 /// function hook: the parts of it the hook can change and the engine takes
 /// back. Saved components retain their exact NBT types.
 fn loot_of(stack: &ItemStack) -> sunrise_world::loot::LootStack {
-    let mut components: Vec<(String, Option<sunrise_core::nbt::Tag>)> = Vec::new();
-    if let Some(data) = stack.data() {
-        for (id, value) in data.preserved_components() {
-            components.push((id.clone(), Some(value.clone())));
-        }
-        if let Some(name) = &data.custom_name {
-            components.push(("minecraft:custom_name".to_owned(), Some(name.clone())));
-        }
-        if let Some(trim) = &data.trim {
-            components.push((
-                "minecraft:trim".to_owned(),
-                Some(crate::item_data::trim::to_nbt(trim)),
-            ));
-        }
-    }
+    let components = match crate::item_data::component_snapshot(stack) {
+        Some(sunrise_core::nbt::Tag::Compound(components)) => components
+            .into_iter()
+            .map(|(id, value)| (id.to_string_lossy(), Some(value)))
+            .collect(),
+        _ => Vec::new(),
+    };
     sunrise_world::loot::LootStack {
         item: stack.item.to_string(),
         count: stack.count as i32,
@@ -3288,15 +3299,16 @@ fn apply_loot(
 /// `apply_loot` to preserve untouched resident components, not to roll back callback edits.
 /// Tests can supply the transformation without installing a process-wide registry.
 /// `items` holds the prototypes a removal is checked against.
+#[cfg(test)]
 fn mod_function(
     items: &Items,
     stack: &mut ItemStack,
     apply: impl FnOnce(&mut sunrise_world::loot::LootStack),
 ) {
-    let before = loot_of(stack);
-    let mut working = before.clone();
-    apply(&mut working);
-    apply_loot(&before, &working, stack, prototypes_of(items));
+    let mut candidate =
+        Candidate::from(std::mem::replace(stack, ItemStack::new("minecraft:air", 0)));
+    apply(candidate.raw_mut());
+    *stack = candidate.into_stack(items);
 }
 
 /// `DispensibleContainerItem`: shared contents for hand use and dispensers.

@@ -2,11 +2,16 @@
 #[cfg(test)]
 mod tests;
 use super::LootContext;
+pub use super::views::{Generated, LootCandidateAccess};
 use crate::conditions::LoadConditions;
-use mod_api::__private::{LootListAccess, LootStackAccess};
+pub use mod_api::__private::{LootListAccess, LootStackAccess, LootStackEditAccess};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use sunrise_core::identifier::Identifier;
+
+pub fn in_engine<T>(invoke: impl FnOnce() -> T) -> T {
+    mod_api::__private::game::CallbackOwner::call_engine(invoke)
+}
 
 /// Borrowed access to the evaluator that owns this root roll. No operation starts
 /// another root, changes its parameters, or selects a different random sequence.
@@ -27,6 +32,11 @@ pub trait ModifierRoll {
     ) -> Result<(), String>;
     fn append_raw(&mut self, table: &str, generated: &mut dyn LootListAccess)
     -> Result<(), String>;
+    fn append_split(
+        &mut self,
+        table: &str,
+        generated: &mut dyn LootListAccess,
+    ) -> Result<(), String>;
 }
 
 /// Mutate the generated loot list in place; earlier valid edits and random draws
@@ -195,6 +205,6 @@ impl ModifierApply for AddTableModifier {
         context: &mut dyn ModifierRoll,
         generated: &mut dyn LootListAccess,
     ) -> Result<(), String> {
-        context.append_raw(&self.table, generated)
+        context.append_split(&self.table, generated)
     }
 }

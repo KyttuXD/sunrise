@@ -1483,7 +1483,7 @@ impl Game<'_> {
         actor: Option<sunrise_world::loot::LootEntity>,
         tool: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        self.with_level(|_, level, _| {
+        self.with_level_access(false, |_, level, _| {
             level.interacting = actor;
             level.roll_interact_loot(BlockPos::new(pos[0], pos[1], pos[2]), state, table, tool)
         })
@@ -1598,6 +1598,108 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "daily"]
+    fn block_interaction_lends_the_actual_tool_actor_state_and_level() {
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::spill::tests::block_interaction_lends_the_actual_tool_actor_state_and_level",
+            "SUNRISE_P3_03_SPILL_CASE",
+            &["loot"],
+        ) {
+            return;
+        }
+        use serde_json::json;
+        use std::sync::Arc;
+        use sunrise_world::loot::{self, global_modifiers::*};
+        struct Check(mod_api::BlockState);
+        impl ModifierApply for Check {
+            fn apply(
+                &self,
+                roll: &mut dyn ModifierRoll,
+                output: &mut dyn LootListAccess,
+            ) -> Result<(), String> {
+                let facts = roll.facts();
+                assert_eq!(facts.block, Some("minecraft:beehive"));
+                assert_eq!(facts.interacting_entity.unwrap().kind, "minecraft:player");
+                assert_eq!(facts.tool.unwrap().item_id(), "minecraft:shears");
+                let place = facts.place.unwrap();
+                assert_eq!(place.block_state, Some(self.0));
+                assert_eq!(place.origin, Some([2.5, 64.5, 6.5]));
+                assert!(
+                    place
+                        .block_entity
+                        .as_ref()
+                        .is_some_and(|tag| tag.get("id").is_some())
+                );
+                assert_eq!(place.level.as_ref().unwrap().game_time, 678);
+                assert_eq!(
+                    output.len(),
+                    1,
+                    "the built-in tool ability sees the same tool"
+                );
+                Ok(())
+            }
+        }
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let pos = [2, 64, 6];
+            let state = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:beehive")
+                .unwrap();
+            let expected = state.try_into_api().unwrap();
+            game.world.game_time = 678;
+            game.world
+                .block_entities
+                .insert((2, 64, 6), BlockEntity::Beehive(Box::default()));
+            let table = json!({"type":"minecraft:block_interact","pools":[{"rolls":1,
+                "condition":{"type":"neoforge:can_item_perform_ability","ability":"shears_harvest"},
+                "entries":[{"type":"minecraft:item","name":"minecraft:honeycomb"}]}]});
+            let files = [(
+                "loot_table/test:hive".into(),
+                vec![serde_json::to_vec(&table).unwrap()],
+            )];
+            let defaults = sunrise_world::item_defaults::ItemDefaults::decode(br#"{}"#).unwrap();
+            let mut data = loot::LootData::load_with_types(
+                std::path::Path::new("scoped-hive-loot"),
+                &loot::PackOverlay::new(&files),
+                &defaults,
+                Default::default(),
+            )
+            .unwrap();
+            data.set_global_modifiers(Arc::new(GlobalLootModifiers::load(
+                [ModifierFile {
+                    id: "test:check".into(),
+                    pack: "test".into(),
+                    path: "check.json".into(),
+                    read: Box::new(|| Ok(br#"{"type":"test:check"}"#.to_vec())),
+                }],
+                &sunrise_world::conditions::LoadConditions::vanilla(),
+                |_, _, _| {
+                    Ok(DecodedModifier {
+                        priority: 0,
+                        condition: None,
+                        apply: Arc::new(Check(expected)),
+                    })
+                },
+                |error| panic!("{error}"),
+            )));
+            let mut items = Items::for_tests(HashMap::new());
+            items.set_loot_data(&data);
+            game.server_items = Some(Arc::new(items));
+            let shears = ItemStack::new("minecraft:shears", 1);
+            let drops = game.roll_block_interaction(
+                pos,
+                state,
+                "test:hive",
+                Some(loot::LootEntity::new("minecraft:player")),
+                Some(&shears),
+            );
+            assert_eq!(drops, [ItemStack::new("minecraft:honeycomb", 1)]);
+        });
+    }
 
     struct RemovalMod(u8);
     struct RemovalPart(u8, mod_api::ItemKey);

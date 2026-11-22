@@ -112,17 +112,17 @@ set-once root id. Optional parameters stay absent unless supplied. Reading them 
 randomness. `context.random()` borrows the actual selected roll source through `RandomSource`, the
 existing shared draw capability; do not create a separate seeded generator.
 
-Two raw sub-roll methods use the same parameters, selected random, visited-table guards and data
-generation, running neither the modifier pass nor another stack splitter:
+Sub-roll methods use the same parameters, selected random, visited-table guards and data generation.
+None starts another modifier pass:
 
-- `context.append_raw(&table_id, generated)` rolls the table raw and moves its unmodified engine
-  stacks directly onto `generated` without copying them through API snapshots. The built-in
-  `neoforge:add_table` modifier uses this same path.
-- `context.roll_raw(&table_id, &mut |stack| ...)` rolls the table raw and lends each generated
-  stack as a `LootStackView<'_>` to the visitor; call `stack.to_owned()?` only when keeping a copy.
+- `context.append_raw(&table_id, generated)` rolls the table raw and moves its engine stacks
+  directly onto `generated`, without splitting or copying them through API snapshots.
+- `context.roll_raw(&table_id, &mut |stack| ...)` rolls the table raw and lends each unsplit stack
+  as a `LootStackView<'_>` to the visitor. Keep an owned copy only when needed.
+- `context.append_split(&table_id, generated)` applies vanilla's stack splitter to the sub-roll
+  before appending. The built-in `neoforge:add_table` modifier uses this path.
 
-For both methods, a missing table returns an error naming it and a visited table terminates with no
-output.
+A missing table returns an error naming it; a visited table terminates with no output.
 
 ```rust,ignore
 use std::sync::Arc;

@@ -330,10 +330,17 @@ impl LootModifierContext for Roll {
     ) -> Result<(), LootModifierError> {
         assert_eq!(table.to_string(), "test:raw");
         generated
-            .downcast_mut::<Vec<TestStack>>()
-            .expect("test list backing")
-            .push(TestStack::new("minecraft:gold_ingot", 0));
+            .engine_access()
+            .push_empty("minecraft:gold_ingot")
+            .set_count(0);
         Ok(())
+    }
+    fn append_split(
+        &mut self,
+        table: &Identifier,
+        generated: &mut LootList<'_>,
+    ) -> Result<(), LootModifierError> {
+        self.append_raw(table, generated)
     }
 }
 impl RandomSource for Roll {

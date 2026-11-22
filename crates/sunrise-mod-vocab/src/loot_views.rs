@@ -950,8 +950,8 @@ impl<'a> LootList<'a> {
 
     // hidden: lets the engine's raw append path move native stacks directly into the backing buffer.
     #[doc(hidden)]
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.list.as_any_mut().downcast_mut::<T>()
+    pub fn engine_access(&mut self) -> &mut dyn LootListAccess {
+        self.list
     }
 
     /// Number of loot candidates currently in the list.

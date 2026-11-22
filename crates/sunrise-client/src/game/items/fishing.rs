@@ -2355,6 +2355,85 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "daily"]
+    fn retrieval_spawns_the_edited_catch_and_not_the_zero_count() {
+        if crate::game::native_entity_refs::tests::run_fresh_cases(
+            "game::fishing::tests::retrieval_spawns_the_edited_catch_and_not_the_zero_count",
+            "SUNRISE_P3_03_FISHING_CASE",
+            &["loot"],
+        ) {
+            return;
+        }
+        use super::*;
+        use serde_json::json;
+        use sunrise_world::loot::{self, global_modifiers::*};
+        struct Edits;
+        impl ModifierApply for Edits {
+            fn apply(
+                &self,
+                _: &mut dyn ModifierRoll,
+                output: &mut dyn LootListAccess,
+            ) -> Result<(), String> {
+                output
+                    .get_mut(0)
+                    .unwrap()
+                    .set_name_value("minecraft:custom_name".into(), json!("Kept catch"));
+                output.get_mut(1).unwrap().set_count(0);
+                Ok(())
+            }
+        }
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let root = std::path::Path::new("scoped-catch-loot");
+            let table = json!({"pools":[
+                {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:cod"}]},
+                {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:salmon"}]}
+            ]});
+            let files = [(
+                "loot_table/minecraft:gameplay/fishing".into(),
+                vec![serde_json::to_vec(&table).unwrap()],
+            )];
+            let defaults = sunrise_world::item_defaults::ItemDefaults::decode(br#"{}"#).unwrap();
+            let mut data = loot::LootData::load_with_types(
+                root,
+                &loot::PackOverlay::new(&files),
+                &defaults,
+                Default::default(),
+            )
+            .unwrap();
+            data.set_global_modifiers(Arc::new(GlobalLootModifiers::load(
+                [ModifierFile {
+                    id: "test:edit".into(),
+                    pack: "test".into(),
+                    path: "edit.json".into(),
+                    read: Box::new(|| Ok(br#"{"type":"test:edit"}"#.to_vec())),
+                }],
+                &sunrise_world::conditions::LoadConditions::vanilla(),
+                |_, _, _| {
+                    Ok(DecodedModifier {
+                        priority: 0,
+                        condition: None,
+                        apply: Arc::new(Edits),
+                    })
+                },
+                |error| panic!("{error}"),
+            )));
+            game.server_loot.set(Some(Arc::new(data)));
+            let at = Vec3::new(4.5, 64.0, 4.5);
+            game.player = Some(sunrise_client::motion::PlayerMotion::new(game.motion, at).unwrap());
+            let mut hook = Hook::remote(99, at, [0, 0, 0, 99]);
+            hook.nibble = 1;
+            let rod = ItemStack::new("minecraft:fishing_rod", 1);
+            assert_eq!(game.retrieve_hook_extracted(&rod, &mut hook), 1);
+            let items = game
+                .dropped
+                .iter()
+                .map(|drop| (&*drop.stack.item, drop.stack.custom_name()))
+                .collect::<Vec<_>>();
+            assert_eq!(items, [("minecraft:cod", Some("Kept catch".to_owned()))]);
+        });
+    }
+
     /// Compare the production loot selector to a real FishingHook.retrieve oracle.
     #[test]
     #[ignore = "requires prepared resources and the vanilla fishing reference"]

@@ -141,7 +141,9 @@ The context lends `LootParamsView` through `params()`, authoritative tags throug
 `tags()`, and the evaluator's actual selected random stream through `random()`.
 See [Reading tags](loot-tags.md). Reading parameters consumes no random. Use the
 roll's random directly, and end any parameter borrow before drawing. Bound rules are
-shared immutable declarations and must not keep random state between calls.
+shared immutable declarations and must not keep random state between calls. A block-interaction
+roll can lend `interacting_entity()`, `block_state()` and its optional `tool()` alongside its
+origin, level and block entity. An enchantment roll lends its active `enchantment_level()`.
 
 Functions run entry first, then pool, then table. A `sequence` passes each
 function's output to the next. Conditions under `all_of` and `any_of` run in

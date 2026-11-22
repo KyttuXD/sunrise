@@ -402,8 +402,6 @@ impl Bindings {
     }
     /// Decode a command's inline loot table and resolve named rules before drawing.
     pub fn decode_inline_table(&self, table: &Value) -> io::Result<PreparedInlineTable> {
-        super::validate_loot_table(table)
-            .map_err(|reason| invalid("inline loot_table $", "loot_table", reason))?;
         self.bind_inline_table(table, true)
     }
 
@@ -423,6 +421,20 @@ impl Bindings {
             None,
         )?;
         normalize::normalize_table(&mut boxed, &normalization.tags, &self.types);
+        if strict {
+            for child in shapes::validate_table(&boxed, "inline loot_table $")? {
+                if let shapes::ChildKind::Table = child.kind
+                    && let Some(id) = child.value.as_str()
+                {
+                    let id = sunrise_core::identifier::Identifier::parse(id)
+                        .map_err(|reason| invalid(&child.path, "loot_table", reason))?
+                        .to_string();
+                    if self.inner.tables.get(&id).is_none() {
+                        return Err(invalid(&child.path, &id, "unknown reference"));
+                    }
+                }
+            }
+        }
         let rules = {
             let mut walker = Walker {
                 types: &self.types,

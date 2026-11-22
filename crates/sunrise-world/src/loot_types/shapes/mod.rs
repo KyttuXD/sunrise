@@ -307,8 +307,16 @@ fn macro_template(value: &str) -> bool {
     found
 }
 
-/// Use explicit work and alternative stacks, including for recursive provider shapes.
-/// A malformed deeply nested native value must not overflow the Rust call stack.
+pub(super) fn validate_table<'v>(value: &'v Value, path: &str) -> io::Result<Vec<Child<'v>>> {
+    validate_shape(
+        value,
+        Kind::Named("loot_table_direct"),
+        "loot_table",
+        path,
+        Purpose::Validate,
+    )
+}
+
 pub(super) fn validate<'v>(
     value: &'v Value,
     function: bool,
@@ -328,6 +336,8 @@ pub(super) fn children<'v>(value: &'v Value, function: bool, kind: &str) -> Vec<
     validate_shape(value, shape, kind, "", Purpose::Locate).unwrap_or_default()
 }
 
+/// Use explicit work and alternative stacks, including for recursive provider shapes.
+/// A malformed deeply nested native value must not overflow the Rust call stack.
 fn validate_shape<'v>(
     value: &'v Value,
     shape: Kind,

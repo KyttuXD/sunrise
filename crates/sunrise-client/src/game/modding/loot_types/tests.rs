@@ -48,8 +48,28 @@ impl ModLootFunction for ScaleRule {
         context: &mut dyn mod_api::LootTypeContext,
     ) -> Result<(), String> {
         assert!(context.params().origin().is_none());
-        if self.label == "enchant drop" {
-            assert_eq!(context.params().enchantment_level(), Some(1));
+        if self.label == "live first" {
+            stack.set_count(-2);
+            stack.set_map(true);
+            stack.set_exploration(Some(mod_api::ExplorationMap::new(
+                "minecraft:on_treasure_maps".into(),
+                "minecraft:mansion".into(),
+                2,
+                50,
+                true,
+            )))?;
+            return Ok(());
+        }
+        if self.label == "live second" {
+            assert_eq!(stack.view().count(), -2);
+            assert!(stack.view().map());
+            assert_eq!(
+                stack.view().exploration().unwrap().decoration(),
+                "minecraft:mansion"
+            );
+            stack.set_count(1);
+            stack.set_exploration(None)?;
+            return Ok(());
         }
         let draw = context.random().next_int_bound(5);
         self.observations
@@ -91,6 +111,9 @@ impl ModLootCondition for GateRule {
     }
     fn test(&self, context: &mut dyn LootTypeContext) -> Result<bool, String> {
         assert!(context.params().origin().is_none());
+        if self.label == "enchant drop" {
+            assert_eq!(context.params().enchantment_level(), Some(1));
+        }
         let draw = context.random().next_int_bound(5);
         self.observations
             .lock()
@@ -462,6 +485,23 @@ fn registered_types_bind_once_and_preserve_both_evaluators_order_short_circuit_a
                 RandomSource::next_long(&mut LegacyRandom::new(7)),
             );
 
+            for (field, bad) in [
+                ("modifier", json!({"type":"test:unknown"})),
+                ("modifier", json!("test:missing_modifier")),
+                ("condition", json!({"type":"test:unknown"})),
+                ("condition", json!("test:missing_predicate")),
+            ] {
+                let mut table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:stick"}]}]});
+                table["pools"][0]["entries"][0][field] = bad;
+                let error = items
+                    .prepare_inline_loot_table(&table)
+                    .err()
+                    .unwrap()
+                    .to_string();
+                assert!(error.contains(&format!("entries[0].{field}")), "{error}");
+                assert!(error.contains("unknown"), "{error}");
+            }
+
             // Refusing a bad reload never mutates the already published generation.
             for (entry, expected) in [
                 (json!({"type":"test:absent"}), "unknown loot type"),
@@ -494,6 +534,21 @@ fn registered_types_bind_once_and_preserve_both_evaluators_order_short_circuit_a
                         .is_empty()
                 );
             }
+            let live = json!({"pools":[{"rolls":1,"entries":[{
+                "type":"minecraft:item","name":"minecraft:stick",
+                "modifier":function("live first", 1)
+            }], "modifier":function("live second", 1)}]});
+            let prepared = items.prepare_inline_loot_table(&live).unwrap();
+            let stacks = items.roll_prepared_inline_loot_table_for_command(
+                &prepared,
+                None,
+                &mut LegacyRandom::new(95),
+                false,
+            );
+            assert_eq!(
+                stacks.iter().map(|stack| stack.count).collect::<Vec<_>>(),
+                [1]
+            );
         },
     );
 }
