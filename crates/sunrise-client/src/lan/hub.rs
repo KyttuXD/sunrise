@@ -1621,7 +1621,7 @@ impl Hub {
                 }
             });
         }
-        self.send_level_info(i, ctx, true);
+        self.send_level_info(i, ctx, true, None);
         // ServerLevel.addNewPlayer: the chunk tracking starts at the player.
         self.guests.update(i, |g| {
             let (cx, cz) = g.chunk();
@@ -2315,7 +2315,13 @@ impl Hub {
     /// PlayerList.sendLevelInfo; `load_start` false holds back
     /// LEVEL_CHUNKS_LOAD_START for a player who has no position yet
     /// ([`Self::land`] sends it).
-    fn send_level_info(&mut self, i: usize, ctx: &TickCtx, load_start: bool) {
+    fn send_level_info(
+        &mut self,
+        i: usize,
+        ctx: &TickCtx,
+        load_start: bool,
+        viewed_weather: Option<weather::State>,
+    ) {
         let spawn = ctx.spawn;
         let g = &self.guests[i];
         if self.sync_attachments {
@@ -2328,8 +2334,12 @@ impl Hub {
         g.send(&C::InitializeBorder(super::border::initialize(ctx.border)));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
         g.send(&self.default_spawn(spawn, ctx.spawn_angle, ctx.spawn_dimension));
-        if weather::state(ctx.world, &g.dimension).0 {
-            // PlayerList uses the getters here, including thunder scaled by rain.
+        let weather = weather::state(ctx.world, &g.dimension);
+        if let Some(previous) = viewed_weather {
+            // The promoted ClientLevel already has weather, possibly from before the last write.
+            weather::send_updates(Some(previous), weather, |packet| g.send(packet));
+        } else if weather.0 {
+            // PlayerList uses the getters for a fresh world, including thunder scaled by rain.
             let (rain, thunder) = ctx.world.weather.levels(1.0);
             weather::send_updates(None, (true, rain, thunder), |packet| g.send(packet));
         }
@@ -5059,7 +5069,7 @@ impl Hub {
             g.send(&C::PostEffects(play::PostEffects { effects: list }));
         });
         self.send_active_effects(i);
-        self.send_level_info(i, ctx, true);
+        self.send_level_info(i, ctx, true, None);
         self.send_permission_level(i);
         // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
         self.guests.update(i, |g| {
@@ -5162,7 +5172,7 @@ impl Hub {
             }));
         });
         // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
-        self.leave_level(i, &left);
+        let viewed_weather = self.leave_level(i, &left);
         self.guests[i].send(&C::ChangeDifficulty(play::ChangeDifficulty {
             difficulty: ctx.difficulty,
             locked: ctx.difficulty_locked,
@@ -5182,7 +5192,7 @@ impl Hub {
         }
         let g = &self.guests[i];
         g.send(&g.abilities_packet());
-        self.send_level_info(i, ctx, !portal);
+        self.send_level_info(i, ctx, !portal, viewed_weather);
         // PlayerList.sendAllPlayerInfo: the inventory and the held slot.
         self.send_inventory(i);
         let g = &self.guests[i];

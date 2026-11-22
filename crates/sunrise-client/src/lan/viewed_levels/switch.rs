@@ -2,8 +2,9 @@
 //! Respawn (keep 3) into a level the player's client views swaps the two on both sides, as
 //! Immersive Portals moves the client's world reference with no loading screen. The chunks of the
 //! level entered that its client was sent stay sent, now as its own; the level left becomes a
-//! viewed level that keeps every chunk sent, lingering until an area covers it again. Nothing is
-//! sent again but the entities of both levels, which the client keeps apart from its worlds.
+//! viewed level that keeps every chunk sent, lingering until an area covers it again. The client
+//! keeps both worlds, but their entities are re-sent and the promoted world's weather is synced
+//! from what the view last received.
 //!
 //! It is negotiated: only a client that answered revision 2 of `sunrise:levels`
 //! (`viewed_levels::REVISION_2`) swaps. Such a client swaps on that Respawn exactly when it holds
@@ -19,6 +20,7 @@
 use super::super::{
     chunk_watch::ChunkWatchKind,
     hub::{AttachmentSnapshot, Hub, tracked},
+    weather,
 };
 use super::view::View;
 use sunrise_mod_runtime::attachments::Holder;
@@ -43,11 +45,11 @@ impl Hub {
     /// `change_level`'s part once guest `i` was moved from level `left` into the level in place:
     /// its views swapped with its own chunks when its client swaps worlds (revision 2) and views
     /// the level in place, else its views dropped. Either way it leaves `left`'s queues and
-    /// entities.
-    pub(in crate::lan) fn leave_level(&mut self, i: usize, left: &str) {
+    /// entities. Returns the weather last sent to the promoted view, if any.
+    pub(in crate::lan) fn leave_level(&mut self, i: usize, left: &str) -> Option<weather::State> {
         let entered = self.config.dimension.clone();
         let watching = self.chunk_watches.recording();
-        let kept = self.guests.update(i, |g| {
+        let (kept, weather) = self.guests.update(i, |g| {
             let own = std::mem::take(&mut g.sent_chunks);
             g.chunk_queue.clear();
             // The client drops both levels' entities: the server sends them again.
@@ -64,7 +66,7 @@ impl Hub {
                 (swap, swap.and_then(|_| g.viewed.views.remove(&entered)))
             else {
                 g.viewed.forget_views();
-                return Vec::new();
+                return (Vec::new(), None);
             };
             // The level left keeps what its client holds; the next pass starts its linger. From
             // revision 4 its client learns its binding right after the Respawn.
@@ -87,7 +89,7 @@ impl Hub {
                     }
                 }
             }
-            kept
+            (kept, Some(view.weather))
         });
         // A viewed level's chunks went without their synced attachments.
         if self.sync_attachments {
@@ -98,5 +100,6 @@ impl Hub {
                     holder: Holder::Chunk([x, z]),
                 }));
         }
+        weather
     }
 }
