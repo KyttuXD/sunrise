@@ -72,7 +72,8 @@ pub enum DatapackFieldKind {
         max_len: Option<u32>,
     },
     /// A JSON object whose keys are `key` and whose values are `value` (`Codec.unboundedMap`),
-    /// with pairs in file order, preserved on the server and on clients.
+    /// with the file's pairs in file order (a default's in its declared order), preserved on the
+    /// server and on clients.
     Map {
         /// What each key is.
         key: DatapackKeyKind,
@@ -136,7 +137,8 @@ pub enum DatapackValue {
     Text(String),
     /// A [`DatapackFieldKind::List`], in file order.
     List(Vec<DatapackValue>),
-    /// A [`DatapackFieldKind::Map`]: `(key, value)` in file order, keys normalised as their kind says.
+    /// A [`DatapackFieldKind::Map`]: `(key, value)` in file order (a default's in its declared order),
+    /// keys normalised as their kind says.
     Map(Vec<(String, DatapackValue)>),
     /// A [`DatapackFieldKind::Record`]: `(field name, value)` in schema order.
     Record(Vec<(String, DatapackValue)>),
@@ -153,7 +155,8 @@ impl DatapackValue {
         }
     }
 
-    /// The `(key, value)` pairs of a map, in file order.
+    /// The `(key, value)` pairs of a map: the file's pairs in file order, or a default's in its
+    /// declared order when the file leaves the field out.
     pub fn as_map(&self) -> Option<&[(String, DatapackValue)]> {
         match self {
             Self::Map(pairs) => Some(pairs),

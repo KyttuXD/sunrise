@@ -996,7 +996,7 @@ entry's record schema. Its scalar kinds are `Bool`, `Int { min, max }`, `Float {
 
 - `List { of, min_len, max_len }` is a JSON array (`Codec.list`, `sizeLimitedListOf`);
 - `Map { key, value }` is a JSON object with `Text`, `Identifier` or `Reference` keys (`Codec.unboundedMap`).
-  `as_map` returns pairs in file order, on the server and on clients. Two keys naming the same id (`zombie` and
+  `as_map` returns a file's pairs in file order, and a default's in its declared order, on the server and on clients. Two keys naming the same id (`zombie` and
   `minecraft:zombie`) are a duplicate. A text map key with `max_len: 0` accepts only the empty key;
 - `Record { fields }` is a nested object with the same field rules as the entry's own (a nested
   `RecordCodecBuilder`).
@@ -1042,8 +1042,7 @@ of the wrong length fails the entry, at any depth, and a default never stands in
 the value's path (`drops[3].item`, `tiers.basic.data_per_kill`); a key with a character other than letters, digits,
 `_`, `:`, `/` and `-` is quoted as the file spells it (`tiers["basic.data_per_kill"]`). A reference resolves against
 the whole candidate set wherever it sits. A feature type's config (`register_feature_type`) uses the same scalar kinds
-but stays a flat record: a nested or `Reference` config field is refused at registration. The engine adds no entry-size or field-count limit
-of its own. Only both-side packages (and both-side served namespace suppliers) may declare registries. The game loads entries from mod content and enabled data packs.
+but stays a flat record: a nested or `Reference` config field is refused at registration. Only both-side packages (and both-side served namespace suppliers) may declare registries. The game loads entries from mod content and enabled data packs.
 
 Use the host's `level_datapack_entries(level, registry)` to list sorted entry IDs,
 `level_datapack_handle(level, registry, entry)` to obtain a `DatapackHandle`, and
