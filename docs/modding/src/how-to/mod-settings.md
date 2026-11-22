@@ -96,7 +96,8 @@ dedicated server), as Fabric and NeoForge mods' do.
    path, retrying, or latching.
 4. **Unloading (`ConfigEvent::Unloading`):** When a server stops, each tracked `Server` config is dropped
    and only its registration's listener receives `ConfigEvent::Unloading`, with a live `ServerHost` and
-   the last snapshot. `Client` and `Common` configs stay until the process exits.
+   the last snapshot. If dedicated world preparation fails after loading, its `Server` configs still
+   unload. `Client` and `Common` configs stay until the process exits.
 5. **Listener errors and panics:** Returning `Err(message)` from a listener logs the failure with owner,
    operation and `snapshot.path` on every invocation without disabling future deliveries. A panic disables
    only that registration's callback for the rest of the session and raises an error notice naming that mod

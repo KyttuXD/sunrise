@@ -14,6 +14,7 @@ struct PanicAt {
     stopping: bool,
     save: bool,
     config_unloading: bool,
+    prepare_error: bool,
     logout: bool,
 }
 
@@ -184,15 +185,24 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
     #[mod_api::__subscriptions]
     impl Hooks for Log {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            if self.1.config_unloading {
+            if self.1.config_unloading || self.1.prepare_error {
                 let log = self.0.clone();
+                let panic_on_unload = self.1.config_unloading;
                 r.register_config(
                     ConfigSpec::new(ConfigKind::Server, ""),
                     Some(Arc::new(
                         move |event: ConfigEvent<'_>, _: &ConfigSnapshot| {
-                            if let ConfigEvent::Unloading(_) = event {
-                                log.lock().unwrap().push("config-unloading");
-                                panic!("config unloading listener");
+                            match event {
+                                ConfigEvent::Loading(_) => {
+                                    log.lock().unwrap().push("config-loading")
+                                }
+                                ConfigEvent::Unloading(_) => {
+                                    log.lock().unwrap().push("config-unloading");
+                                    if panic_on_unload {
+                                        panic!("config unloading listener");
+                                    }
+                                }
+                                _ => {}
                             }
                             Ok(())
                         },
@@ -259,7 +269,12 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
             "config-unloading-save-panic",
             "config-unloading-logout-panic",
             "before-start",
+            "dedicated-prepare-error",
         ] {
+            let prepare_error = case == "dedicated-prepare-error";
+            if prepare_error && !dedicated {
+                continue;
+            }
             let log = Arc::new(Mutex::new(Vec::new()));
             let stopped_probe = Arc::new(Mutex::new(None));
             let config_panic = case.starts_with("config-unloading");
@@ -267,6 +282,7 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                 stopping: case == "stopping-panic",
                 save: matches!(case, "save-panic" | "config-unloading-save-panic"),
                 config_unloading: config_panic,
+                prepare_error,
                 logout: case == "config-unloading-logout-panic",
             };
             // Panic latches are per installed mod and hook, not per world. Each case needs
@@ -296,8 +312,8 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                             Some(Default::default()),
                         ));
                         game.level.name = "lifecycle final save".into();
-                        let adopted =
-                            !matches!(case, "unopened" | "before-start" | "locked-unadopted");
+                        let adopted = !prepare_error
+                            && !matches!(case, "unopened" | "before-start" | "locked-unadopted");
                         if adopted || case == "locked-unadopted" {
                             game.session_lock =
                                 Some(sunrise_client::save::SessionLock::acquire(&root).unwrap());
@@ -305,9 +321,15 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                         // The lock is held while tags are readable, before the prepared
                         // level replaces the placeholder. Only adoption may save.
                         game.world_adopted = adopted;
-                        if matches!(case, "unopened" | "locked-unadopted") {
+                        if prepare_error || matches!(case, "unopened" | "locked-unadopted") {
                             // A failed open must not overwrite an existing, unreadable save.
                             std::fs::write(root.join("level.dat"), b"unadopted save").unwrap();
+                        }
+                        if config_panic || prepare_error {
+                            let config = root.join("serverconfig");
+                            std::fs::create_dir_all(&config).unwrap();
+                            std::fs::write(config.join("log-server.toml"), "fixture = true\n")
+                                .unwrap();
                         }
                         if config_panic {
                             game.level.name = "previous save".into();
@@ -344,15 +366,24 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                 root: root.clone(),
                                 save: game.save.clone(),
                             });
-                            let config = root.join("serverconfig");
-                            std::fs::create_dir_all(&config).unwrap();
-                            std::fs::write(config.join("log-server.toml"), "fixture = true\n")
-                                .unwrap();
-                            game.native_configs_server_start(&root, dedicated);
                         }
                         let result = game.run_server_lifecycle(dedicated, |game, began| {
                             if case == "before-start" {
                                 return Err("before startup".into());
+                            }
+                            if config_panic || prepare_error {
+                                game.native_configs_server_start(&root, dedicated);
+                            }
+                            if prepare_error {
+                                let request = crate::game::world_loading::WorldRequest::new(
+                                    &root.to_string_lossy(),
+                                    None,
+                                    Some(0),
+                                    false,
+                                    None,
+                                    Arc::new(crate::game::api_values::game_rule_registry()),
+                                )?;
+                                game.prepare_world_and_rules(request)?;
                             }
                             *began = true;
                             game.native_server_about_to_start(dedicated);
@@ -400,12 +431,18 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                 .collect::<Vec<_>>(),
                             "{dedicated} {case}"
                         );
+                        if prepare_error {
+                            let error = result.as_ref().unwrap_err().to_string();
+                            assert!(error.contains("its level data does not read"), "{error}");
+                        }
                         let expected: &[&str] = match case {
                             "before-start" => &[],
+                            "dedicated-prepare-error" => &["config-loading", "config-unloading"],
                             "unopened" | "save-error" | "locked-unadopted" => {
                                 &["starting", "stopping", "stopped"]
                             }
                             "config-unloading-panic" | "config-unloading-save-panic" => &[
+                                "config-loading",
                                 "starting",
                                 "stopping",
                                 "config-unloading",
@@ -413,6 +450,7 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                 "stopped",
                             ],
                             "config-unloading-logout-panic" => &[
+                                "config-loading",
                                 "starting",
                                 "stopping",
                                 "config-unloading",
@@ -436,7 +474,7 @@ fn every_started_server_stops_and_saves_even_when_startup_or_ticks_fail() {
                                 registry.default_state("minecraft:stone").unwrap()
                             );
                         }
-                        if matches!(case, "unopened" | "locked-unadopted") {
+                        if prepare_error || matches!(case, "unopened" | "locked-unadopted") {
                             assert_eq!(
                                 std::fs::read(root.join("level.dat")).unwrap(),
                                 b"unadopted save",

@@ -27,6 +27,9 @@ impl Game<'_> {
             }
         };
         if !startup_began {
+            // Dedicated preparation can fail after the configs load but before
+            // a world starts. Pair their callbacks without stopping or saving it.
+            self.native_configs_server_stop();
             return result;
         }
         let run_error = result.as_ref().err().map(ToString::to_string);
