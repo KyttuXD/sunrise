@@ -54,16 +54,13 @@ fn mode_of(mode: GameTravelMode) -> TravelMode {
 /// values stand and the cost is the subscriber branch. `mode` names the
 /// branch only when a listener asks for it. A listener that cancels skips
 /// the invocation - its nested move does not run and the flying vertical
-/// damping is skipped; what the tick already did is not undone. A
-/// replacement of `input` (each component within [-1, 1]) or `velocity`
-/// (finite, each component within ±64 blocks) supplies the branch's
-/// starting values. The dispatch checks each listener's pair as it
-/// returns: one with a component that is not a finite number, or outside
-/// its budget, is refused whole, naming the mod and the field, and the
-/// pair the preceding listeners left stands (the values the game resolved
-/// before any), never clamped. If a listener unwinds, only its proposal is
-/// discarded and the callback is disabled for this hook for the session.
-/// Earlier results stand and later eligible listeners still get the travel.
+/// damping is skipped; what the tick already did is not undone. Listeners
+/// registered with `#[listener(receive_cancelled)]` may clear cancellation.
+/// Replacements pass through to `Entity.moveRelative` and
+/// `Entity.setDeltaMovement` without synthetic limits or output validation
+/// during dispatch. If a listener unwinds, only its own edits are discarded
+/// and that callback is disabled for this hook for the session. Earlier edits
+/// stand and later eligible listeners still run.
 ///
 /// Returns whether the travel runs; `input` and `velocity` are the values
 /// the branch starts from.
@@ -99,8 +96,6 @@ pub fn decide(
     if canceled {
         return false;
     }
-    // The dispatch checked each listener's pair as it returned (budgets in
-    // `refused_travel_output`): what stands here is the last accepted pair.
     *input = Vec3::new(replaced_input[0], replaced_input[1], replaced_input[2]);
     *velocity = Vec3::new(
         replaced_velocity[0],

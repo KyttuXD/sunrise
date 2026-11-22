@@ -460,6 +460,13 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_block_part_answers_the_friction_an_entity_reads() {
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::native_surface::tests::a_block_part_answers_the_friction_an_entity_reads",
+            "SUNRISE_FRICTION_TRAVEL_CHILD",
+            &["travel"],
+        ) {
+            return;
+        }
         // Glass asks for its material's friction for players. White wool answers 0.98;
         // red wool answers NaN, blue 3.0, green infinity, black -0.5 and orange 1.5.
         let calls = mod_platform::__private::part_tests::friction_game_thread();
@@ -497,7 +504,7 @@ mod tests {
                 travel_in_air(
                     &mut world,
                     &mut sunrise_world::move_gate::MoveGate::new(),
-                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0).into(),
                 )
                 .unwrap();
                 let reads = calls.load(Ordering::SeqCst);
