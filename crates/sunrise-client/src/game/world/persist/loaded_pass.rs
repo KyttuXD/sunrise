@@ -7,12 +7,24 @@ impl Game<'_> {
         let _save_lease = sunrise_client::join_seq::visibility::PassLease::enter();
         let loaded = std::mem::take(&mut self.world.loaded_entities);
         for (key, tags) in loaded {
+            let owns_disk_section = self.persist.hidden_entity_sections.contains(&key);
             let count = tags.len();
+            let mut skipped = 0;
             for pending in tags {
                 let (tag, reason) = pending.into_parts();
+                // The worker's snapshot of this record can predate a move or
+                // removal. A save that took ownership already admitted it.
+                if reason == sunrise_client::world::EntityLoadReason::DiskSection
+                    && owns_disk_section
+                {
+                    skipped += 1;
+                    continue;
+                }
                 self.spawn_loaded_entity_reason(key, tag, None, reason);
             }
-            self.native_entities_load(self.dim.id(), [key.0, key.1], count);
+            if skipped == 0 || skipped < count {
+                self.native_entities_load(self.dim.id(), [key.0, key.1], count - skipped);
+            }
         }
     }
 

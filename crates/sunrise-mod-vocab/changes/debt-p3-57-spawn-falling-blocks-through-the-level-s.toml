@@ -2,6 +2,12 @@ ids = [
     "method:prelude::EntitiesServerHost::spawn_falling_block",
     "handle:LevelRef::spawn_falling_block",
     "hook:entity_join_level",
+    "method:prelude::EntitiesHost::entity",
+    "method:prelude::EntitiesServerHost::entity_by_uuid",
+    "handle:LevelRef::visit_all_entities",
+    "handle:LevelRef::visit_entities_in",
+    "handle:LevelRef::ray_trace_entities",
+    "handle:LevelRef::ray_trace_nearest_entity",
 ]
 why = """
 Vanilla 26.3 `FallingBlockEntity.fall` replaces the source with its legacy fluid
@@ -36,6 +42,13 @@ match level.spawn_falling_block(host, state, pos, velocity, falling) {
 - Pass the intended open level even when parked. Neither summon bounds nor
   whether the destination chunk is loaded governs admission; spawning does not
   load a chunk. Remove any handling for a parked-level or unloaded-chunk refusal.
+- `host.entity(id)` and `host.entity_by_uuid(uuid)` only discover entities in
+  accessible sections (server players are still always accessible). Use the
+  `EntityRef` returned by `LevelRef::spawn_falling_block` while its column is hidden.
+- `LevelRef::visit_all_entities`, `LevelRef::visit_entities_in`,
+  `LevelRef::ray_trace_entities`, and `LevelRef::ray_trace_nearest_entity` omit
+  hidden server entities. Keep the spawn handle for an entity you must address
+  before its section is tracked; do not recover it with a query.
 - No per-level count cap or live velocity clamp applies. Air now spawns and is
   discarded when first ticked; skip the call yourself if you do not want it made.
 - After `entity_constructing`, the spawn asks `entity_join_level`. A veto returns
@@ -47,4 +60,6 @@ match level.spawn_falling_block(host, state, pos, velocity, falling) {
 - Keep the same `entity_join_level` callback. A fresh natural fall is now told
   before the next scheduled block tick, not after the scheduled pass. A veto
   keeps the falling entity out; it does not restore the replaced source block.
+  `loaded_from_disk` can also be true when a save first reads an entity section
+  before its terrain loads; do not use a disk join as a terrain-load notice.
 """

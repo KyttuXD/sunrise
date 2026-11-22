@@ -516,278 +516,327 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn fresh_fall_does_not_require_summon_bounds_or_a_loaded_chunk() {
-        use super::super::native_entity_refs::tests::{
-            collect_game_all_entities, collect_game_entities_in,
-        };
-        use mod_api::{EntityUuid, Falling};
-        use sunrise_client::join_seq::JoinSeq;
+        crate::game::in_own_process(
+            "game::native_falling::tests::fresh_fall_does_not_require_summon_bounds_or_a_loaded_chunk",
+            || {
+                use super::super::native_entity_refs::tests::{
+                    collect_game_all_entities, collect_game_entities_in,
+                };
+                use mod_api::{EntityUuid, Falling};
+                use sunrise_client::join_seq::JoinSeq;
 
-        super::super::native_guest_turn_tests::with_guests(|game| {
-            let level = game.level(game.dim.id()).unwrap();
-            let host: &dyn mod_api::Host = game;
-            let sand = host.block_state_id("minecraft:sand").unwrap();
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    game.enter_level(Dim::Nether).unwrap();
+                    let level = game.level(game.dim.id()).unwrap();
+                    let host: &dyn mod_api::Host = game;
+                    let sand = host.block_state_id("minecraft:sand").unwrap();
+                    assert!(game.world.chunks.is_empty());
 
-            let above_summon_bounds = [0.5, 20_000_000.0, 0.5];
-            let high = level
-                .spawn_falling_block(
-                    game,
-                    sand,
-                    above_summon_bounds,
-                    [0.0; 3],
-                    Falling::default(),
-                )
-                .unwrap()
-                .unwrap();
-            assert_eq!(game.entity_position(high), Some(above_summon_bounds));
-            assert_eq!(game.entity(high.id()), Some(high));
+                    let unloaded = [1000.5, 70.0, 0.5];
+                    let unloaded_chunk = (1000 >> 4, 0);
+                    assert!(!game.world.loaded(1000, 0));
+                    let hidden = level
+                        .spawn_falling_block(game, sand, unloaded, [0.0; 3], Falling::default())
+                        .unwrap()
+                        .unwrap();
+                    // The returned handle stays valid while the section is hidden, and
+                    // does not force-load the column.
+                    assert_eq!(game.entity_position(hidden), Some(unloaded));
+                    let hidden_uuid = EntityUuid(game.entity_uuid(hidden).unwrap());
+                    assert!(!game.world.loaded(1000, 0));
 
-            let unloaded = [1000.5, 70.0, 0.5];
-            let unloaded_chunk = (1000 >> 4, 0);
-            assert!(!game.world.loaded(1000, 0));
-            let hidden = level
-                .spawn_falling_block(game, sand, unloaded, [0.0; 3], Falling::default())
-                .unwrap()
-                .unwrap();
-            // The returned handle stays valid while the section is hidden, and
-            // does not force-load the column.
-            assert_eq!(game.entity_position(hidden), Some(unloaded));
-            let hidden_uuid = EntityUuid(game.entity_uuid(hidden).unwrap());
-            assert!(!game.world.loaded(1000, 0));
+                    // Hidden sections are excluded from level lookup, spatial queries,
+                    // ray traces, tracking, and ticking.
+                    assert_eq!(game.entity(hidden.id()), None);
+                    assert_eq!(game.entity_by_uuid(hidden_uuid), None);
+                    assert!(
+                        !collect_game_all_entities(game, level)
+                            .unwrap()
+                            .contains(&hidden)
+                    );
+                    assert!(
+                        collect_game_entities_in(
+                            game,
+                            level,
+                            [999.0, 69.0, -1.0],
+                            [1002.0, 72.0, 2.0]
+                        )
+                        .unwrap()
+                        .is_empty()
+                    );
+                    assert!(
+                        game.level_ray_trace_entities(
+                            level,
+                            [998.0, 70.5, 0.5],
+                            [1003.0, 70.5, 0.5],
+                            0.0,
+                            None,
+                        )
+                        .unwrap()
+                        .is_empty()
+                    );
+                    let mut tracked = sunrise_client::lan::entity::States::default();
+                    game.lan_object_states(&mut tracked, false, 0);
+                    assert!(
+                        !tracked
+                            .as_slice()
+                            .iter()
+                            .any(|e| e.id == hidden.id() as i32)
+                    );
+                    game.begin_ordered_ticks();
+                    game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
+                    let row = game.falling.iter().find(|f| f.id == hidden.id()).unwrap();
+                    assert_eq!(
+                        row.age, 0,
+                        "an admitted entity in a non-ticking section does not tick"
+                    );
 
-            // Hidden sections are excluded from level lookup, spatial queries,
-            // ray traces, tracking, and ticking.
-            assert_eq!(game.entity(hidden.id()), None);
-            assert_eq!(game.entity_by_uuid(hidden_uuid), None);
-            assert!(
-                !collect_game_all_entities(game, level)
-                    .unwrap()
-                    .contains(&hidden)
-            );
-            assert!(
-                collect_game_entities_in(game, level, [999.0, 69.0, -1.0], [1002.0, 72.0, 2.0])
-                    .unwrap()
-                    .is_empty()
-            );
-            assert!(
-                game.level_ray_trace_entities(
-                    level,
-                    [998.0, 70.5, 0.5],
-                    [1003.0, 70.5, 0.5],
-                    0.0,
-                    None,
-                )
-                .unwrap()
-                .is_empty()
-            );
-            let mut tracked = sunrise_client::lan::entity::States::default();
-            game.lan_object_states(&mut tracked, false, 0);
-            assert!(
-                !tracked
-                    .as_slice()
-                    .iter()
-                    .any(|e| e.id == hidden.id() as i32)
-            );
-            assert!(tracked.as_slice().iter().any(|e| e.id == high.id() as i32));
-            game.begin_ordered_ticks();
-            game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
-            let row = game.falling.iter().find(|f| f.id == hidden.id()).unwrap();
-            assert_eq!(
-                row.age, 0,
-                "an admitted entity in a non-ticking section does not tick"
-            );
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
 
-            // Once the column becomes accessible, the same admitted entity is
-            // discoverable through every lookup, query, and tracking pass.
-            game.world.chunks.insert(
-                unloaded_chunk,
-                Arc::new(sunrise_client::chunk::Chunk::empty(
-                    unloaded_chunk.0,
-                    unloaded_chunk.1,
-                )),
-            );
-            assert_eq!(game.entity(hidden.id()), Some(hidden));
-            assert_eq!(game.entity_by_uuid(hidden_uuid), Some(hidden));
-            assert!(
-                collect_game_all_entities(game, level)
-                    .unwrap()
-                    .contains(&hidden)
-            );
-            assert_eq!(
-                collect_game_entities_in(game, level, [999.0, 69.0, -1.0], [1002.0, 72.0, 2.0])
-                    .unwrap(),
-                vec![hidden]
-            );
-            assert_eq!(
-                game.level_ray_trace_entities(
-                    level,
-                    [998.0, 70.5, 0.5],
-                    [1003.0, 70.5, 0.5],
-                    0.0,
-                    None,
-                )
-                .unwrap()
-                .len(),
-                1
-            );
-            tracked.clear();
-            game.lan_object_states(&mut tracked, false, 0);
-            assert!(
-                tracked
-                    .as_slice()
-                    .iter()
-                    .any(|e| e.id == hidden.id() as i32)
-            );
-        });
+                    let above_summon_bounds = [0.5, 20_000_000.0, 0.5];
+                    let high = level
+                        .spawn_falling_block(
+                            game,
+                            sand,
+                            above_summon_bounds,
+                            [0.0; 3],
+                            Falling::default(),
+                        )
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(game.entity_position(high), Some(above_summon_bounds));
+                    assert_eq!(game.entity(high.id()), Some(high));
+
+                    // Once the column becomes accessible, the same admitted entity is
+                    // discoverable through every lookup, query, and tracking pass.
+                    game.world.chunks.insert(
+                        unloaded_chunk,
+                        Arc::new(sunrise_client::chunk::Chunk::empty(
+                            unloaded_chunk.0,
+                            unloaded_chunk.1,
+                        )),
+                    );
+                    assert_eq!(game.entity(hidden.id()), Some(hidden));
+                    assert_eq!(game.entity_by_uuid(hidden_uuid), Some(hidden));
+                    assert!(
+                        collect_game_all_entities(game, level)
+                            .unwrap()
+                            .contains(&hidden)
+                    );
+                    assert_eq!(
+                        collect_game_entities_in(
+                            game,
+                            level,
+                            [999.0, 69.0, -1.0],
+                            [1002.0, 72.0, 2.0]
+                        )
+                        .unwrap(),
+                        vec![hidden]
+                    );
+                    assert_eq!(
+                        game.level_ray_trace_entities(
+                            level,
+                            [998.0, 70.5, 0.5],
+                            [1003.0, 70.5, 0.5],
+                            0.0,
+                            None,
+                        )
+                        .unwrap()
+                        .len(),
+                        1
+                    );
+                    tracked.clear();
+                    game.lan_object_states(&mut tracked, false, 0);
+                    assert!(
+                        tracked
+                            .as_slice()
+                            .iter()
+                            .any(|e| e.id == hidden.id() as i32)
+                    );
+                    assert!(tracked.as_slice().iter().any(|e| e.id == high.id() as i32));
+                });
+            },
+        );
     }
 
     #[test]
     #[ignore = "daily"]
     fn fresh_fall_in_unloaded_column_persists_without_clobbering_disk_entities() {
-        use mod_api::Falling;
-        use sunrise_client::save::SaveDir;
-        use sunrise_core::nbt::Tag;
+        crate::game::in_own_process(
+            "game::native_falling::tests::fresh_fall_in_unloaded_column_persists_without_clobbering_disk_entities",
+            || {
+                use mod_api::Falling;
+                use sunrise_client::{save::SaveDir, world::PendingEntity};
+                use sunrise_core::nbt::Tag;
 
-        let dir = tempfile::tempdir().unwrap();
-        let unloaded_chunk = (1000 >> 4, 0);
-        let unloaded_pos = [1000.5, 70.0, 0.5];
-        let velocity = [0.125, -0.25, 0.0625];
-        let existing_uuid = [11, 22, 33, 44];
-        let existing_tag = Tag::Compound(
-            [
-                ("id".into(), Tag::String("minecraft:pig".into())),
-                ("UUID".into(), Tag::IntArray(existing_uuid.to_vec())),
-                (
-                    "Pos".into(),
-                    Tag::List(
-                        [1002.5_f64, 64.0, 2.5]
-                            .map(|n| Tag::Double(n.to_bits()))
-                            .to_vec(),
-                    ),
-                ),
-            ]
-            .into(),
+                let dir = tempfile::tempdir().unwrap();
+                let unloaded_chunk = (1000 >> 4, 0);
+                let unloaded_pos = [1000.5, 70.0, 0.5];
+                let moved_pos = [1050.5, 70.0, 0.5];
+                let discarded_pos = [1100.5, 70.0, 0.5];
+                let moved_chunk = (1050 >> 4, 0);
+                let discarded_chunk = (1100 >> 4, 0);
+                let velocity = [0.125, -0.25, 0.0625];
+                let existing_uuid = [11, 22, 33, 44];
+                let existing_tag = Tag::Compound(
+                    [
+                        ("id".into(), Tag::String("minecraft:pig".into())),
+                        ("UUID".into(), Tag::IntArray(existing_uuid.to_vec())),
+                        (
+                            "Pos".into(),
+                            Tag::List(
+                                [1002.5_f64, 64.0, 2.5]
+                                    .map(|n| Tag::Double(n.to_bits()))
+                                    .to_vec(),
+                            ),
+                        ),
+                    ]
+                    .into(),
+                );
+
+                let mut saved_fall_uuid = None;
+                let mut saved_shape = None;
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    let shape = game.save.shape;
+                    saved_shape = Some(shape);
+                    game.save = Arc::new(SaveDir::new(
+                        dir.path().to_path_buf(),
+                        shape,
+                        Some(Default::default()),
+                    ));
+                    game.save
+                        .save_entities(vec![(unloaded_chunk, vec![existing_tag.clone()])])
+                        .unwrap();
+                    assert!(game.world.chunks.is_empty());
+                    let level = game.level(game.dim.id()).unwrap();
+                    let host: &dyn mod_api::Host = game;
+                    let sand = host.block_state_id("minecraft:sand").unwrap();
+
+                    let hidden = level
+                        .spawn_falling_block(
+                            game,
+                            sand,
+                            unloaded_pos,
+                            velocity,
+                            Falling {
+                                drop_item: false,
+                                hurts: true,
+                            },
+                        )
+                        .unwrap()
+                        .unwrap();
+                    assert!(!game.world.loaded(1000, 0));
+
+                    let discarded = level
+                        .spawn_falling_block(
+                            game,
+                            sand,
+                            discarded_pos,
+                            [0.0; 3],
+                            Falling::default(),
+                        )
+                        .unwrap()
+                        .unwrap();
+                    game.save_entities(true).unwrap();
+                    assert_eq!(
+                        game.mobs.len(),
+                        1,
+                        "saving admitted the prior section records"
+                    );
+                    saved_fall_uuid = Some(sunrise_client::lan::playerdata::uuid_ints(
+                        game.entity_uuid(hidden).unwrap(),
+                    ));
+
+                    // Hold the worker's first snapshots while both sections are still hidden.
+                    let old = [unloaded_chunk, discarded_chunk].map(|key| {
+                        let records = game.save.load_entities(key.0, key.1).unwrap();
+                        (key, records)
+                    });
+                    assert_eq!(old[0].1.len(), 2);
+                    assert_eq!(old[1].1.len(), 1);
+                    assert!(game.entity_teleport_to(hidden, moved_pos, None));
+                    // Teleport follows /tp and can replace velocity; set the expected live
+                    // motion through the same handle before saving the moved entity.
+                    assert!(hidden.set_velocity(game, velocity));
+                    assert!(discarded.discard(game));
+                    game.save_entities(false).unwrap();
+                    game.save.flush().unwrap();
+
+                    // Worker snapshots read before the second save must not re-admit
+                    // the discarded block, move its neighbour back, or duplicate the pig.
+                    for (key, records) in old {
+                        game.world.chunks.insert(
+                            key,
+                            Arc::new(sunrise_client::chunk::Chunk::empty(key.0, key.1)),
+                        );
+                        game.world.loaded_entities.push((
+                            key,
+                            records
+                                .into_iter()
+                                .map(PendingEntity::from_disk_section)
+                                .collect(),
+                        ));
+                    }
+                    game.spawn_loaded_entities();
+                    game.native_removals_flush();
+                    assert_eq!(game.falling.len(), 1);
+                    assert_eq!(game.entity_position(hidden), Some(moved_pos));
+                    assert_eq!(game.mobs.len(), 1);
+                });
+
+                // Reopen and admit the old columns first: neither may resurrect a fall.
+                let reopened = SaveDir::new(dir.path().to_path_buf(), saved_shape.unwrap(), None);
+                let records = [unloaded_chunk, discarded_chunk, moved_chunk]
+                    .map(|key| (key, reopened.load_entities(key.0, key.1).unwrap()));
+                assert_eq!(records.each_ref().map(|(_, tags)| tags.len()), [1, 0, 1]);
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    for (key, tags) in records {
+                        game.world.chunks.insert(
+                            key,
+                            Arc::new(sunrise_client::chunk::Chunk::empty(key.0, key.1)),
+                        );
+                        game.world.queue_entity_nbt(key, tags);
+                    }
+                    game.spawn_loaded_entities();
+                    assert_eq!(game.mobs.len(), 1);
+                    let mob_id = game.mobs[0].id;
+                    assert_eq!(game.uuid_for(mob_id), existing_uuid);
+                    assert_eq!(game.falling.len(), 1);
+                    let sand = game
+                        .pack
+                        .assets
+                        .registry
+                        .default_state("minecraft:sand")
+                        .unwrap();
+                    let restored_id = {
+                        let restored = &game.falling[0];
+                        assert_eq!(restored.state, sand);
+                        assert_eq!(
+                            [
+                                restored.position.x,
+                                restored.position.y,
+                                restored.position.z
+                            ],
+                            moved_pos
+                        );
+                        assert_eq!(
+                            [
+                                restored.velocity.x,
+                                restored.velocity.y,
+                                restored.velocity.z
+                            ],
+                            velocity
+                        );
+                        assert!(!restored.drop_item);
+                        assert!(restored.damage.hurt_entities);
+                        restored.id
+                    };
+                    assert_eq!(game.uuid_for(restored_id), saved_fall_uuid.unwrap());
+                });
+            },
         );
-
-        let mut saved_fall_uuid = None;
-        let mut saved_shape = None;
-        super::super::native_entity_refs::tests::with_game(|game| {
-            let shape = game.save.shape;
-            saved_shape = Some(shape);
-            game.save = Arc::new(SaveDir::new(
-                dir.path().to_path_buf(),
-                shape,
-                Some(Default::default()),
-            ));
-            game.save
-                .save_entities(vec![(unloaded_chunk, vec![existing_tag.clone()])])
-                .unwrap();
-            game.world
-                .chunks
-                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
-            let level = game.level(game.dim.id()).unwrap();
-            let host: &dyn mod_api::Host = game;
-            let sand = host.block_state_id("minecraft:sand").unwrap();
-
-            let hidden = level
-                .spawn_falling_block(
-                    game,
-                    sand,
-                    unloaded_pos,
-                    velocity,
-                    Falling {
-                        drop_item: false,
-                        hurts: true,
-                    },
-                )
-                .unwrap()
-                .unwrap();
-            assert!(!game.world.loaded(1000, 0));
-
-            // Save twice without ever loading the block chunk: the fresh entity
-            // persists with a stable UUID, without duplicating or clobbering
-            // pre-existing entities on disk.
-            game.save_entities(true).unwrap();
-            game.save_entities(true).unwrap();
-            saved_fall_uuid = Some(sunrise_client::lan::playerdata::uuid_ints(
-                game.entity_uuid(hidden).unwrap(),
-            ));
-
-            // Loading the column into the same running game must not duplicate
-            // the live falling block.
-            let records = game
-                .save
-                .load_entities(unloaded_chunk.0, unloaded_chunk.1)
-                .unwrap();
-            assert_eq!(records.len(), 2);
-            game.world.chunks.insert(
-                unloaded_chunk,
-                Arc::new(sunrise_client::chunk::Chunk::empty(
-                    unloaded_chunk.0,
-                    unloaded_chunk.1,
-                )),
-            );
-            game.world.queue_entity_nbt(unloaded_chunk, records);
-            game.spawn_loaded_entities();
-            assert_eq!(game.falling.len(), 1);
-            assert_eq!(game.mobs.len(), 1);
-        });
-
-        // Reopen into a fresh game and load the column from disk: both the
-        // pre-existing entity and the freshly admitted falling block survive.
-        let shape = saved_shape.unwrap();
-        let reopened = SaveDir::new(dir.path().to_path_buf(), shape, None);
-        let records = reopened
-            .load_entities(unloaded_chunk.0, unloaded_chunk.1)
-            .unwrap();
-        assert_eq!(records.len(), 2);
-        super::super::native_entity_refs::tests::with_game(|game| {
-            game.world.chunks.insert(
-                unloaded_chunk,
-                Arc::new(sunrise_client::chunk::Chunk::empty(
-                    unloaded_chunk.0,
-                    unloaded_chunk.1,
-                )),
-            );
-            game.world.queue_entity_nbt(unloaded_chunk, records);
-            game.spawn_loaded_entities();
-            assert_eq!(game.mobs.len(), 1);
-            let mob_id = game.mobs[0].id;
-            assert_eq!(game.uuid_for(mob_id), existing_uuid);
-            assert_eq!(game.falling.len(), 1);
-            let sand = game
-                .pack
-                .assets
-                .registry
-                .default_state("minecraft:sand")
-                .unwrap();
-            let restored_id = {
-                let restored = &game.falling[0];
-                assert_eq!(restored.state, sand);
-                assert_eq!(
-                    [
-                        restored.position.x,
-                        restored.position.y,
-                        restored.position.z
-                    ],
-                    unloaded_pos
-                );
-                assert_eq!(
-                    [
-                        restored.velocity.x,
-                        restored.velocity.y,
-                        restored.velocity.z
-                    ],
-                    velocity
-                );
-                assert!(!restored.drop_item);
-                assert!(restored.damage.hurt_entities);
-                restored.id
-            };
-            assert_eq!(game.uuid_for(restored_id), saved_fall_uuid.unwrap());
-        });
     }
 
     #[test]

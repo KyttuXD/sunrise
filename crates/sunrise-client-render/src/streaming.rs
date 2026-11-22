@@ -1617,10 +1617,21 @@ impl Streaming {
         world
             .block_names
             .extend(std::mem::take(&mut chunk.block_names));
+        use crate::world::PendingEntity;
         let entities = std::mem::take(&mut chunk.entities);
-        world.entities_pending.insert((chunk.x, chunk.z));
-        if !entities.is_empty() {
-            world.queue_entity_nbt((chunk.x, chunk.z), entities);
+        let disk_entities = std::mem::take(&mut chunk.disk_entities);
+        world.entities_pending.insert(key);
+        if !entities.is_empty() || !disk_entities.is_empty() {
+            let pending = entities
+                .into_iter()
+                .map(PendingEntity::from)
+                .chain(
+                    disk_entities
+                        .into_iter()
+                        .map(PendingEntity::from_disk_section),
+                )
+                .collect();
+            world.loaded_entities.push((key, pending));
         }
         self.generated_total += 1;
         // A chunk saved with its light needs no light job; its unlit

@@ -6,8 +6,8 @@ use crate::*;
 pub trait EntitiesHost {
     /// Side: both.
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
-    /// methods: None with no world open, or for no such entity in the level
-    /// in place or among the server's players. On a client (API
+    /// methods: None with no world open, or for no such entity in the accessible
+    /// sections of the level in place or among the server's players. On a client (API
     /// @API:client_entity_refs@), any entity the server shows this window,
     /// this window's own player included. API 373.
     fn entity(&self, id: u32) -> Option<EntityRef>;
@@ -40,9 +40,9 @@ pub trait EntitiesHost {
 #[sunrise_mod_api_macros::host_area]
 pub trait EntitiesServerHost {
     /// Side: server.
-    /// Finds a loaded entity by UUID in the server level in place for this
-    /// hook. Returns `None` for unloaded entities, entities in another level,
-    /// and dragon parts. It also returns `None` for entities held out of
+    /// Finds an entity by UUID in the accessible sections of the server level
+    /// in place for this hook. Returns `None` for entities in hidden sections,
+    /// entities in another level, and dragon parts. It also returns `None` for entities held out of
     /// lookup, taken from their resident storage, unavailable under a scoped
     /// item loan, queued for removal, or vehicles undergoing destruction.
     /// The lookup leaves entity and level state alone.

@@ -222,6 +222,9 @@ pub struct EntityMemory {
     /// Entities of types Sunrise does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,
+    /// Entity sections loaded before their terrain for a save. They stay owned
+    /// until unload, even when empty, so the next save can clear a departed row.
+    hidden_entity_sections: HashSet<ChunkKey>,
     /// The compound of orbs, arrows, falling blocks, tridents, crystals and the
     /// dragon as they were loaded, found again by type and position (one that
     /// has moved since loading is saved afresh); their UUIDs are in `uuids`.
@@ -2186,8 +2189,16 @@ impl Game<'_> {
         let mut out: HashMap<(i32, i32), Vec<Tag>> =
             keys.iter().map(|k| (*k, Vec::new())).collect();
         {
+            // A native discard takes effect before the physical removal sweep.
+            let removed: HashSet<_> = self
+                .persist
+                .removals
+                .iter()
+                .filter_map(|&target| super::native_entities::target_id(target))
+                .collect();
             let entry = self.resident_entities.table.get_mut().section_entry_order();
             for (key, mut tags) in roots {
+                tags.retain(|(id, _, _)| !removed.contains(id));
                 tags.sort_by_cached_key(|(id, join, tag)| {
                     (section_order(tag), entry(*id).unwrap_or(*join))
                 });
@@ -2269,46 +2280,65 @@ impl Game<'_> {
         keys.extend(self.persist.unknown.keys().copied());
         keys
     }
-    /// Write the entities of every resident chunk and every occupied hidden
-    /// entity section (`PersistentEntitySectionManager.getAllChunksToSave`).
-    /// Without `wait` (the autosave) they are written on the region writer
-    /// meanwhile: `PersistentEntitySectionManager.autoSave` stores them
-    /// without `saveAll`'s flush.
-    pub(super) fn save_entities(&mut self, wait: bool) -> Result<()> {
+    /// `PersistentEntitySectionManager.getAllChunksToSave` / `storeChunkSections`:
+    /// a fresh section with entities must read and admit the old records first.
+    /// Its later saves replace only from the live section, even once empty.
+    pub(super) fn prepare_entity_save(&mut self) -> HashSet<ChunkKey> {
         self.spawn_loaded_entities();
-        let resident: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
-        let mut keys = resident.clone();
-        keys.extend(self.occupied_entity_chunks());
-        let mut chunks = self.entity_chunks(&keys, false);
-        // Unloaded columns may already hold saved entities on disk that were
-        // never loaded into memory: merge them with the freshly snapshotted
-        // hidden-section entities, deduplicating by UUID so repeat saves stay
-        // idempotent and never clobber existing column records.
-        chunks.retain_mut(|(key, fresh)| {
-            if resident.contains(key) {
-                return true;
+        let mut keys: HashSet<_> = self.world.chunks.keys().copied().collect();
+        keys.extend(self.persist.hidden_entity_sections.iter().copied());
+        let mut failed = HashSet::new();
+        loop {
+            let mut queued = false;
+            for key in self.occupied_entity_chunks() {
+                if keys.contains(&key) || failed.contains(&key) {
+                    continue;
+                }
+                let Ok(tags) = self.save.load_entities(key.0, key.1) else {
+                    failed.insert(key);
+                    continue;
+                };
+                self.persist.hidden_entity_sections.insert(key);
+                keys.insert(key);
+                if !tags.is_empty() {
+                    // Ownership is already set. Queue admission, not a worker
+                    // snapshot which would be ignored for an owned section.
+                    self.world.queue_entity_nbt(key, tags);
+                    queued = true;
+                }
             }
-            if fresh.is_empty() {
-                return false;
+            if !queued {
+                return keys;
             }
-            let Ok(existing) = self.save.load_entities(key.0, key.1) else {
-                return false;
-            };
-            if existing.is_empty() {
-                return true;
+            // Loading entities can itself add or move them to another column.
+            self.spawn_loaded_entities();
+        }
+    }
+
+    /// Save a generated full chunk that finished outside the kept terrain. If the
+    /// level already owns its entity section, file the new generation records
+    /// there rather than letting the terrain writer replace that section.
+    pub(super) fn save_late_full_chunk(&mut self, mut chunk: Chunk) {
+        self.native_late_full_chunk_snapshot(&chunk);
+        let key = (chunk.x, chunk.z);
+        let additions = if self.persist.hidden_entity_sections.contains(&key) {
+            std::mem::take(&mut chunk.entities)
+        } else {
+            Vec::new()
+        };
+        self.streaming.save_finished(chunk);
+        if !additions.is_empty() {
+            self.world.queue_entity_nbt(key, additions);
+            if let Err(e) = self.save_entities(false) {
+                log::warn!("Sunrise: failed to save entities: {e}");
             }
-            let fresh_uuids: HashSet<[i32; 4]> =
-                fresh.iter().filter_map(entity_nbt::uuid).collect();
-            let mut merged: Vec<Tag> = existing
-                .into_iter()
-                .filter(|tag| {
-                    !entity_nbt::uuid(tag).is_some_and(|uuid| fresh_uuids.contains(&uuid))
-                })
-                .collect();
-            merged.append(fresh);
-            *fresh = merged;
-            true
-        });
+        }
+    }
+
+    /// Write the authoritative sections, asynchronously without `wait`.
+    pub(super) fn save_entities(&mut self, wait: bool) -> Result<()> {
+        let keys = self.prepare_entity_save();
+        let chunks = self.entity_chunks(&keys, false);
         self.prune_entity_memory();
         if wait {
             self.save.save_entities(chunks)
@@ -2458,6 +2488,9 @@ impl Game<'_> {
         if let Err(e) = self.save.save_entities_later(chunks) {
             log::warn!("Sunrise: failed to save entities: {e}");
         }
+        self.persist
+            .hidden_entity_sections
+            .retain(|key| !keys.contains(key));
         for (chunk, count) in counts {
             self.native_entities_unload(self.dim.id(), [chunk.0, chunk.1], count);
         }

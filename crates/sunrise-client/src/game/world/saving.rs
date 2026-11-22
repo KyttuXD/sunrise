@@ -191,8 +191,7 @@ impl Game<'_> {
                         match self.streaming.prepare_poll_save(&mut self.world, deadline) {
                             sunrise_client::streaming::SaveStep::Pending => break,
                             sunrise_client::streaming::SaveStep::Full(chunk) => {
-                                self.native_late_full_chunk_snapshot(&chunk);
-                                self.streaming.save_finished(chunk);
+                                self.save_late_full_chunk(chunk);
                             }
                             sunrise_client::streaming::SaveStep::Protos(protos) => {
                                 self.native_proto_snapshots(&protos);
@@ -226,8 +225,8 @@ impl Game<'_> {
                         }
                     }
                     if keys.is_empty() {
-                        self.spawn_loaded_entities();
-                        save.stage = Stage::Entities(self.world.chunks.keys().copied().collect());
+                        save.stage =
+                            Stage::Entities(self.prepare_entity_save().into_iter().collect());
                     }
                     Ok(false)
                 }
@@ -445,8 +444,7 @@ impl Game<'_> {
         loop {
             match self.streaming.prepare_save(&mut self.world, wait, deadline) {
                 sunrise_client::streaming::SaveStep::Full(chunk) => {
-                    self.native_late_full_chunk_snapshot(&chunk);
-                    self.streaming.save_finished(chunk);
+                    self.save_late_full_chunk(chunk);
                 }
                 sunrise_client::streaming::SaveStep::Protos(protos) => {
                     self.native_proto_snapshots(&protos);
