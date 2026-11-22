@@ -621,6 +621,9 @@ impl Game<'_> {
                 kept.retain(|id, _| ids.contains(id));
             }
         });
+        // PersistentEntitySectionManager: entities in hidden sections are not
+        // tracked to clients (`Visibility.isAccessible`).
+        out.retain(|e| self.entity_position_accessible(e.position));
     }
     /// [`Self::lan_display_data`] for the display `id`, built again only when
     /// its compound changed: a server's holograms and menus are text displays
@@ -856,6 +859,22 @@ impl Game<'_> {
             return;
         };
         let hub = &mut host.hub;
+        let chunks = &self.world.chunks;
+        let tickets = &self.tickets;
+        let accessible = |p: sunrise_core::geometry::Vec3| {
+            if !p.x.is_finite() || !p.z.is_finite() {
+                return false;
+            }
+            let (cx, cz) = (
+                sunrise_core::mth::floor(p.x) >> 4,
+                sunrise_core::mth::floor(p.z) >> 4,
+            );
+            if chunks.is_empty() {
+                tickets.loaded(cx, cz)
+            } else {
+                chunks.contains_key(&(cx, cz))
+            }
+        };
         let owner = |who: Option<sunrise_client::mobs::Who>| match who {
             Some(sunrise_client::mobs::Who::Mob(id)) => id as i32,
             Some(sunrise_client::mobs::Who::Player) | None => 0,
@@ -996,6 +1015,7 @@ impl Game<'_> {
             // to the next tick's send_changes so impact updates (e.g. point-blank wall
             // collision) arrive after the client's first tick has completed.
             if !hub.tracks(p.id as i32)
+                && accessible(p.position)
                 && let Some(a) = p.arrow.as_deref()
                 && let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
                     (a.spawn_pos, a.spawn_velocity, a.spawn_rot)

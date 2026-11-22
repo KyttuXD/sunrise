@@ -403,14 +403,19 @@ mod tests {
             return;
         }
         with_fixture(false, |game, log, _| {
+            let level = game.level("minecraft:overworld").unwrap();
             let state = game.pack.assets.registry.default_state("test:a").unwrap();
-            assert!(game.spawn_falling_block(
-                "minecraft:overworld",
-                state,
-                [1.5, 66.0, 1.5],
-                [0.0; 3],
-                Falling::default()
-            ));
+            assert!(
+                game.level_spawn_falling_block(
+                    level,
+                    state,
+                    [1.5, 66.0, 1.5],
+                    [0.0; 3],
+                    Falling::default(),
+                )
+                .unwrap()
+                .is_some()
+            );
             let join = game.falling[0].join;
             let mut block = game.falling.extract(join).unwrap();
             let id = block.id;

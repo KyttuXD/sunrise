@@ -6184,29 +6184,9 @@ impl Game<'_> {
                         f64::from(pos.y),
                         f64::from(pos.z) + 0.5,
                     );
-                    self.next_entity += 1;
-                    self.falling.push(FallingBlock {
-                        attachment_lifetime: Default::default(),
-                        rotation: [0.0, 0.0],
-                        join: Default::default(),
-                        id: self.next_entity,
-                        state,
-                        start_pos: pos,
-                        position: p,
-                        previous: p,
-                        velocity: Vec3::ZERO,
-                        age: 0,
-                        no_gravity: false,
-                        portal: Default::default(),
-                        drop_item: true,
-                        fall_distance: 0.0,
-                        ground: Default::default(),
-                        fire_ticks: 0,
-                        sync_velocity: false,
-                        stuck: Vec3::ZERO,
-                        damage,
-                        saved: None,
-                    });
+                    // Admit before returning to the next scheduled block tick.
+                    // A join veto does not undo the source replacement.
+                    let _ = self.spawn_falling_block_entity(state, p, Vec3::ZERO, true, damage);
                 }
                 LevelEvent::Player { pos, effect, .. } => match effect {
                     PlayerEffect::OpenMenu => self.open_block_effect_menu([pos.x, pos.y, pos.z]),

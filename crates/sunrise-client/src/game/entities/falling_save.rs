@@ -52,14 +52,19 @@ mod tests {
                                 .registry
                                 .default_state("minecraft:sand")
                                 .unwrap();
+                            let level = game.level(game.dim.id()).unwrap();
                             for x in 0..6 {
-                                assert!(game.spawn_falling_block(
-                                    game.dim.id(),
-                                    sand,
-                                    [f64::from(x), 70.0, 0.5],
-                                    [0.0; 3],
-                                    mod_api::Falling::default()
-                                ));
+                                assert!(
+                                    game.level_spawn_falling_block(
+                                        level,
+                                        sand,
+                                        [f64::from(x), 70.0, 0.5],
+                                        [0.0; 3],
+                                        mod_api::Falling::default(),
+                                    )
+                                    .unwrap()
+                                    .is_some()
+                                );
                             }
                             game.reset_entity_residency();
                             // An observer activates the same dispatch without writing entity state.

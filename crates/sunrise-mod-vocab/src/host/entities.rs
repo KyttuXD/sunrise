@@ -84,24 +84,6 @@ pub trait EntitiesServerHost {
     /// client of a server and for a bound that is not finite (NaN or infinite); a
     /// minimum above its maximum is the same box with the two swapped (`AABB`).
     fn experience_orbs(&self, dimension: &str, min: [f64; 3], max: [f64; 3]) -> Vec<ExperienceOrb>;
-    /// Side: server.
-    /// Throws a falling block of `state` from `pos` (its bottom centre) at
-    /// `velocity` (blocks a tick) in the level in place, `dimension`: it
-    /// falls, lands and places itself as sand does, or drops as an item
-    /// where it can't. The block at `pos` is left as it is: take it away first
-    /// with `native_set_block` to make a block fall out of the world. False,
-    /// with nothing thrown, on a client's copy of the world, for another
-    /// dimension, an air or unknown state, a chunk that isn't loaded, a value
-    /// that isn't finite, or with 1024 falling blocks in the level already.
-    /// Each axis of `velocity` is cut to 3.9.
-    fn spawn_falling_block(
-        &mut self,
-        dimension: &str,
-        state: BlockState,
-        pos: [f64; 3],
-        velocity: [f64; 3],
-        falling: Falling,
-    ) -> bool;
 }
 /// The handles' client writes of the `entities` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

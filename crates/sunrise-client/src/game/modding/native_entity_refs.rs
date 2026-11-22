@@ -157,6 +157,46 @@ impl Game<'_> {
             self.native_client_entity_target(entity)
         }
     }
+    /// Whether chunk `(cx, cz)` has an accessible entity section
+    /// (`PersistentEntitySectionManager` / `Visibility.isAccessible`).
+    /// Resident chunks are accessible; unloaded columns stay hidden until their
+    /// chunk loads. Headless fixtures with no loaded chunks fall back to the
+    /// ticket map (accessible everywhere when no tickets are configured).
+    pub(in crate::game) fn entity_chunk_accessible(&self, cx: i32, cz: i32) -> bool {
+        if self.world.chunks.is_empty() {
+            self.tickets.loaded(cx, cz)
+        } else {
+            self.world.chunks.contains_key(&(cx, cz))
+        }
+    }
+
+    /// Whether a world position sits in an accessible entity section.
+    pub(in crate::game) fn entity_position_accessible(&self, pos: [f64; 3]) -> bool {
+        pos[0].is_finite()
+            && pos[2].is_finite()
+            && self.entity_chunk_accessible(
+                sunrise_core::mth::floor(pos[0]) >> 4,
+                sunrise_core::mth::floor(pos[2]) >> 4,
+            )
+    }
+
+    /// Whether `target` is discoverable through `LevelEntityGetter`
+    /// (`PersistentEntitySectionManager.visibleEntityStorage` /
+    /// `EntitySectionStorage.getEntities`): players are always ticking
+    /// (`Player.isAlwaysTicking`), while other entities require an accessible
+    /// section.
+    pub(in crate::game) fn entity_target_accessible(&self, target: Target) -> bool {
+        match target {
+            Target::Player | Target::Guest(_) => true,
+            Target::DragonPart(_) => self.dragon.as_ref().is_some_and(|d| {
+                self.entity_position_accessible([d.position.x, d.position.y, d.position.z])
+            }),
+            _ => self
+                .target_position(target)
+                .is_some_and(|pos| self.entity_position_accessible(pos)),
+        }
+    }
+
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
     /// methods: None with no world open, or for no such entity in the level
     /// in place or among the server's players. On a client (API
@@ -164,9 +204,14 @@ impl Game<'_> {
     /// this window's own player included. API 373.
     pub(super) fn entity(&self, id: u32) -> Option<EntityRef> {
         let entity = EntityRef::new(self.native_lifecycle.epoch()?, id);
-        (self.native_entity_read_target(entity).is_some()
-            || self.native_client_tracked(entity).is_some())
-        .then_some(entity)
+        let found = if self.is_logical_server() {
+            self.native_entity_target(entity)
+                .is_some_and(|target| self.entity_target_accessible(target))
+        } else {
+            self.native_client_entity_target(entity).is_some()
+                || self.native_client_tracked(entity).is_some()
+        };
+        found.then_some(entity)
     }
     pub(super) fn entity_by_uuid(&self, uuid: mod_api::EntityUuid) -> Option<EntityRef> {
         if !self.is_logical_server() {
@@ -183,10 +228,10 @@ impl Game<'_> {
                 .borrow_mut()
                 .level_uuid_candidate(dimension, uuid, after)?;
             let entity = EntityRef::new(epoch, id.get());
-            if self
-                .native_entity_target(entity)
-                .is_some_and(|target| self.resident_source_target_visible(dimension, target))
-            {
+            if self.native_entity_target(entity).is_some_and(|target| {
+                self.resident_source_target_visible(dimension, target)
+                    && self.entity_target_accessible(target)
+            }) {
                 return Some(entity);
             }
             // A queued departure can overlap a replacement with the same UUID.
@@ -279,7 +324,7 @@ impl Game<'_> {
                 .removals
                 .iter()
                 .chain(self.persist.destroying_vehicles.iter())
-                .any(|target| matches!(*target, Target::Boat(n) | Target::Cart(n) if n == *id))
+                .any(|target| super::native_entities::target_id(*target) == Some(*id))
         })
         .map(move |id| EntityRef::new(level.epoch(), id))
     }
@@ -301,7 +346,11 @@ impl Game<'_> {
         }
 
         for entity in self.level_entity_candidates(level) {
-            if self.native_entity_target(entity).is_some() && visit(entity).is_break() {
+            if self
+                .native_entity_target(entity)
+                .is_some_and(|target| self.entity_target_accessible(target))
+                && visit(entity).is_break()
+            {
                 return Ok(ControlFlow::Break(()));
             }
         }
@@ -358,7 +407,13 @@ impl Game<'_> {
         let mut visit_id = |id| {
             let entity = EntityRef::new(level.epoch(), id);
             // Resolution ends before mod code runs: the visitor can make its own handle reads.
-            if self.native_entity_read_target(entity).is_some() {
+            let accessible = if self.is_logical_server() {
+                self.native_entity_target(entity)
+                    .is_some_and(|target| self.entity_target_accessible(target))
+            } else {
+                self.native_client_entity_target(entity).is_some()
+            };
+            if accessible {
                 visit(entity)
             } else {
                 ControlFlow::Continue(())

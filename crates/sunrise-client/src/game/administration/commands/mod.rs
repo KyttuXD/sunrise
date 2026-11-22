@@ -879,14 +879,7 @@ impl Game<'_> {
         t: Target,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
-        let dim = self.resident_target_dimension(t)?;
-        if dim == self.dim {
-            return Some(f(self));
-        }
-        let back = self.enter_command_level(dim)?;
-        let result = f(self);
-        self.enter_command_level(back);
-        Some(result)
+        self.with_level_in_place(self.resident_target_dimension(t)?, f)
     }
     pub(in crate::game) fn entity_tag_matches(&self, tag: &str, ty: &str) -> bool {
         let path = self.options.resources.join(format!(

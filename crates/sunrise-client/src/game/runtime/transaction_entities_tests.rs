@@ -683,18 +683,19 @@ fn exhausted_ids_refuse_every_mod_spawn() {
         ("summon", |game, _| {
             summon(game, "minecraft:pig", "{}").is_some()
         }),
-        ("spawn_falling_block", |game, _| {
+        ("level_spawn_falling_block", |game, f| {
             let sand = (game.pack.assets.registry)
                 .default_state("minecraft:sand")
                 .unwrap();
-            let dimension = game.dim.id();
-            game.spawn_falling_block(
-                dimension,
+            game.level_spawn_falling_block(
+                f.level,
                 sand,
                 [1.5, 72.0, 1.5],
                 [0.0; 3],
                 Default::default(),
             )
+            .unwrap()
+            .is_some()
         }),
         ("entity_spawn_at_location", |game, f| {
             let stack = ItemStack::new("minecraft:stone", 1);

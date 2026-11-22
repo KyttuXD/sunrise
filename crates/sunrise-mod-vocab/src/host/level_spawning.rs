@@ -111,6 +111,36 @@ pub trait LevelSpawningBackendMut {
         spawn: &EntitySpawn,
     ) -> Option<EntityRef>;
     /// Side: server.
+    /// Spawns a falling block (`FallingBlockEntity`) of `state` at `pos` (its bottom centre)
+    /// with initial `velocity` (blocks a tick, `Entity.setDeltaMovement`) in the level,
+    /// without altering the block at `pos`: it falls, lands and places itself as sand does, or
+    /// drops as an item where it cannot. `falling` controls item dropping (`drop_item`) and
+    /// anvil-style landing damage (`hurts`, 2 a block fallen up to 40). The live entity keeps
+    /// the exact `velocity` (network packets quantize through `LpVec3` on send), accepts any
+    /// valid block state including air (which vanilla discards on its first tick in
+    /// `FallingBlockEntity.tick`), and imposes no per-level count cap.
+    ///
+    /// Uses the named open server level, including one that is parked. A chunk need not
+    /// be loaded, and the call does not load it: section visibility and ticking decide
+    /// when the entity becomes active, not whether it can join (`ServerLevel.addFreshEntity`).
+    ///
+    /// Returns `Err(LevelWriteError::Stale)` for a stale handle or closed level,
+    /// `Err(LevelWriteError::Unavailable)` on a client,
+    /// and `Err(LevelWriteError::InvalidState(_))` for an unknown block state.
+    /// Returns `Ok(None)` for a non-finite position or velocity, exhausted entity ids,
+    /// or a join veto in `entity_join_level`. Outside a transaction in the destination
+    /// level, the join decision is made before this call returns. Within that level's
+    /// transaction the returned handle is provisional: the join waits for the root commit
+    /// and the handle becomes stale on abort or a veto at commit.
+    fn level_spawn_falling_block(
+        &mut self,
+        level: LevelRef,
+        state: BlockState,
+        pos: [f64; 3],
+        velocity: [f64; 3],
+        falling: Falling,
+    ) -> Result<Option<EntityRef>, LevelWriteError>;
+    /// Side: server.
     /// Sets the level's natural spawning limits ([`SpawnLimits`]), from the next
     /// spawn pass on. They hold until the world closes, while the level is
     /// parked and across its closing and opening again, and are not saved: the

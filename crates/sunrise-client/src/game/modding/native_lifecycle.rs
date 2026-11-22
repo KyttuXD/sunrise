@@ -75,6 +75,9 @@ pub(super) struct NativeLifecycle {
     /// Tossed item entities `item_toss` is still asking about, innermost last: a join flush
     /// stops before them, so a cancel never takes back an entity already announced.
     pub(super) held_joins: Vec<u32>,
+    /// The fresh joins currently asking their listeners. A nested batch must not announce
+    /// these rows again while the listeners decide whether they enter the level.
+    pub(super) admitting_joins: Vec<u32>,
     /// Item notices waiting for their join decision.
     pub(super) pending_item_spawns: Vec<(u32, String, i32, [f64; 3])>,
     /// The log has named the entity id exhaustion (`entity_ids_exhausted`).

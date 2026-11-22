@@ -13,7 +13,7 @@
 //! list, the kinds whose id comes late too, so an aborted spawn just burns its id. Bolts and
 //! thrown potions have none and are kept by their lists' lengths. A traveller that arrived from
 //! another level inside the transaction is left where it arrived: travel is not journaled.
-use super::super::{Dim, Game, commands::Target};
+use super::super::{Dim, Game, commands::Target, entity::EntityHandle};
 use super::Level;
 use mod_api::EntityRef;
 use std::collections::{HashMap, HashSet};
@@ -67,10 +67,18 @@ pub(in crate::game) enum Announcement {
         loaded_from_disk: bool,
         through: JoinSeq,
     },
+    /// `addFreshEntity` for one row, independent of unrelated joins held by `item_toss`.
+    FreshJoin { handle: EntityHandle, id: u32 },
     /// `native_entity_left`.
     Left(u32),
     /// `native_leaves_flush`.
     Leaves,
+}
+
+impl Announcement {
+    fn is_join(self) -> bool {
+        matches!(self, Self::Joins { .. } | Self::FreshJoin { .. })
+    }
 }
 
 /// One place in a commit's queue.
@@ -83,8 +91,8 @@ enum Step {
 impl Step {
     /// A journal's steps: its joins, then its removals, then the rest of what it held.
     fn of(announcements: Vec<Announcement>, removals: Vec<Removal>) -> Vec<Step> {
-        let (joins, rest): (Vec<_>, Vec<_>) = (announcements.into_iter())
-            .partition(|announcement| matches!(announcement, Announcement::Joins { .. }));
+        let (joins, rest): (Vec<_>, Vec<_>) =
+            (announcements.into_iter()).partition(|announcement| announcement.is_join());
         let steps = joins.into_iter().map(Step::Tell);
         let steps = steps.chain([Step::Remove(removals)]);
         steps.chain(rest.into_iter().map(Step::Tell)).collect()
@@ -362,12 +370,10 @@ impl Game<'_> {
         let mut next = 0;
         while let Some((step, removed)) = self.commit_step(frame, next, false) {
             next += 1;
-            if let Step::Tell(Announcement::Joins {
-                loaded_from_disk,
-                through,
-            }) = step
+            if let Step::Tell(announcement) = step
+                && announcement.is_join()
             {
-                self.flush_joins(loaded_from_disk, 0, &removed, Some(through));
+                self.tell_announcement(announcement, &removed);
             }
         }
         next
@@ -379,23 +385,34 @@ impl Game<'_> {
         let mut next = 0;
         while let Some((step, removed)) = self.commit_step(frame, next, true) {
             match step {
-                Step::Tell(Announcement::Joins { .. }) if next < joined => {}
-                Step::Tell(Announcement::Joins {
-                    loaded_from_disk,
-                    through,
-                }) => {
-                    self.flush_joins(loaded_from_disk, 0, &removed, Some(through));
-                }
-                Step::Tell(Announcement::Left(id)) => self.entity_left_now(id),
-                Step::Tell(Announcement::Leaves) => {
-                    self.native_removals_flush();
-                    self.leaves_now();
-                }
+                Step::Tell(announcement) if next < joined && announcement.is_join() => {}
+                Step::Tell(announcement) => self.tell_announcement(announcement, &removed),
                 Step::Remove(removals) => self.remove_committed(removals),
             }
             next += 1;
         }
     }
+    fn tell_announcement(&mut self, announcement: Announcement, removed: &[u32]) {
+        match announcement {
+            Announcement::Joins {
+                loaded_from_disk,
+                through,
+            } => {
+                self.flush_joins(loaded_from_disk, 0, removed, Some(through));
+            }
+            Announcement::FreshJoin { handle, id } => {
+                if !removed.contains(&id) {
+                    self.admit_fresh_join(handle, id);
+                }
+            }
+            Announcement::Left(id) => self.entity_left_now(id),
+            Announcement::Leaves => {
+                self.native_removals_flush();
+                self.leaves_now();
+            }
+        }
+    }
+
     /// Marks `id` as the entity being removed in the commit of the level in place; the mark it
     /// replaced.
     fn set_removing(&mut self, id: Option<u32>) -> Option<u32> {

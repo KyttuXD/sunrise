@@ -189,6 +189,20 @@ impl States {
     pub fn as_mut_slice(&mut self) -> &mut [EntityState] {
         &mut self.list[..self.len]
     }
+    /// Keep only the states `keep` accepts, preserving their order and the
+    /// pooled backing allocations.
+    pub fn retain(&mut self, mut keep: impl FnMut(&EntityState) -> bool) {
+        let mut write = 0;
+        for read in 0..self.len {
+            if keep(&self.list[read]) {
+                if write != read {
+                    self.list.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+        self.len = write;
+    }
 }
 
 impl Extend<EntityState> for States {
