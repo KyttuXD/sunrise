@@ -2330,8 +2330,14 @@ impl Game<'_> {
         let mut told_holders = FxHashSet::default();
         let mut explicit_group_since_block = std::collections::HashSet::new();
         let mut biome_columns = std::collections::HashSet::new();
+        let mut menu_lifecycle = Vec::new();
         for after in level.after {
             match after {
+                // A writable open veto can replace a cell whose old block entity is still
+                // waiting to be replayed and spilled. Publish it only after block replay,
+                // keeping opens and closes in request order.
+                After::MenuOpen(..) => menu_lifecycle.push(after),
+                After::MenuClick(ref reply) if reply.closes_menu() => menu_lifecycle.push(after),
                 // Each storage tells the world once, after every write.
                 After::Changed(pos) if !told.insert(Ok(pos)) => {}
                 After::ChangedWithoutHook(pos) if !told_silent.insert(pos) => {}
@@ -2472,6 +2478,9 @@ impl Game<'_> {
             if now.is_some() {
                 self.jukebox_inserted(pos);
             }
+        }
+        for after in menu_lifecycle {
+            self.run_after(after);
         }
     }
     fn roll_back(&mut self, mut level: Level) {

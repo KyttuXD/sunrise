@@ -307,8 +307,9 @@ The menu's declared container slots, if any, start empty. Opening returns the wi
 connection or client support, opening bytes, data count or
 title returns `OpenMenuError`. Neither a refused nor a cancelled open closes the old menu.
 In a transaction `Ok(Some(staged))` returns a negative staged-open identity (`< 0`), separate
-from live protocol window ids (`0..=100`), and defers `container_opened` and installation to
-outermost commit in the player's level. Read the allocated vanilla window id after commit from
+from live protocol window ids (`0..=100`), and defers `container_opened` and installation until
+block changes have replayed at outermost commit. The veto runs in the player's level outside
+the transaction. Read the allocated vanilla window id after commit from
 `player.container_menu(host)` or in `player_container_open`; an abort leaves the old menu and
 its window counter untouched.
 

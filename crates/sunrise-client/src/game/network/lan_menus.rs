@@ -38,6 +38,12 @@ pub(super) struct MenuClickReply {
     reply: ClickReply,
 }
 
+impl MenuClickReply {
+    pub(super) fn closes_menu(&self) -> bool {
+        matches!(self.reply, ClickReply::Close(_))
+    }
+}
+
 pub(super) enum ClickReply {
     Predicted(sunrise_protocol::packets::play::ContainerClick, Vec<usize>),
     Resend(i32),

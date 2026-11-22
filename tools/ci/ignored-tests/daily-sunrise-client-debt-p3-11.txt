@@ -5,3 +5,4 @@ sunrise-client game::native_menus::owned_slots_tests::a_click_that_changes_the_o
 sunrise-client game::native_menus::owned_slots_tests::a_close_requested_in_a_click_transaction_preserves_both_cursors_on_abort lib daily resources
 sunrise-client game::native_menus::tests::aborted_staged_menu_opens_never_wrap_onto_or_access_the_live_window lib daily resources
 sunrise-client game::native_menus::tests::cross_dimension_mod_menu_open_in_transaction_isolates_veto_writes lib daily resources
+sunrise-client game::native_menus::tests::staged_same_level_open_spills_the_old_chest_before_its_veto_replaces_it lib daily resources

@@ -60,10 +60,10 @@ pub trait PlayerMenusBackendMut {
     /// does not close the old menu. In a transaction, `Ok(Some(staged))` returns a negative
     /// staged-open identity (`< 0`), separate from live protocol window ids (`0..=100`),
     /// without switching levels, running `container_opened`, or advancing the window counter.
-    /// At outermost commit, the veto runs in the player's level outside the transaction, the
-    /// next vanilla window id (`1..=100`) is allocated when the open installs, and that id is
-    /// exposed in `player_container_open` and `PlayerRef::container_menu`. An abort drops the
-    /// request and keeps the old menu.
+    /// At outermost commit, after the transaction's block changes have replayed, the veto
+    /// runs in the player's level outside the transaction. The next vanilla window id
+    /// (`1..=100`) is allocated when the open installs and exposed in `player_container_open`
+    /// and `PlayerRef::container_menu`. An abort drops the request and keeps the old menu.
     #[serialize_text]
     fn player_open_mod_menu(
         &mut self,
