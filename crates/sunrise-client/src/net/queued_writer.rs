@@ -288,6 +288,9 @@ impl QueuedWriter {
                         writing[2].store(0, Ordering::Relaxed);
                         writing[3].store(0, Ordering::Relaxed);
                     }
+                    if let Err(error) = &result {
+                        log::warn!("[net] failed to flush outgoing packet: {error}");
+                    }
                     if result.is_err() || disconnect {
                         running.store(false, Ordering::Release);
                         writer.shutdown();

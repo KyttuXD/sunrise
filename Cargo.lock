@@ -5155,6 +5155,7 @@ dependencies = [
  "sunrise-mod-runtime",
  "sunrise-threads",
  "sunrise-world",
+ "zlib-rs",
 ]
 
 [[package]]

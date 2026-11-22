@@ -789,7 +789,7 @@ impl Game<'_> {
         self.decode_remote_stack(s.as_ref()?)
     }
 
-    fn decode_remote_stack(&self, stack: &Stack) -> Option<ItemStack> {
+    pub(super) fn decode_remote_stack(&self, stack: &Stack) -> Option<ItemStack> {
         let r = self.remote.as_ref()?;
         if !sunrise_protocol::item::custom::permitted_with_names(
             stack,

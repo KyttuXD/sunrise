@@ -228,7 +228,7 @@ impl Game<'_> {
 
     /// Whether the stacks `conn`'s held places were bound to are still where they were: the same
     /// inventory slot (the same hotbar slot selected) holding the same stack, its contents aside.
-    fn held_places_bound(&self, conn: u32, player: mod_api::PlayerRef) -> bool {
+    pub(super) fn held_places_bound(&self, conn: u32, player: mod_api::PlayerRef) -> bool {
         let Some(backed) = self
             .lan
             .as_ref()

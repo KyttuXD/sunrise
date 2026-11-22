@@ -14,7 +14,6 @@ pub(super) struct NativeNet {
     pub(super) book_view: sunrise_client::recipe_book::settings_sync::ClientView,
     pub(super) book_request: u64,
     pub(super) book_ready: bool,
-    pub(super) book_retry_at: Option<std::time::Instant>,
     /// A mod's `disconnect` (its reason, if any), carried out at the end of the frame.
     pub(super) leave: Option<super::native_disconnect::LeaveRequest>,
 }

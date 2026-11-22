@@ -185,6 +185,29 @@ mod root {
         ) {
             invoke(hook, name, owner.unwrap_or("unknown"), || drop(value));
         }
+        pub(super) fn run_isolated_part_output<
+            P: ?Sized,
+            H: super::ServerHost + ?Sized,
+            O: Clone,
+        >(
+            parts: &[&'static P],
+            host: &mut H,
+            output: &mut O,
+            _: &'static str,
+            _: &'static str,
+            mut invoke: impl FnMut(&P, &mut H, &mut O),
+        ) {
+            for &part in parts {
+                let mut candidate = output.clone();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    invoke(part, host, &mut candidate);
+                }))
+                .is_ok()
+                {
+                    *output = candidate;
+                }
+            }
+        }
 
         pub struct ConsumeEffectBinding(&'static dyn super::Hooks);
         impl ConsumeEffectBinding {

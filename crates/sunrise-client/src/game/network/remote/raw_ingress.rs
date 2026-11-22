@@ -480,6 +480,7 @@ impl Game<'_> {
                     r.custom_completions.clear();
                 }
                 self.ui.registries.custom_completions.clear();
+                self.begin_book_negotiation();
             }
             Event::Transfer(task) => {
                 if let Some(packet) = task.into_eligible_packet() {

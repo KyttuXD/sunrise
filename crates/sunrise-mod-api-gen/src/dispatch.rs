@@ -1467,6 +1467,7 @@ pub(super) fn emit<'a>(
         } else {
             "return;"
         };
+        let isolated_menu_place = name == "recipe_book_place";
         let (lookup, calls) = match &scoped {
             None if declaration.is_some() => {
                 let output = out.unwrap();
@@ -1603,7 +1604,12 @@ pub(super) fn emit<'a>(
                         )
                     }
                 },
-                if let Some(inert) = &hook.inert {
+                if isolated_menu_place {
+                    let host = &host.as_ref().unwrap().0;
+                    format!(
+                        "super::runtime::run_isolated_part_output({part_list}, {host}, placement, \"menu part\", \"{name}\", |{part_item}, {host}, placement| {{ {build} {part_item}.{name}({host}, &mut {event}); }});"
+                    )
+                } else if let Some(inert) = &hook.inert {
                     let inert = if inert_signal {
                         "*inert = true;"
                     } else {
@@ -1665,6 +1671,7 @@ pub(super) fn emit<'a>(
             ),
         };
         let body = match contract {
+            _ if isolated_menu_place => format!("{lookup} {calls}"),
             _ if mod_cancel => format!(
                 "if *{o} && !super::receives_cancelled(HookId::{hook_id}) {{ return; }} {build} {calls} {write_back}",
                 o = cancel_out.unwrap()

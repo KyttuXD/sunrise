@@ -20,6 +20,7 @@ fn derived(record: &str, field: &str) -> bool {
     matches!(
         (record, field),
         ("Parts", "hooks")
+            | ("Attached", "panicked")
             | (
                 "Installed",
                 "epoch"

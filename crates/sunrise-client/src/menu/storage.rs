@@ -79,12 +79,6 @@ impl Menu {
     pub(super) fn touch(&mut self) {
         self.stamp.advance();
     }
-
-    /// Commit a staged edit into this same menu; do not install the private
-    /// preview's identity or revision as the live owner's version.
-    pub(super) fn install_state(&mut self, staged: Self) {
-        self.restore(Snapshot(staged.state));
-    }
 }
 
 /// Engine state only; never a public mod token or a serialized hook payload.

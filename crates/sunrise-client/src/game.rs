@@ -1031,8 +1031,6 @@ mod native_block_tables;
 mod native_block_use_criteria_tests;
 #[path = "game/modding/native_book_apply.rs"]
 mod native_book_apply;
-#[path = "game/modding/native_book_backings.rs"]
-mod native_book_backings;
 #[path = "game/modding/native_book_catalogue.rs"]
 mod native_book_catalogue;
 #[path = "game/modding/native_book_displays.rs"]
@@ -1047,8 +1045,6 @@ mod native_book_net;
 mod native_book_placement;
 #[path = "game/modding/native_book_receive.rs"]
 mod native_book_receive;
-#[path = "game/modding/native_book_scope.rs"]
-mod native_book_scope;
 #[path = "game/modding/native_book_settings.rs"]
 mod native_book_settings;
 #[path = "game/modding/native_book_transport.rs"]

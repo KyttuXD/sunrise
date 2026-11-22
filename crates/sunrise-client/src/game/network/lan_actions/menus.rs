@@ -655,7 +655,7 @@ impl Game<'_> {
     /// `AbstractContainerMenu.stillValid` of whatever menu the guest has open
     /// (a container or vehicle, a trade, the crafting table, a station, a
     /// lectern, a mount's inventory). True when none is open.
-    pub(super) fn guest_menu_still_valid(&self, conn: u32) -> bool {
+    pub(in crate::game) fn guest_menu_still_valid(&self, conn: u32) -> bool {
         let Some(host) = self.lan.as_ref() else {
             return true;
         };
