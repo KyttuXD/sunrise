@@ -786,6 +786,30 @@ impl GameLevel<'_> {
         // The roll draws from a copy of the level random, which the location
         // reads of the world leave no hand on.
         let origin = [pos.x, pos.y, pos.z];
+        let centre = origin.map(|c| f64::from(c) + 0.5);
+        let source = world_source(
+            self.world,
+            origin,
+            &self.facts.get(state).name,
+            |key, entity, block| self.encode_live_block_entity(key, entity, block),
+        );
+        let (block_entity, block_components) = match source {
+            Some(source) => (Some(source.nbt.clone()), Some(source.components.clone())),
+            None => (None, None),
+        };
+        let place = sunrise_world::loot::LootPlace {
+            origin: Some(centre),
+            block_entity,
+            block_components,
+            storage: Some(self.loot_storage.clone()),
+            level: Some(sunrise_world::loot::LootLevel {
+                dimension: self.location.dimension.to_owned(),
+                game_time: self.world.game_time,
+                day_time: self.world.day_time,
+                raining: self.raining,
+                thundering: self.thundering,
+            }),
+        };
         let level = super::location_world::LevelLocation {
             world: &*self.world,
             registry: self.registry,
@@ -799,7 +823,6 @@ impl GameLevel<'_> {
             refs: self.location,
         };
         let location = |condition: &serde_json::Value| {
-            let centre = origin.map(|c| f64::from(c) + 0.5);
             let at = sunrise_client::advancements::location_check_position(
                 condition,
                 Some(origin),
@@ -814,16 +837,19 @@ impl GameLevel<'_> {
             )
         };
         let mut random = self.world.random.clone();
-        let drops = self.items.interact_loot(
-            table,
-            self.registry,
-            state,
-            interacting,
-            Some(&location),
-            &mut random,
-            self.rand_sequences,
-            self.seed,
-        );
+        let drops = sunrise_world::loot::with_native_loot_place(place, || {
+            self.items.interact_loot(
+                table,
+                self.registry,
+                state,
+                interacting,
+                self.interacting_tool.as_ref(),
+                Some(&location),
+                &mut random,
+                self.rand_sequences,
+                self.seed,
+            )
+        });
         self.world.random = random;
         let start = self.spill.spawns.len();
         for stack in drops {
@@ -1421,6 +1447,54 @@ impl Game<'_> {
                     Some((&mut self.rand_sequences, self.level.seed)),
                 )
             })
+        })
+    }
+    /// `Block.dropFromBlockInteractLootTable` for interactions run directly on
+    /// `Game` (`PumpkinBlock`, `BeehiveBlock`, `ShearsDispenseItemBehavior`):
+    /// supplies `BLOCK_STATE`, `ORIGIN` (block centre), optional `BLOCK_ENTITY`,
+    /// optional `INTERACTING_ENTITY`, optional `TOOL`, and the level.
+    pub(in crate::game) fn interact_loot_at(
+        &mut self,
+        table: &str,
+        pos: [i32; 3],
+        state: BlockStateId,
+        interacting: Option<sunrise_world::loot::LootEntity>,
+        held: Option<&ItemStack>,
+    ) -> Vec<ItemStack> {
+        let centre = pos.map(|c| f64::from(c) + 0.5);
+        let source = self.pack.assets.registry.state(state).and_then(|block| {
+            world_source(&self.world, pos, &block.name, |key, entity, block| {
+                self.encode_live_block_entity(key, entity, block, world_items!(self))
+            })
+        });
+        let mut place = self.loot_place_at(centre, None);
+        if let Some(source) = source {
+            place.block_entity = Some(source.nbt.clone());
+            place.block_components = Some(source.components.clone());
+        }
+        let loot = self.server_loot.get();
+        let matcher = |predicate: &serde_json::Value, entity: &sunrise_world::loot::LootEntity| {
+            loot.as_ref()
+                .is_some_and(|data| data.entity_matches(predicate, Some(entity)))
+        };
+        let interacting_target = interacting.as_ref().map(|entity| {
+            (
+                entity,
+                &matcher as &dyn Fn(&serde_json::Value, &sunrise_world::loot::LootEntity) -> bool,
+            )
+        });
+        sunrise_world::loot::with_native_loot_place(place, || {
+            world_items!(self).interact_loot(
+                table,
+                self.pack.assets.registry,
+                state,
+                interacting_target,
+                held,
+                None,
+                &mut self.world.random,
+                &mut self.rand_sequences,
+                self.level.seed,
+            )
         })
     }
     /// The handle of `LootContextParams.THIS_ENTITY`, by its id.

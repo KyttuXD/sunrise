@@ -626,6 +626,9 @@ impl Game<'_> {
                     let json = sunrise_client::scoreboard::tag_to_json(&tag);
                     sunrise_world::loot::validate_loot_table(&json)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+                    let prepared = world_items!(self)
+                        .prepare_inline_loot_table(&json)
+                        .map_err(|e| err("argument.nbt.invalid", &[&e.to_string()]))?;
                     // LootCommand's omitted fishing tool is EMPTY, not mainhand.
                     let held = if id == "loot.fish"
                         && (ctx.get("tool").is_some() || ctx.has("mainhand") || ctx.has("offhand"))
@@ -637,15 +640,15 @@ impl Game<'_> {
                     let drops = match json["random_sequence"].as_str() {
                         Some(sequence) => {
                             let random = self.rand_sequences.get(sequence, self.level.seed);
-                            world_items!(self).inline_loot_table_for_command(
-                                &json,
+                            world_items!(self).roll_prepared_inline_loot_table_for_command(
+                                &prepared,
                                 held.as_ref(),
                                 random,
                                 keep_empty,
                             )
                         }
-                        None => world_items!(self).inline_loot_table_for_command(
-                            &json,
+                        None => world_items!(self).roll_prepared_inline_loot_table_for_command(
+                            &prepared,
                             held.as_ref(),
                             &mut self.world.random,
                             keep_empty,

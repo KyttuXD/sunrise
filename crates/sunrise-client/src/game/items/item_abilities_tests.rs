@@ -1,7 +1,11 @@
 #![cfg(test)]
 use super::Game;
 use super::item_abilities::ability;
-use mod_api::{CanPerformActionEvent, Hooks, Host, ItemPart, Registrar, RegistrationContext};
+use mod_api::prelude::*;
+use mod_api::{
+    CanPerformActionEvent, Hooks, Identifier, ItemAbilityContext, ItemPart, Registrar,
+    RegistrationContext,
+};
 use std::sync::Arc;
 use sunrise_client::items::ItemStack;
 use sunrise_client::mobs::Mob;
@@ -18,8 +22,33 @@ struct Abilities {
 
 #[mod_api::sunrise_part]
 impl ItemPart for Abilities {
-    fn can_perform_action(&self, _: &dyn Host, event: &mut CanPerformActionEvent<'_>) {
+    fn can_perform_action(
+        &self,
+        context: &ItemAbilityContext<'_>,
+        event: &mut CanPerformActionEvent<'_>,
+    ) {
+        let host = context.host().expect("gameplay ability check lends Host");
+        assert!(context.loot().is_none());
+        let expected_key = host
+            .item_key(&Identifier::parse(self.item).unwrap())
+            .expect("live host resolves known item keys");
+        assert_eq!(event.stack.item(), expected_key);
+        let swords = context
+            .tags()
+            .key(&Identifier::parse("minecraft:swords").unwrap())
+            .expect("swords tag resolves");
+        assert_eq!(
+            context.tags().is_in_tag(expected_key, swords),
+            Some(self.item == "minecraft:diamond_sword")
+        );
+        if self.item == "minecraft:shears" && SHEARING.contains(&event.ability) {
+            assert!(event.can_perform);
+        }
+        if self.item == "minecraft:shield" && event.ability == ability::SHIELD_BLOCK {
+            assert!(event.can_perform);
+        }
         if self.grants.contains(&event.ability) {
+            assert!(!event.can_perform);
             event.can_perform = true;
         } else if self.denies.contains(&event.ability) {
             event.can_perform = false;

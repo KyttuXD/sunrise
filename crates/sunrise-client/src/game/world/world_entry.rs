@@ -336,7 +336,7 @@ impl Game<'_> {
         let providers = Providers::load_with(root, &overlay);
         // Visit independently readable registries before consuming any result.
         // One rejected winner must not hide the other entries' diagnostics.
-        let loot = sunrise_world::loot::LootData::load_with_damage(
+        let loot = sunrise_world::loot::LootData::load_candidate_with_damage(
             root,
             &overlay,
             self.res.core.item_data.defaults(),
@@ -397,7 +397,7 @@ impl Game<'_> {
         let providers = providers?;
         install_items_result?;
         let sources = sources?;
-        let mut loot = loot?;
+        let loot = loot?;
         let recipes = Recipes::from_resolved(root, &items, &overlay, &sources)?;
         let mut stations = sunrise_client::stations::StationData::from_sources(
             root,
@@ -519,9 +519,8 @@ impl Game<'_> {
         // candidate refused by the condition readers.
         api_values::resolve_enchantment_registry(&items)?;
         let context = lan::sync::server_data_load(root, &self.res.core.item_data)?;
-        if !mod_api::__private::mods().is_empty() {
-            loot.apply_native_table_loads(&context)?;
-        }
+        let mut loot =
+            loot.prepare((!mod_api::__private::mods().is_empty()).then_some(&context))?;
         let serializers = self
             .mods
             .loot_modifier_serializers
@@ -530,6 +529,7 @@ impl Game<'_> {
             global_loot_modifiers::files(root, stack, modifier_files),
             &conditions,
             &context,
+            &loot,
         )?;
         loot.set_global_modifiers(modifiers);
         items.set_loot_data(&loot);
@@ -765,46 +765,35 @@ impl Game<'_> {
         }
         self.server_items = None;
         let overlay = pack_files(&self.world_tables);
+        let native = if mod_api::__private::mods().is_empty() {
+            None
+        } else {
+            match lan::sync::server_data_load(&self.options.resources, &self.res.core.item_data) {
+                Ok(context) => Some(context),
+                Err(error) => {
+                    log::warn!("Sunrise: server loot inventory unavailable: {error}");
+                    self.server_loot.set(None);
+                    return;
+                }
+            }
+        };
         let loot = match sunrise_world::loot::LootData::load_with_damage(
             &self.options.resources,
             &overlay,
             self.res.item_defaults(),
             &self.health_resources.damage,
+            native.as_ref(),
         ) {
-            Ok(mut loot) => {
-                if !mod_api::__private::mods().is_empty() {
-                    let context = match lan::sync::server_data_load(
-                        &self.options.resources,
-                        &self.res.core.item_data,
-                    ) {
-                        Ok(context) => context,
-                        Err(error) => {
-                            log::warn!("Sunrise: server loot inventory unavailable: {error}");
-                            self.server_loot.set(None);
-                            return;
-                        }
-                    };
-                    if let Err(error) = loot.apply_native_table_loads(&context) {
-                        log::warn!("Sunrise: native loot tables refused: {error}");
-                        self.server_loot.set(None);
-                        return;
-                    }
-                }
-                Some(Arc::new(loot))
-            }
-            Err(e) => {
-                log::warn!("Sunrise: server loot tables unavailable: {e}");
+            Ok(loot) => Some(Arc::new(loot)),
+            Err(error) => {
+                log::warn!("Sunrise: server loot tables unavailable: {error}");
                 None
             }
         };
-        if !mod_api::__private::mods().is_empty()
-            && let Some(loot) = &loot
-        {
-            let mut items = self.items().clone();
-            items.set_loot_tables(loot.tables().clone());
-            self.server_items = Some(Arc::new(items));
-        }
         if let Some(loot) = &loot {
+            let mut items = self.items().clone();
+            items.set_loot_data(loot);
+            self.server_items = Some(Arc::new(items));
             self.copy_loot_enchantment_answers(loot);
         }
         self.server_loot.set(loot);

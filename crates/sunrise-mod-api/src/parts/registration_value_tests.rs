@@ -1194,7 +1194,14 @@ fn an_ability_question_reaches_only_the_parts_of_the_asked_item_and_names_the_ab
     }
     #[mod_api::sunrise_part]
     impl ItemPart for Abilities {
-        fn can_perform_action(&self, _: &dyn Host, event: &mut CanPerformActionEvent<'_>) {
+        fn can_perform_action(
+            &self,
+            context: &ItemAbilityContext<'_>,
+            event: &mut CanPerformActionEvent<'_>,
+        ) {
+            assert!(context.host().is_some());
+            assert!(context.loot().is_none());
+            assert_eq!(event.stack.count(), 1);
             self.asked.lock().unwrap().push(event.ability.to_owned());
             if event.ability == self.granted {
                 event.can_perform = true;
@@ -1236,7 +1243,23 @@ fn an_ability_question_reaches_only_the_parts_of_the_asked_item_and_names_the_ab
     let diamond = crate::parts::tests::stack("minecraft:diamond", 1, 0);
     let ask = |stack: &ItemStack, ability: &str, vanilla: bool| {
         let mut can_perform = vanilla;
-        dispatch_can_perform_action(&host, stack, ability, &mut can_perform);
+        let context = ItemAbilityContext::from_host(&host);
+        let project = |_| -> Option<ItemStack> {
+            panic!("ability routing and scalar reads must not project the stack")
+        };
+        let metadata = (
+            stack.item(),
+            std::num::NonZeroU32::new(stack.count()).unwrap(),
+            None,
+        );
+        dispatch_can_perform_action(
+            &context,
+            crate::__private::CanPerformActionCall {
+                stack: ItemStackView::resident(metadata, &project),
+                ability,
+                can_perform: &mut can_perform,
+            },
+        );
         can_perform
     };
     // The part answers per ability: a grant, a denial and what it leaves alone.

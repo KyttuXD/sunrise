@@ -43,7 +43,10 @@ impl GlobalLootModifiersRegistrar for PartRegistrar {
             .push(LootModifierSerializerInfo {
                 id: id.into(),
                 owner: self.mod_id,
-                owner_index: self.mod_index,
+                callback_owner: mod_vocab::__private::parts_installation::callback_owner_for_index(
+                    self.mod_id,
+                    self.mod_index,
+                ),
                 serializer,
             });
     }

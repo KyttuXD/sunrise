@@ -1,5 +1,5 @@
-//! Load validation and direct type dispatch, shared by both loot evaluators.
-use crate::loot::{LootContext, LootStack, LootTags};
+//! Load-time codec binding and direct rule dispatch, shared by both loot evaluators.
+use crate::loot::{LootContext, LootStack, LootStackEditAccess, LootTags};
 use serde_json::Value;
 #[cfg(test)]
 #[path = "loot_types/argument_tests.rs"]
@@ -64,77 +64,59 @@ impl Types {
             .map_or_else(Self::default, |capture| capture())
     }
 }
-impl super::LootData {
-    /// Validate a private candidate before publishing it or replacing prior data.
-    pub fn validate_types(&self) -> io::Result<()> {
-        self.types.validate(
-            self.tables.ids().map(|id| (id, &self.tables[id])),
-            &self.predicates,
-            &self.modifiers,
-        )
-    }
-    pub fn types(&self) -> &Types {
-        &self.types
-    }
-    pub fn modifiers(&self) -> &HashMap<String, Value> {
-        &self.modifiers
-    }
-}
 
-/// Frozen static codec registry captured by one owning data generation.
-/// The implementation is supplied by the executable; world never depends on mod API types.
-pub trait Registry: Send + Sync {
-    fn contains(&self, kind: &str, function: bool) -> bool;
-    fn validate(&self, kind: &str, data: &Value, function: bool) -> Result<Vec<String>, String>;
-    fn conditional(&self, kind: &str) -> bool;
+/// A bound, decoded loot function rule supplied by the executable's codec registry.
+pub trait BoundFunction: Send + Sync {
     fn apply(
         &self,
-        kind: &str,
-        data: &Value,
         ctx: &LootContext<'_>,
         random: &mut dyn RollRandom,
         tags: &dyn LootTags,
-        stack: &LootStack,
-    ) -> Result<LootStack, String>;
+        stack: &mut dyn LootStackEditAccess,
+    ) -> Result<(), String>;
+}
+
+/// A bound, decoded loot condition rule supplied by the executable's codec registry.
+pub trait BoundCondition: Send + Sync {
     fn test(
         &self,
-        kind: &str,
-        data: &Value,
         ctx: &LootContext<'_>,
         random: &mut dyn RollRandom,
         tags: &dyn LootTags,
     ) -> Result<bool, String>;
 }
 
-/// One data generation retains its codecs and their owning code stores.
+/// Decoded loot function rule and its declared context parameters.
+pub struct DecodedFunction {
+    pub rule: Arc<dyn BoundFunction>,
+    pub referenced_params: Vec<String>,
+}
+
+/// Decoded loot condition rule and its declared context parameters.
+pub struct DecodedCondition {
+    pub rule: Arc<dyn BoundCondition>,
+    pub referenced_params: Vec<String>,
+}
+
+/// Frozen static codec registry captured by one owning data generation.
+/// The implementation is supplied by the executable; world never depends on mod API types.
+pub trait Registry: Send + Sync {
+    fn contains(&self, kind: &str, function: bool) -> bool;
+    fn conditional(&self, kind: &str) -> bool;
+    fn decode_function(&self, kind: &str, data: &Value) -> Result<DecodedFunction, String>;
+    fn decode_condition(&self, kind: &str, data: &Value) -> Result<DecodedCondition, String>;
+}
+
+/// Immutable codec registry captured before data loads.
+/// Generation-specific decoded rules live separately in [`Bindings`].
 #[derive(Clone, Default)]
 pub struct Types {
     registry: Option<Arc<dyn Registry>>,
-    warned: Arc<[std::sync::Mutex<HashSet<String>>; 2]>,
 }
 impl Types {
     pub fn new(registry: Arc<dyn Registry>) -> Self {
         Self {
             registry: Some(registry),
-            ..Self::default()
-        }
-    }
-    /// Report a callback refusal once per registry type in this retained generation.
-    /// Cloned snapshots share the gate; preparing a new generation starts a new gate.
-    pub fn warn_once(&self, kind: &str, function: bool, reason: &str) {
-        let first = {
-            let mut warned = self.warned[usize::from(function)]
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if warned.contains(kind) {
-                false
-            } else {
-                warned.insert(kind.to_owned())
-            }
-        };
-        if first {
-            let category = if function { "function" } else { "condition" };
-            log::warn!("loot {category} type {kind}: {reason}");
         }
     }
     pub fn contains(&self, kind: &str, function: bool) -> bool {
@@ -147,33 +129,7 @@ impl Types {
             .as_ref()
             .is_none_or(|registry| registry.conditional(kind))
     }
-    pub fn apply(
-        &self,
-        kind: &str,
-        data: &Value,
-        ctx: &LootContext<'_>,
-        random: &mut dyn RollRandom,
-        tags: &dyn LootTags,
-        stack: &LootStack,
-    ) -> Result<LootStack, String> {
-        self.registry
-            .as_ref()
-            .ok_or_else(|| format!("unknown loot function type {kind}"))?
-            .apply(kind, data, ctx, random, tags, stack)
-    }
-    pub fn test(
-        &self,
-        kind: &str,
-        data: &Value,
-        ctx: &LootContext<'_>,
-        random: &mut dyn RollRandom,
-        tags: &dyn LootTags,
-    ) -> Result<bool, String> {
-        self.registry
-            .as_ref()
-            .ok_or_else(|| format!("unknown loot condition type {kind}"))?
-            .test(kind, data, ctx, random, tags)
-    }
+    /// Validate and decode tables, predicates and modifiers without retaining a generation bundle.
     pub fn validate<'a>(
         &self,
         tables: impl Iterator<Item = (&'a str, &'a Value)>,
@@ -181,31 +137,381 @@ impl Types {
         modifiers: &HashMap<String, Value>,
     ) -> io::Result<()> {
         let tables: HashMap<_, _> = tables.collect();
+        let mut ids: Vec<_> = tables.keys().copied().collect();
+        ids.sort_unstable();
         let mut walker = Walker {
             types: self,
-            tables: tables.clone(),
+            tables: Tables::Map(tables),
             visiting_tables: HashSet::new(),
             predicates,
             modifiers,
             visiting: HashSet::new(),
-            validated: HashMap::new(),
+            inherited: None,
+            strict: true,
+            rules: RuleMap::default(),
             allowed: None,
         };
-        for (id, data) in tables {
+        for id in ids {
+            let data = walker.tables.get(id).unwrap();
             walker.visiting_tables.insert(id.to_owned());
             walker.table(data, &resource("loot_table", id))?;
             walker.visiting_tables.remove(id);
         }
         walker.allowed = None;
-        for (id, data) in predicates {
-            walker.entry(data, false, &resource("predicate", id))?;
+        let mut predicate_ids: Vec<_> = predicates.keys().collect();
+        predicate_ids.sort_unstable();
+        for id in predicate_ids {
+            walker.entry(&predicates[id], false, &resource("predicate", id))?;
         }
-        for (id, data) in modifiers {
-            walker.entry(data, true, &resource("item_modifier", id))?;
+        let mut modifier_ids: Vec<_> = modifiers.keys().collect();
+        modifier_ids.sort_unstable();
+        for id in modifier_ids {
+            walker.entry(&modifiers[id], true, &resource("item_modifier", id))?;
         }
         Ok(())
     }
+
+    /// Decode and bind every custom node in one final immutable generation.
+    /// The returned [`Bindings`] retains `tables`, `predicates`, `modifiers` and
+    /// `enchantment_effects` alongside the address-indexed rule table so no indexed
+    /// `Value` address can ever outlive its owning document.
+    pub fn bind_generation(
+        &self,
+        tables: Arc<super::LootTables>,
+        predicates: Arc<HashMap<String, Value>>,
+        modifiers: Arc<HashMap<String, Value>>,
+        enchantment_effects: Vec<(String, Arc<Value>)>,
+        normalization: Normalization,
+    ) -> io::Result<Bindings> {
+        let rules = {
+            let mut walker = Walker {
+                types: self,
+                tables: Tables::Loaded(&tables),
+                visiting_tables: HashSet::new(),
+                predicates: &predicates,
+                modifiers: &modifiers,
+                visiting: HashSet::new(),
+                inherited: None,
+                strict: true,
+                rules: RuleMap::default(),
+                allowed: None,
+            };
+            let mut table_ids: Vec<_> = tables.ids().map(str::to_owned).collect();
+            table_ids.sort_unstable();
+            for id in &table_ids {
+                if let Some(data) = tables.get(id) {
+                    walker.visiting_tables.insert(id.clone());
+                    walker.table(data, &resource("loot_table", id))?;
+                    walker.visiting_tables.remove(id);
+                }
+            }
+            walker.allowed = None;
+            let mut predicate_ids: Vec<_> = predicates.keys().collect();
+            predicate_ids.sort_unstable();
+            for id in predicate_ids {
+                walker.entry(&predicates[id], false, &resource("predicate", id))?;
+            }
+            let mut modifier_ids: Vec<_> = modifiers.keys().collect();
+            modifier_ids.sort_unstable();
+            for id in modifier_ids {
+                walker.entry(&modifiers[id], true, &resource("item_modifier", id))?;
+            }
+            let enchanted_damage =
+                parameters::allowed(&Value::String("minecraft:enchanted_damage".into()));
+            walker.allowed = enchanted_damage;
+            for (name, effects) in &enchantment_effects {
+                for (i, effect) in effects["minecraft:equipment_drops"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    if let Some(req) = effect.get("requirements").filter(|value| !value.is_null()) {
+                        walker.entry(
+                            req,
+                            false,
+                            &format!(
+                                "enchantment {name}.effects.minecraft:equipment_drops[{i}].requirements"
+                            ),
+                        )?;
+                    }
+                }
+            }
+            walker.rules
+        };
+        Ok(Bindings {
+            types: self.clone(),
+            inner: Arc::new(BindingsInner {
+                tables,
+                predicates,
+                modifiers,
+                _enchantment_effects: enchantment_effects
+                    .into_iter()
+                    .map(|(_, effects)| effects)
+                    .collect(),
+                normalization,
+                rules,
+            }),
+        })
+    }
 }
+
+pub struct BoundEntry<T: ?Sized> {
+    kind: Box<str>,
+    location: Arc<str>,
+    referenced_params: Arc<[String]>,
+    rule: Arc<T>,
+}
+
+impl BoundEntry<dyn BoundFunction> {
+    pub fn apply(
+        &self,
+        ctx: &LootContext<'_>,
+        random: &mut dyn RollRandom,
+        tags: &dyn LootTags,
+        stack: &mut dyn LootStackEditAccess,
+    ) {
+        if let Err(reason) = self.rule.apply(ctx, random, tags, stack) {
+            log::warn!(
+                "loot function type {} ({}): {reason}",
+                self.kind,
+                self.location
+            );
+        }
+    }
+}
+impl BoundEntry<dyn BoundCondition> {
+    pub fn test(
+        &self,
+        ctx: &LootContext<'_>,
+        random: &mut dyn RollRandom,
+        tags: &dyn LootTags,
+    ) -> bool {
+        match self.rule.test(ctx, random, tags) {
+            Ok(value) => value,
+            Err(reason) => {
+                log::warn!(
+                    "loot condition type {} ({}): {reason}",
+                    self.kind,
+                    self.location
+                );
+                false
+            }
+        }
+    }
+}
+
+/// Side table of decoded rules keyed by the address of their exact final immutable `Value` node.
+/// Addresses are opaque identities, never dereferenced, and never outlive their owning documents.
+#[derive(Default)]
+pub struct RuleMap {
+    functions: HashMap<usize, BoundEntry<dyn BoundFunction>>,
+    conditions: HashMap<usize, BoundEntry<dyn BoundCondition>>,
+}
+impl RuleMap {
+    fn referenced_params(&self, function: bool, key: usize) -> Option<Arc<[String]>> {
+        if function {
+            self.functions
+                .get(&key)
+                .map(|entry| Arc::clone(&entry.referenced_params))
+        } else {
+            self.conditions
+                .get(&key)
+                .map(|entry| Arc::clone(&entry.referenced_params))
+        }
+    }
+}
+
+/// Immutable generation bundle retaining the final normalized documents together with their
+/// decoded loot rules. Shared from [`super::LootData`] to `Items::set_loot_data`.
+#[derive(Clone)]
+pub struct Bindings {
+    types: Types,
+    inner: Arc<BindingsInner>,
+}
+struct BindingsInner {
+    rules: RuleMap,
+    tables: Arc<super::LootTables>,
+    predicates: Arc<HashMap<String, Value>>,
+    modifiers: Arc<HashMap<String, Value>>,
+    _enchantment_effects: Vec<Arc<Value>>,
+    normalization: Normalization,
+}
+
+/// The merged holder sets and tags used when binding inline data to a loot generation.
+#[derive(Default)]
+pub struct Normalization {
+    holder_sets: Arc<super::holder_sets::Binding>,
+    tags: Arc<super::loot_tags::BoundTags>,
+}
+
+impl Default for Bindings {
+    fn default() -> Self {
+        Self {
+            types: Types::default(),
+            inner: Arc::new(BindingsInner {
+                tables: Arc::default(),
+                predicates: Arc::default(),
+                modifiers: Arc::default(),
+                _enchantment_effects: Vec::new(),
+                normalization: Normalization::default(),
+                rules: RuleMap::default(),
+            }),
+        }
+    }
+}
+impl Bindings {
+    pub fn conditional(&self, kind: &str) -> bool {
+        self.types.conditional(kind)
+    }
+
+    pub fn function<'a>(
+        &'a self,
+        local: Option<&'a RuleMap>,
+        kind: &str,
+        data: &Value,
+    ) -> Option<&'a BoundEntry<dyn BoundFunction>> {
+        let key = std::ptr::from_ref(data) as usize;
+        let entry = local
+            .and_then(|map| map.functions.get(&key))
+            .or_else(|| self.inner.rules.functions.get(&key));
+        if entry.is_none() && self.types.contains(kind, true) {
+            log::error!(
+                "loot function type {kind}: missing prepared binding (preparation/integration error)"
+            );
+        }
+        entry
+    }
+
+    pub fn condition<'a>(
+        &'a self,
+        local: Option<&'a RuleMap>,
+        kind: &str,
+        data: &Value,
+    ) -> Option<&'a BoundEntry<dyn BoundCondition>> {
+        let key = std::ptr::from_ref(data) as usize;
+        let entry = local
+            .and_then(|map| map.conditions.get(&key))
+            .or_else(|| self.inner.rules.conditions.get(&key));
+        if entry.is_none() && self.types.contains(kind, false) {
+            log::error!(
+                "loot condition type {kind}: missing prepared binding (preparation/integration error)"
+            );
+        }
+        entry
+    }
+    /// Normalize and bind an inline loot table at the argument boundary before drawing,
+    /// reusing named generation bindings without re-decoding them.
+    pub fn prepare_inline_table(&self, table: &Value) -> io::Result<PreparedInlineTable> {
+        let mut boxed = Box::new(table.clone());
+        let normalization = &self.inner.normalization;
+        normalization.holder_sets.walk(
+            "inline loot_table",
+            &mut boxed,
+            &normalization.tags,
+            &self.types,
+            None,
+        )?;
+        normalize::normalize_table(&mut boxed, &normalization.tags, &self.types);
+        let rules = {
+            let mut walker = Walker {
+                types: &self.types,
+                tables: Tables::Loaded(&self.inner.tables),
+                visiting_tables: HashSet::new(),
+                predicates: &self.inner.predicates,
+                modifiers: &self.inner.modifiers,
+                visiting: HashSet::new(),
+                inherited: Some(&self.inner.rules),
+                // Programmatic roots keep their evaluator's stock-kind handling; bind
+                // custom nodes at the same schema-owned edges as resource files.
+                strict: false,
+                rules: RuleMap::default(),
+                allowed: None,
+            };
+            walker.table(&boxed, "inline loot_table $")?;
+            walker.rules
+        };
+        Ok(PreparedInlineTable {
+            value: boxed,
+            rules,
+        })
+    }
+    /// Normalize and bind a standalone condition (such as a global loot modifier's `condition`),
+    /// reusing named predicate bindings from this generation without re-decoding them.
+    pub fn prepare_condition(&self, condition: Value, path: &str) -> io::Result<PreparedCondition> {
+        let mut boxed = Box::new(condition);
+        let normalization = &self.inner.normalization;
+        normalization.holder_sets.walk(
+            path,
+            &mut boxed,
+            &normalization.tags,
+            &self.types,
+            Some(false),
+        )?;
+        normalize::normalize_condition(&mut boxed, &normalization.tags, &self.types);
+        let rules = {
+            let mut walker = Walker {
+                types: &self.types,
+                tables: Tables::Loaded(&self.inner.tables),
+                visiting_tables: HashSet::new(),
+                predicates: &self.inner.predicates,
+                modifiers: &self.inner.modifiers,
+                visiting: HashSet::new(),
+                inherited: Some(&self.inner.rules),
+                strict: true,
+                rules: RuleMap::default(),
+                allowed: None,
+            };
+            walker.entry(&boxed, false, path)?;
+            walker.rules
+        };
+        Ok(PreparedCondition {
+            value: boxed,
+            rules,
+        })
+    }
+}
+
+/// A normalized inline loot table paired with its locally bound custom rules.
+/// Keeps the normalized `Value` on the heap so its node addresses stay stable across moves.
+pub struct PreparedInlineTable {
+    rules: RuleMap,
+    value: Box<Value>,
+}
+impl PreparedInlineTable {
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+    pub fn rules(&self) -> &RuleMap {
+        &self.rules
+    }
+}
+
+/// A normalized condition node (for example a global loot modifier's `condition`) paired
+/// with its locally bound custom rules. Named predicate references resolve through the
+/// owning generation's [`Bindings`].
+pub struct PreparedCondition {
+    rules: RuleMap,
+    value: Box<Value>,
+}
+impl PreparedCondition {
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+    pub fn rules(&self) -> &RuleMap {
+        &self.rules
+    }
+}
+
+impl super::LootData {
+    pub fn bindings(&self) -> &Bindings {
+        &self.bindings
+    }
+    pub fn modifiers(&self) -> &Arc<HashMap<String, Value>> {
+        &self.modifiers
+    }
+}
+
 fn resource(kind: &str, id: &str) -> String {
     let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
     format!("{kind} {id} [data/{namespace}/{kind}/{path}.json] $")
@@ -216,14 +522,30 @@ fn invalid(path: &str, kind: &str, reason: impl std::fmt::Display) -> io::Error 
         format!("{path} (type {kind}): {reason}"),
     )
 }
+
+enum Tables<'a> {
+    Map(HashMap<&'a str, &'a Value>),
+    Loaded(&'a super::LootTables),
+}
+impl<'a> Tables<'a> {
+    fn get(&self, id: &str) -> Option<&'a Value> {
+        match self {
+            Self::Map(map) => map.get(id).copied(),
+            Self::Loaded(tables) => tables.get(id),
+        }
+    }
+}
+
 struct Walker<'a> {
     types: &'a Types,
-    tables: HashMap<&'a str, &'a Value>,
+    tables: Tables<'a>,
     visiting_tables: HashSet<String>,
     predicates: &'a HashMap<String, Value>,
     modifiers: &'a HashMap<String, Value>,
     visiting: HashSet<(bool, String)>,
-    validated: HashMap<(bool, usize), Vec<String>>,
+    inherited: Option<&'a RuleMap>,
+    strict: bool,
+    rules: RuleMap,
     allowed: Option<&'static [&'static str]>,
 }
 impl Walker<'_> {
@@ -286,7 +608,7 @@ impl Walker<'_> {
             .map_err(|reason| invalid(path, "loot_table", reason))?
             .to_string();
         if self.visiting_tables.insert(id.clone()) {
-            let result = if let Some(table) = self.tables.get(id.as_str()).copied() {
+            let result = if let Some(table) = self.tables.get(id.as_str()) {
                 self.contents(table, &format!("{path} -> loot_table {id}"))
             } else {
                 Ok(())
@@ -304,6 +626,11 @@ impl Walker<'_> {
         if let Some(value) = data.get("modifier").filter(|value| !value.is_null()) {
             self.entry(value, true, &format!("{path}.modifier"))?;
         }
+        if let Some(list) = data.get("conditions").and_then(Value::as_array) {
+            for (i, value) in list.iter().enumerate() {
+                self.entry(value, false, &format!("{path}.conditions[{i}]"))?;
+            }
+        }
         Ok(())
     }
     fn entry(&mut self, data: &Value, function: bool, path: &str) -> io::Result<()> {
@@ -319,42 +646,76 @@ impl Walker<'_> {
                 self.modifiers.get(&id)
             } else {
                 self.predicates.get(&id)
-            }
-            .ok_or_else(|| invalid(path, &id, "unknown reference"))?;
-            self.entry(value, function, &format!("{path} -> {id}"))?;
+            };
+            let result = match value {
+                Some(value) => self.entry(value, function, &format!("{path} -> {id}")),
+                None if self.strict => Err(invalid(path, &id, "unknown reference")),
+                None => Ok(()),
+            };
             self.visiting.remove(&key);
-            return Ok(());
+            return result;
         }
-        if function && data.is_array() {
-            return self.set(data, true, path);
+        if data.is_array() && (function || !self.strict) {
+            return self.set(data, function, path);
         }
-        let kind = data
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid(path, "<missing>", "expected typed loot object"))?;
+        let Some(kind) = data.get("type").and_then(Value::as_str) else {
+            return if self.strict {
+                Err(invalid(path, "<missing>", "expected typed loot object"))
+            } else {
+                Ok(())
+            };
+        };
         let qualified = sunrise_core::identifier::Identifier::parse(kind)
             .map_err(|reason| invalid(path, kind, reason))?
             .to_string();
         let kind = qualified.as_str();
         let builtin = builtin(kind, function);
-        if !builtin {
-            let registry = self
-                .types
-                .registry
-                .as_ref()
-                .filter(|r| r.contains(kind, function))
-                .ok_or_else(|| invalid(path, kind, "unknown loot type"))?;
-            let key = (function, std::ptr::from_ref(data) as usize);
-            let params = match self.validated.entry(key) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
-                    registry
-                        .validate(kind, data, function)
-                        .map_err(|reason| invalid(path, kind, reason))?,
-                ),
+        let registry = self
+            .types
+            .registry
+            .as_ref()
+            .filter(|r| r.contains(kind, function));
+        if !builtin && let Some(registry) = registry {
+            let key = std::ptr::from_ref(data) as usize;
+            let params = if let Some(params) = self
+                .inherited
+                .and_then(|map| map.referenced_params(function, key))
+                .or_else(|| self.rules.referenced_params(function, key))
+            {
+                params
+            } else if function {
+                let decoded = registry
+                    .decode_function(kind, data)
+                    .map_err(|reason| invalid(path, kind, reason))?;
+                let params: Arc<[String]> = decoded.referenced_params.into();
+                self.rules.functions.insert(
+                    key,
+                    BoundEntry {
+                        kind: kind.into(),
+                        location: Arc::from(path),
+                        referenced_params: Arc::clone(&params),
+                        rule: decoded.rule,
+                    },
+                );
+                params
+            } else {
+                let decoded = registry
+                    .decode_condition(kind, data)
+                    .map_err(|reason| invalid(path, kind, reason))?;
+                let params: Arc<[String]> = decoded.referenced_params.into();
+                self.rules.conditions.insert(
+                    key,
+                    BoundEntry {
+                        kind: kind.into(),
+                        location: Arc::from(path),
+                        referenced_params: Arc::clone(&params),
+                        rule: decoded.rule,
+                    },
+                );
+                params
             };
             if let Some(allowed) = self.allowed {
-                for parameter in params {
+                for parameter in params.iter() {
                     let name = parameter.strip_prefix("minecraft:").unwrap_or(parameter);
                     if !allowed.contains(&name) {
                         log::warn!(
@@ -363,15 +724,26 @@ impl Walker<'_> {
                     }
                 }
             }
+        } else if !builtin && self.strict {
+            return Err(invalid(path, kind, "unknown loot type"));
         }
-        if function
-            && (builtin || self.types.conditional(kind))
-            && let Some(condition) = data.get("condition").filter(|value| !value.is_null())
-        {
-            self.entry(condition, false, &format!("{path}.condition"))?;
+        if function && (builtin || self.types.conditional(kind)) {
+            if let Some(condition) = data.get("condition").filter(|value| !value.is_null()) {
+                self.entry(condition, false, &format!("{path}.condition"))?;
+            }
+            if let Some(list) = data.get("conditions").and_then(Value::as_array) {
+                for (i, value) in list.iter().enumerate() {
+                    self.entry(value, false, &format!("{path}.conditions[{i}]"))?;
+                }
+            }
         }
         if builtin {
-            for child in shapes::validate(data, function, kind, path)? {
+            let children = if self.strict {
+                shapes::validate(data, function, kind, path)?
+            } else {
+                shapes::children(data, function, kind)
+            };
+            for child in children {
                 match child.kind {
                     shapes::ChildKind::Function => self.entry(child.value, true, &child.path)?,
                     shapes::ChildKind::Condition => self.entry(child.value, false, &child.path)?,
@@ -391,7 +763,7 @@ impl Walker<'_> {
     fn set(&mut self, data: &Value, function: bool, path: &str) -> io::Result<()> {
         if let Some(list) = data.as_array() {
             for (i, value) in list.iter().enumerate() {
-                if value.is_array() {
+                if value.is_array() && self.strict {
                     return Err(invalid(
                         &format!("{path}[{i}]"),
                         "holder_set",
@@ -416,44 +788,36 @@ fn builtin(kind: &str, function: bool) -> bool {
 }
 
 impl<R: sunrise_core::random::RandomSource> super::Context<'_, R> {
-    pub(super) fn registered_condition(&mut self, kind: &str, data: &Value) -> bool {
-        if !self.data.types.contains(kind, false) {
-            return false;
-        }
-        let snapshot = self.roll_facts(0);
-        match self
-            .data
-            .types
-            .test(kind, data, &snapshot, &mut self.random, self.data)
-        {
-            Ok(value) => value,
-            Err(reason) => {
-                self.data.types.warn_once(kind, false, &reason);
-                false
-            }
-        }
-    }
-    pub(super) fn registered_function(
+    pub(super) fn registered_condition(
         &mut self,
+        bindings: Option<&RuleMap>,
         kind: &str,
         data: &Value,
-        stack: LootStack,
-    ) -> LootStack {
-        if !self.data.types.contains(kind, true) {
-            return stack;
-        }
-        let snapshot = self.roll_facts(0);
-        match self
-            .data
-            .types
-            .apply(kind, data, &snapshot, &mut self.random, self.data, &stack)
-        {
-            Ok(value) => value,
-            Err(reason) => {
-                self.data.types.warn_once(kind, true, &reason);
-                stack
-            }
-        }
+    ) -> bool {
+        let Some(bound) = self.data.bindings.condition(bindings, kind, data) else {
+            return false;
+        };
+        let facts = super::query_context::roll_facts(
+            &self.query,
+            self.place.as_deref(),
+            self.entity,
+            self.biome,
+            self.luck,
+        );
+        bound.test(&facts, &mut self.random, self.data)
+    }
+    pub(super) fn registered_function(&mut self, kind: &str, data: &Value, stack: &mut LootStack) {
+        let Some(bound) = self.data.bindings.function(self.local_bindings, kind, data) else {
+            return;
+        };
+        let facts = super::query_context::roll_facts(
+            &self.query,
+            self.place.as_deref(),
+            self.entity,
+            self.biome,
+            self.luck,
+        );
+        bound.apply(&facts, &mut self.random, self.data, stack);
     }
 }
 

@@ -8,45 +8,60 @@ use std::rc::Rc;
 use sunrise_core::random::LegacyRandom;
 use sunrise_world::loot::query;
 struct QueryCodec;
-impl sunrise_world::loot::types::Registry for QueryCodec {
-    fn contains(&self, kind: &str, function: bool) -> bool {
-        !function && kind == "test:query"
-    }
-    fn validate(&self, _: &str, _: &Value, _: bool) -> std::result::Result<Vec<String>, String> {
-        Ok(Vec::new())
-    }
-    fn conditional(&self, _: &str) -> bool {
-        true
-    }
-    fn apply(
-        &self,
-        _: &str,
-        _: &Value,
-        _: &sunrise_world::loot::LootContext<'_>,
-        _: &mut dyn sunrise_world::loot::types::RollRandom,
-        _: &dyn sunrise_world::loot::LootTags,
-        stack: &sunrise_world::loot::LootStack,
-    ) -> std::result::Result<sunrise_world::loot::LootStack, String> {
-        Ok(stack.clone())
-    }
+struct QueryCondition;
+impl sunrise_world::loot::types::BoundCondition for QueryCondition {
     fn test(
         &self,
-        _: &str,
-        _: &Value,
         ctx: &sunrise_world::loot::LootContext<'_>,
         _: &mut dyn sunrise_world::loot::types::RollRandom,
         _: &dyn sunrise_world::loot::LootTags,
     ) -> std::result::Result<bool, String> {
         OBSERVED_CONTEXT.with(|value| {
-            *value.borrow_mut() = Some((ctx.table_id().to_owned(), ctx.queried_stack.clone()))
+            *value.borrow_mut() = Some((ctx.table_id().to_owned(), ctx.queried_stack.cloned()))
         });
         Ok(true)
     }
 }
+impl sunrise_world::loot::types::Registry for QueryCodec {
+    fn contains(&self, kind: &str, function: bool) -> bool {
+        !function && kind == "test:query"
+    }
+    fn conditional(&self, _: &str) -> bool {
+        true
+    }
+    fn decode_function(
+        &self,
+        kind: &str,
+        _: &Value,
+    ) -> std::result::Result<sunrise_world::loot::types::DecodedFunction, String> {
+        Err(format!("unknown loot function type {kind}"))
+    }
+    fn decode_condition(
+        &self,
+        _: &str,
+        _: &Value,
+    ) -> std::result::Result<sunrise_world::loot::types::DecodedCondition, String> {
+        Ok(sunrise_world::loot::types::DecodedCondition {
+            rule: Arc::new(QueryCondition),
+            referenced_params: Vec::new(),
+        })
+    }
+}
 fn data(tables: Vec<(&str, Value)>) -> Items {
     let mut items = Items::for_tests(HashMap::new());
-    items.loot_types = sunrise_world::loot::types::Types::new(Arc::new(QueryCodec));
-    items.loot = Arc::new(tables.into_iter().map(|(k, v)| (k.into(), v)).collect());
+    let types = sunrise_world::loot::types::Types::new(Arc::new(QueryCodec));
+    let loot: Arc<sunrise_world::loot::LootTables> =
+        Arc::new(tables.into_iter().map(|(k, v)| (k.into(), v)).collect());
+    items.loot_bindings = types
+        .bind_generation(
+            loot.clone(),
+            Arc::clone(&items.predicates),
+            Arc::clone(&items.loot_modifiers),
+            Vec::new(),
+            Default::default(),
+        )
+        .unwrap();
+    items.loot = loot;
     items
 }
 fn table(id: &str) -> Value {
@@ -97,6 +112,7 @@ fn every_root_splits_after_outer_functions_with_one_random_draw() {
                 BlockStateId(0),
                 None,
                 None,
+                None,
                 &mut random,
                 &mut crate::random_sequences::RandomSequences::default(),
                 0,
@@ -115,7 +131,7 @@ fn every_root_splits_after_outer_functions_with_one_random_draw() {
             "adapter {adapter}"
         );
         assert_eq!(
-            query.id().as_deref(),
+            query.id(),
             Some(if adapter == 2 {
                 "neoforge:unknown_loot_table"
             } else if adapter == 5 {
@@ -181,6 +197,7 @@ fn public_block_and_interaction_roots_complete_on_the_selected_random() {
                         BlockStateId(0),
                         None,
                         None,
+                        None,
                         &mut random,
                         &mut sequences,
                         0,
@@ -197,7 +214,7 @@ fn public_block_and_interaction_roots_complete_on_the_selected_random() {
             });
             assert_eq!(drops.len(), 1);
             assert_eq!((&*drops[0].item, drops[0].count), (expected_item, 1));
-            assert_eq!(query.id().as_deref(), Some(id));
+            assert_eq!(query.id(), Some(id));
             assert_eq!(
                 <(u64, Option<f64>)>::from(&random),
                 <(u64, Option<f64>)>::from(&expected_random)
@@ -292,26 +309,36 @@ fn queried_context_and_ability_reach_native_adapter() {
             },
             loot_table_load: |_, _, _| {},
             modify_default_components: |_, _, _| {},
-            loot_ability: |tool, ability, holds| {
-                OBSERVED_ABILITY
-                    .with(|v| *v.borrow_mut() = Some((tool.item.clone(), ability.to_owned())));
-                if tool.item == "test:grant" && ability == "shears_dig" {
+            loot_ability: |tool, ability, facts, _tags, holds| {
+                assert_eq!(
+                    facts.tool.map(LootToolAccess::item_id),
+                    Some(tool.item_id())
+                );
+                OBSERVED_ABILITY.with(|v| {
+                    *v.borrow_mut() = Some((tool.item_id().to_owned(), ability.to_owned()))
+                });
+                if tool.item_id() == "test:grant" && ability == "shears_dig" {
                     *holds = true;
                 }
-                if tool.item == "test:deny" {
+                if tool.item_id() == "test:deny" {
                     *holds = false;
                 }
             },
         })
         .is_ok()
     );
-    let stack = || {
-        super::loot_of(&ItemStack {
-            item: Arc::from("minecraft:stick"),
-            count: 3,
-            damage: 0,
-            extra: None,
-        })
+    let stack = || sunrise_world::loot::LootStack {
+        item: "minecraft:stick".into(),
+        count: 3,
+        damage: 0,
+        enchantments: Vec::new(),
+        potion: None,
+        map: false,
+        exploration: None,
+        ominous_amplifier: None,
+        stew_effects: Vec::new(),
+        names: Vec::new(),
+        components: Vec::new(),
     };
     for (tool, expected) in [
         (None, 0),
@@ -477,7 +504,9 @@ fn queried_ability_tags_use_prepared_item_sets() {
     };
     let context = LootContext {
         query: query::current_query(),
+        place: sunrise_world::loot::current_native_loot_place(),
         items: &items,
+        local_bindings: None,
         block: "",
         properties: &props,
         held: Some(&tool),
@@ -505,51 +534,62 @@ fn queried_ability_tags_use_prepared_item_sets() {
 #[test]
 fn root_modifiers_chain_before_unsigned_caller_consumption() {
     use sunrise_world::loot::{
-        LootStack,
+        LootListAccess,
         global_modifiers::{
             AddTableModifier, DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile,
             ModifierRoll,
         },
     };
-    struct Stage(bool);
+    struct Stage(u8);
     impl ModifierApply for Stage {
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &[LootStack],
-        ) -> std::result::Result<Vec<LootStack>, String> {
-            if self.0 {
-                assert_eq!(
-                    generated
-                        .iter()
-                        .map(|stack| stack.count)
-                        .collect::<Vec<_>>(),
-                    [-3, 200, 200]
-                );
-                return Ok(generated.to_vec());
+            generated: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
+            match self.0 {
+                0 => {
+                    assert_eq!(
+                        (0..generated.len())
+                            .map(|index| generated.get(index).unwrap().count())
+                            .collect::<Vec<_>>(),
+                        [64, 64, 2]
+                    );
+                    assert!(matches!(
+                        roll.facts().table_id(),
+                        "minecraft:entities/zombie"
+                            | "minecraft:blocks/stone"
+                            | "neoforge:unknown_loot_table"
+                    ));
+                    assert_eq!(roll.next_long(), LegacyRandom::new(31).next_long());
+                    let mut inspected = Vec::new();
+                    roll.roll_raw("test:raw", &mut |stack| inspected.push(stack.count()))?;
+                    assert_eq!(inspected, [200]);
+                    generated.get_mut(0).unwrap().set_count(-3);
+                    generated.truncate(1);
+                    roll.append_raw("test:raw", generated)?;
+                    Ok(())
+                }
+                1 => {
+                    generated.get_mut(1).unwrap().set_count(205);
+                    assert!(generated.swap(0, 1));
+                    roll.next_long();
+                    roll.append_raw("test:missing", generated)
+                }
+                _ => {
+                    assert_eq!(
+                        (0..generated.len())
+                            .map(|index| generated.get(index).unwrap().count())
+                            .collect::<Vec<_>>(),
+                        [205, -3, 200]
+                    );
+                    let mut expected = LegacyRandom::new(31);
+                    expected.next_long();
+                    expected.next_long();
+                    assert_eq!(roll.next_long(), expected.next_long());
+                    Ok(())
+                }
             }
-            assert_eq!(
-                generated
-                    .iter()
-                    .map(|stack| stack.count)
-                    .collect::<Vec<_>>(),
-                [64, 64, 2]
-            );
-            assert!(matches!(
-                roll.facts().table_id(),
-                "minecraft:entities/zombie"
-                    | "minecraft:blocks/stone"
-                    | "neoforge:unknown_loot_table"
-            ));
-            assert_eq!(roll.next_long(), LegacyRandom::new(31).next_long());
-            let raw = roll.roll_raw("test:raw")?;
-            assert_eq!(
-                raw.iter().map(|stack| stack.count).collect::<Vec<_>>(),
-                [200]
-            );
-            let mut negative = generated[0].clone();
-            negative.count = -3;
-            Ok(vec![negative, raw[0].clone()])
         }
     }
     let root = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}],
@@ -563,7 +603,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         ("minecraft:blocks/stone", root.clone()),
         ("test:raw", raw),
     ]);
-    let files = ["test:first", "test:add", "test:last"]
+    let files = ["test:first", "test:add", "test:err", "test:last"]
         .into_iter()
         .map(|id| ModifierFile {
             id: id.into(),
@@ -576,14 +616,15 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         &sunrise_world::conditions::LoadConditions::vanilla(),
         |id, _, _| {
             let (priority, apply): (_, Arc<dyn ModifierApply>) = match id {
-                "test:first" => (1001, Arc::new(Stage(false))),
+                "test:first" => (1001, Arc::new(Stage(0))),
                 "test:add" => (
                     1000,
                     Arc::new(AddTableModifier {
                         table: "test:raw".into(),
                     }),
                 ),
-                _ => (999, Arc::new(Stage(true))),
+                "test:err" => (999, Arc::new(Stage(1))),
+                _ => (998, Arc::new(Stage(2))),
             };
             Ok(DecodedModifier {
                 priority,
@@ -595,6 +636,8 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
     ));
     let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:stone":0},"states":[["stone",false,false,"","minecraft:stone"]]}"#[..]).unwrap();
     let mut expected = LegacyRandom::new(31);
+    expected.next_long();
+    expected.next_long();
     expected.next_long();
     for adapter in 0..7 {
         let mut random = LegacyRandom::new(31);
@@ -619,6 +662,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
                 BlockStateId(0),
                 None,
                 None,
+                None,
                 &mut random,
                 &mut crate::random_sequences::RandomSequences::default(),
                 0,
@@ -626,7 +670,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
         };
         assert_eq!(
             drops.iter().map(|stack| stack.count).collect::<Vec<_>>(),
-            [0, 200, 200],
+            [205, 0, 200],
             "adapter {adapter}"
         );
         assert_eq!(
@@ -639,7 +683,7 @@ fn root_modifiers_chain_before_unsigned_caller_consumption() {
 #[test]
 fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unsplit() {
     use sunrise_world::loot::{
-        LootStack,
+        LootListAccess,
         global_modifiers::{
             DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
         },
@@ -649,12 +693,14 @@ fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unspl
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &[LootStack],
-        ) -> std::result::Result<Vec<LootStack>, String> {
+            generated: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
             assert_eq!(
-                generated
-                    .iter()
-                    .map(|stack| (stack.item.as_str(), stack.count))
+                (0..generated.len())
+                    .map(|index| {
+                        let stack = generated.get(index).unwrap();
+                        (stack.item_id(), stack.count())
+                    })
                     .collect::<Vec<_>>(),
                 [
                     ("minecraft:diamond", 64),
@@ -662,16 +708,12 @@ fn block_dynamic_stacks_are_materialized_before_the_pass_and_raw_output_is_unspl
                     ("minecraft:diamond", 2),
                 ]
             );
-            let raw = roll.roll_raw("test:dynamic")?;
-            assert_eq!(
-                raw.iter()
-                    .map(|stack| (stack.item.as_str(), stack.count))
-                    .collect::<Vec<_>>(),
-                [("minecraft:diamond", 130)]
-            );
-            let mut output = generated.to_vec();
-            output.extend(raw);
-            Ok(output)
+            let mut inspected = Vec::new();
+            roll.roll_raw("test:dynamic", &mut |stack| {
+                inspected.push((stack.item_id().to_owned(), stack.count()));
+            })?;
+            assert_eq!(inspected, [("minecraft:diamond".to_owned(), 130)]);
+            roll.append_raw("test:dynamic", generated)
         }
     }
     let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:dynamic","name":"minecraft:sherds"}]}]});
@@ -736,7 +778,7 @@ fn roll_as_caller(
 ) -> (usize, Seen) {
     use std::sync::Mutex;
     use sunrise_world::loot::{
-        LootPlace, LootStack,
+        LootListAccess, LootPlace,
         global_modifiers::{
             DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
         },
@@ -747,15 +789,15 @@ fn roll_as_caller(
         fn apply(
             &self,
             roll: &mut dyn ModifierRoll,
-            generated: &[LootStack],
-        ) -> std::result::Result<Vec<LootStack>, String> {
+            _: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
             let facts = roll.facts();
             *self.0.lock().unwrap() = Some((
                 facts.entity.map(|e| e.kind.clone()),
-                facts.tool.as_ref().map(|t| t.item.clone()),
+                facts.tool.map(|t| t.item_id().to_owned()),
                 facts.place.as_ref().and_then(|p| p.origin),
             ));
-            Ok(generated.to_vec())
+            Ok(())
         }
     }
     let seen = Arc::new(Mutex::new(None));
@@ -893,6 +935,7 @@ fn an_interaction_drop_selects_the_interacting_entity() {
                 BlockStateId(0),
                 actor.map(|a| (a, matcher)),
                 None,
+                None,
                 &mut LegacyRandom::new(0),
                 &mut crate::random_sequences::RandomSequences::default(),
                 0,
@@ -931,6 +974,7 @@ fn an_interaction_drop_copies_components_from_the_interacting_entity() {
             BlockStateId(0),
             actor.map(|a| (a, matcher)),
             None,
+            None,
             &mut LegacyRandom::new(0),
             &mut crate::random_sequences::RandomSequences::default(),
             0,
@@ -947,4 +991,191 @@ fn an_interaction_drop_copies_components_from_the_interacting_entity() {
         )]))
     );
     assert_eq!(roll(None), None, "no interacting entity, nothing to copy");
+}
+
+#[test]
+fn noop_global_modifier_preserves_modelled_components_on_dynamic_drops() {
+    use sunrise_world::loot::{
+        LootListAccess,
+        global_modifiers::{
+            DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
+        },
+    };
+    struct InspectOnly;
+    impl ModifierApply for InspectOnly {
+        fn apply(
+            &self,
+            _: &mut dyn ModifierRoll,
+            generated: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
+            assert_eq!(generated.len(), 1);
+            let stack = generated.get(0).unwrap();
+            assert_eq!(stack.item_id(), "minecraft:written_book");
+            assert!(
+                stack
+                    .components()
+                    .iter()
+                    .any(|(id, value)| id == "minecraft:written_book_content" && value.is_some())
+            );
+            Ok(())
+        }
+    }
+    let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:dynamic","name":"minecraft:contents"}]}]});
+    let mut items = data(vec![("minecraft:blocks/decorated_pot", table)]);
+    items.global_modifiers = Arc::new(GlobalLootModifiers::load(
+        [ModifierFile {
+            id: "test:noop".into(),
+            pack: "test".into(),
+            path: "noop.json".into(),
+            read: Box::new(|| Ok(br#"{"type":"test:noop"}"#.to_vec())),
+        }],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+        |_, _, _| {
+            Ok(DecodedModifier {
+                priority: 1,
+                condition: None,
+                apply: Arc::new(InspectOnly),
+            })
+        },
+        |error| panic!("{error}"),
+    ));
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:decorated_pot":0},"states":[["decorated_pot",false,false,"","minecraft:decorated_pot"]]}"#[..]).unwrap();
+    let mut book = ItemStack::new("minecraft:written_book", 1);
+    book.data_mut().written = Some(crate::item_data::WrittenBook {
+        title: "Field Log".into(),
+        author: "Aria".into(),
+        generation: 2,
+        pages: vec!["Page one".into()],
+        page_tags: Vec::new(),
+        resolved: true,
+    });
+    let expected_written = book.data().unwrap().written.clone();
+    let output = items.block_drops(
+        &registry,
+        BlockStateId(0),
+        BlockLootRoll {
+            dynamic: &[book],
+            ..Default::default()
+        },
+        &mut LegacyRandom::new(9),
+        None,
+    );
+    assert_eq!(output.len(), 1);
+    assert_eq!(
+        output[0].data().and_then(|d| d.written.clone()),
+        expected_written
+    );
+}
+
+#[test]
+fn interact_loot_exposes_block_origin_block_entity_level_interacting_entity_and_tool() {
+    use std::sync::Mutex;
+    use sunrise_world::loot::{
+        LootLevel, LootListAccess, LootPlace,
+        global_modifiers::{
+            DecodedModifier, GlobalLootModifiers, ModifierApply, ModifierFile, ModifierRoll,
+        },
+        with_native_loot_place,
+    };
+    type Observed = (
+        Option<String>,
+        Option<[f64; 3]>,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    struct Watch(Arc<Mutex<Option<Observed>>>);
+    impl ModifierApply for Watch {
+        fn apply(
+            &self,
+            roll: &mut dyn ModifierRoll,
+            _: &mut dyn LootListAccess,
+        ) -> std::result::Result<(), String> {
+            let facts = roll.facts();
+            *self.0.lock().unwrap() = Some((
+                facts.block.map(str::to_owned),
+                facts.place.and_then(|place| place.origin),
+                facts
+                    .place
+                    .and_then(|place| place.block_entity.as_ref())
+                    .is_some(),
+                facts
+                    .place
+                    .and_then(|place| place.level.as_ref())
+                    .map(|level| level.dimension.clone()),
+                facts.interacting_entity.map(|entity| entity.kind.clone()),
+                facts.tool.map(|tool| tool.item_id().to_owned()),
+            ));
+            Ok(())
+        }
+    }
+    let table = json!({"pools":[{"rolls":1,
+        "conditions":[{"type":"neoforge:can_item_perform_ability","ability":"shears_carve"}],
+        "entries":[{"type":"minecraft:item","name":"minecraft:pumpkin_seeds"}]}]});
+    let mut items = data(vec![("minecraft:harvest/pumpkin", table)]);
+    let seen = Arc::new(Mutex::new(None));
+    let watch = seen.clone();
+    items.global_modifiers = Arc::new(GlobalLootModifiers::load(
+        [ModifierFile {
+            id: "test:watch".into(),
+            pack: "test".into(),
+            path: "watch.json".into(),
+            read: Box::new(|| Ok(br#"{"type":"test:watch"}"#.to_vec())),
+        }],
+        &sunrise_world::conditions::LoadConditions::vanilla(),
+        move |_, _, _| {
+            Ok(DecodedModifier {
+                priority: 1,
+                condition: None,
+                apply: Arc::new(Watch(watch.clone())),
+            })
+        },
+        |error| panic!("{error}"),
+    ));
+    let registry = BlockRegistry::from_facts_json(&br#"{"defaults":{"minecraft:pumpkin":0},"states":[["pumpkin",false,false,"","minecraft:pumpkin"]]}"#[..]).unwrap();
+    let player = sunrise_world::loot::LootEntity::new("minecraft:player");
+    let matcher: &EntityMatcher = &|_, _| true;
+    let shears = ItemStack::new("minecraft:shears", 1);
+    let place = LootPlace {
+        origin: Some([4.5, 64.5, -2.5]),
+        block_entity: Some(sunrise_core::nbt::Tag::compound([(
+            "id",
+            sunrise_core::nbt::Tag::String("minecraft:beehive".into()),
+        )])),
+        level: Some(LootLevel {
+            dimension: "minecraft:overworld".into(),
+            game_time: 100,
+            day_time: 20,
+            raining: false,
+            thundering: false,
+        }),
+        ..Default::default()
+    };
+    let drops = with_native_loot_place(place, || {
+        items.interact_loot(
+            "minecraft:harvest/pumpkin",
+            &registry,
+            BlockStateId(0),
+            Some((&player, matcher)),
+            Some(&shears),
+            None,
+            &mut LegacyRandom::new(1),
+            &mut crate::random_sequences::RandomSequences::default(),
+            0,
+        )
+    });
+    assert_eq!(drops.len(), 1);
+    assert_eq!(&*drops[0].item, "minecraft:pumpkin_seeds");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some((
+            Some("minecraft:pumpkin".to_owned()),
+            Some([4.5, 64.5, -2.5]),
+            true,
+            Some("minecraft:overworld".to_owned()),
+            Some("minecraft:player".to_owned()),
+            Some("minecraft:shears".to_owned()),
+        ))
+    );
 }

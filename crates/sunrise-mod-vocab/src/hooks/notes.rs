@@ -2287,7 +2287,7 @@ registration path.
 
 - `native_inventory(uuid, kind)`: a player's inventory (`Player`: 41 slots, main, armour, off hand; `Ender`: 27), live when they are on the server, else from their file, never while they log in, are dead, or have their inventory swapped out. Other guests' live inventories remain available during a turn; `native_move_stack((from, kind, slot), expected, (to, kind))`: one stack moved, checked against `expected`, where it fits whole, or nothing moves (at most one side a file, written first); `native_send_map(uuid, map_id, colors)`: a 128 x 128 map picture sent to a player, for a filled map with that `map_id`. What an operator's `/invsee` and a price chart on a map need.
 
-- A loot table's custom function or condition uses a codec registered by id through `Registrar::register_loot_function_type` or `Registrar::register_loot_condition_type`. Data validates before publication; unknown types refuse the load. Callbacks receive read-only context facts, authoritative tags and the actual evaluation random. Entry, pool and table order is preserved in both loot evaluators.
+- A loot table's custom function or condition uses a load-time codec (`ModLootFunctionCodec` / `ModLootConditionCodec`) registered by id through `Registrar::register_loot_function_type` or `Registrar::register_loot_condition_type`. Each entry decodes once at load/preparation time into a bound `ModLootFunction` or `ModLootCondition`; unknown types or decode errors refuse the load. Bound rules receive a scoped `&mut LootStackEditor<'_>` (functions), borrowed `LootParamsView` (`LootTypeContext::params()`), authoritative tags (`tags()`) and the actual evaluation random (`random()`) without re-reading JSON at roll time. Entry, pool and table order is preserved in both loot evaluators.
 
 - A server's levels opening and closing, on the single player server thread and on a dedicated server: `level_load(dimension)` when a level opens, before any of its chunks (NeoForge's `LevelEvent.Load`), and `level_unload(dimension)` once it has closed, after its last save (`LevelEvent.Unload`). The Overworld, Nether and End fire `level_load` in that order during startup, before `server_started`. The Nether and End can still close when idle and fire `level_load` again when reopened. Every level still open closes when the server stops, before `WorldCloseFinal`, or when its open or its loop fails, so each load has one unload.
 
@@ -2346,11 +2346,13 @@ registration path.
 
 - Whom an experience orb follows (`XpOrbTargetingEvent`): `xp_orb_targeting(orb, scan_distance, following)`, on a server, for each orb as it ticks. `following` starts as the nearest living player within `scan_distance` (8) blocks who isn't a spectator, or `None`; set another player, or `None` to follow no one. The orb goes only for a living player who isn't a spectator and is in its level, and moves only once they are within 8 blocks. An orb that follows no one gets vanilla's push out of a block it is stuck in. Sunrise looks for the nearest player on every orb tick, where vanilla keeps the player it follows while they stay within 8 blocks, so the hook is asked every tick for each orb. Clients still predict the orb's flight towards the nearest player; the server's position wins.
 
-- Where a loot roll happens, for a mod's own loot types: `LootTypeContext::snapshot().place`
-  brings `LootContextParams.ORIGIN` (a broken block's centre, a dead mob's position), `BLOCK_ENTITY` (the broken
-  block's entity as it was, saved with its id, position and `Items`) and the level (its dimension, game time, time of day, rain and
-  thunder), on a block broken by a player or an explosion and on a mob's death loot; None on the other rolls. The game sets it
-  around a roll with `with_native_loot_place`.
+- Where a loot roll happens, for custom loot types and global loot modifiers: `LootParamsView`
+  (borrowed from `LootTypeContext::params()` or `LootModifierContext::params()`) exposes `origin()`
+  (`LootContextParams.ORIGIN`: a broken block's centre, a dead mob's position), `block_entity()`
+  (`BLOCK_ENTITY`: the broken block's entity as it was, saved with its id, position and `Items`),
+  and `level()` (a `LootLevelView` lending its dimension, game time, time of day, rain and thunder)
+  on a block broken by a player or an explosion, on a mob's death loot, and on rolls that supply a
+  level place; `None` when not supplied. The game sets it around a roll with `with_native_loot_place`.
 
 - How a mod block ignites on either side and burns on the server. `fire_odds(dimension, state, pos, face, odds)` answers
   `FireBlock`'s flammability table (`FireBlock.setFlammable(block, igniteOdds, burnOdds)`) before vanilla's table, for the block at `pos` seen from its side `face` (the one facing the fire, or the air fire may take): put

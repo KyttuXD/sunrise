@@ -18,20 +18,34 @@ impl Hooks for TagReader {
         );
     }
 }
-impl ModLootFunction for TagReader {
-    fn validate(&self, _: &LootEntryData) -> Result<(), String> {
-        Ok(())
+struct TagReaderRule {
+    tag: String,
+}
+impl mod_api::ModLootFunctionCodec for TagReader {
+    fn decode(
+        &self,
+        data: &serde_json::Value,
+    ) -> Result<std::sync::Arc<dyn ModLootFunction>, String> {
+        Ok(std::sync::Arc::new(TagReaderRule {
+            tag: data["tag"]
+                .as_str()
+                .unwrap_or("test:ingredients")
+                .to_owned(),
+        }))
     }
+}
+impl ModLootFunction for TagReaderRule {
     fn apply(
         &self,
-        data: &LootEntryData,
-        mut stack: LootStack,
+        stack: &mut mod_api::LootStackEditor<'_>,
         context: &mut dyn LootTypeContext,
-    ) -> Result<LootStack, String> {
+    ) -> Result<(), String> {
+        assert!(context.params().tool().is_none());
         let tags = context.tags();
-        let id = data.value()["tag"].as_str().unwrap_or("test:ingredients");
-        let tag = tags.key(&mod_api::Identifier::parse(id).unwrap()).unwrap();
-        stack.count = match tags.items(tag) {
+        let tag = tags
+            .key(&mod_api::Identifier::parse(&self.tag).unwrap())
+            .unwrap();
+        let count = match tags.items(tag) {
             mod_api::TagMembers::Members(members) if members.is_empty() => 1,
             mod_api::TagMembers::Members(members) => {
                 assert_eq!(
@@ -47,14 +61,20 @@ impl ModLootFunction for TagReader {
             mod_api::TagMembers::Unavailable => panic!("loot has a loaded item table"),
             other => panic!("unexpected tag lookup result: {other:?}"),
         };
-        Ok(stack)
+        stack.set_count(count);
+        Ok(())
+    }
+}
+impl mod_api::ModLootConditionCodec for TagReader {
+    fn decode(
+        &self,
+        _: &serde_json::Value,
+    ) -> Result<std::sync::Arc<dyn mod_api::ModLootCondition>, String> {
+        Ok(std::sync::Arc::new(TagReader))
     }
 }
 impl mod_api::ModLootCondition for TagReader {
-    fn validate(&self, _: &LootEntryData) -> Result<(), String> {
-        Ok(())
-    }
-    fn test(&self, _: &LootEntryData, context: &mut dyn LootTypeContext) -> Result<bool, String> {
+    fn test(&self, context: &mut dyn LootTypeContext) -> Result<bool, String> {
         let tags = context.tags();
         let tag = tags
             .key(&mod_api::Identifier::parse("test:ingredients").unwrap())

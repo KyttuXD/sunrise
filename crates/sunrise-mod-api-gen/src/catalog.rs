@@ -75,6 +75,8 @@ pub enum PhaseContext {
     ClientSetup,
     /// Repository discovery before any world is opened.
     PackDiscovery,
+    /// An item ability check from gameplay (`Host` + tags) or a loot predicate (tags + `LootParamsView`).
+    ItemAbility,
 }
 
 /// How a game hook borrows its receiver. Free dispatchers have no game receiver.

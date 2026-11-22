@@ -32,7 +32,7 @@ impl dyn Registrar + '_ {
 pub(crate) struct LootModifierSerializerInfo {
     pub(crate) id: Box<str>,
     pub(crate) owner: &'static str,
-    pub(crate) owner_index: usize,
+    pub(crate) callback_owner: crate::__private::game::CallbackOwner,
     pub(crate) serializer: Arc<dyn crate::GlobalLootModifierSerializer>,
 }
 
@@ -47,8 +47,7 @@ pub(crate) fn loot_modifier_serializer_list()
                 (
                     info.id.to_string(),
                     crate::loot_modifiers::owned_serializer(
-                        info.owner,
-                        info.owner_index,
+                        info.callback_owner.clone(),
                         info.serializer.clone(),
                     ),
                 )

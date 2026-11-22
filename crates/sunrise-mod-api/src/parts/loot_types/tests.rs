@@ -1,24 +1,28 @@
 use super::*;
-use crate::{LootEntryData, LootStack, LootTypeContext};
+use crate::{LootStackEditor, LootTypeContext};
 struct Codec;
-impl crate::ModLootFunction for Codec {
-    fn validate(&self, _: &LootEntryData) -> Result<(), String> {
-        Ok(())
-    }
-    fn apply(
-        &self,
-        _: &LootEntryData,
-        stack: LootStack,
-        _: &mut dyn LootTypeContext,
-    ) -> Result<LootStack, String> {
-        Ok(stack)
+impl crate::ModLootFunctionCodec for Codec {
+    fn decode(&self, _: &serde_json::Value) -> Result<Arc<dyn crate::ModLootFunction>, String> {
+        Ok(Arc::new(Rule))
     }
 }
-impl crate::ModLootCondition for Codec {
-    fn validate(&self, _: &LootEntryData) -> Result<(), String> {
+impl crate::ModLootConditionCodec for Codec {
+    fn decode(&self, _: &serde_json::Value) -> Result<Arc<dyn crate::ModLootCondition>, String> {
+        Ok(Arc::new(Rule))
+    }
+}
+struct Rule;
+impl crate::ModLootFunction for Rule {
+    fn apply(
+        &self,
+        _: &mut LootStackEditor<'_>,
+        _: &mut dyn LootTypeContext,
+    ) -> Result<(), String> {
         Ok(())
     }
-    fn test(&self, _: &LootEntryData, _: &mut dyn LootTypeContext) -> Result<bool, String> {
+}
+impl crate::ModLootCondition for Rule {
+    fn test(&self, _: &mut dyn LootTypeContext) -> Result<bool, String> {
         Ok(true)
     }
 }

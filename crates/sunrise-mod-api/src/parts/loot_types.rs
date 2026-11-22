@@ -45,7 +45,7 @@ impl LootTypesRegistrar for PartRegistrar {
     fn add_loot_function_type(
         &mut self,
         id: &crate::Identifier,
-        codec: Arc<dyn crate::ModLootFunction>,
+        codec: Arc<dyn crate::ModLootFunctionCodec>,
     ) {
         let Some(id) = self.loot_type_id(id, false) else {
             return;
@@ -53,14 +53,17 @@ impl LootTypesRegistrar for PartRegistrar {
         self.loot_function_types.push(LootFunctionTypeInfo {
             id,
             owner: self.mod_id,
-            owner_index: self.mod_index,
+            callback_owner: mod_vocab::__private::parts_installation::callback_owner_for_index(
+                self.mod_id,
+                self.mod_index,
+            ),
             codec,
         });
     }
     fn add_loot_condition_type(
         &mut self,
         id: &crate::Identifier,
-        codec: Arc<dyn crate::ModLootCondition>,
+        codec: Arc<dyn crate::ModLootConditionCodec>,
     ) {
         let Some(id) = self.loot_type_id(id, true) else {
             return;
@@ -68,7 +71,10 @@ impl LootTypesRegistrar for PartRegistrar {
         self.loot_condition_types.push(LootConditionTypeInfo {
             id,
             owner: self.mod_id,
-            owner_index: self.mod_index,
+            callback_owner: mod_vocab::__private::parts_installation::callback_owner_for_index(
+                self.mod_id,
+                self.mod_index,
+            ),
             codec,
         });
     }

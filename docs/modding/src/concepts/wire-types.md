@@ -53,7 +53,7 @@ variants and `Box`/`Arc` values (`MAX_DEPTH`). Collection iteration, `Option`
 and tuples do not consume a level. The reader returns `WireError::Depth` before
 entering level 33; the writer records the same error. Always check `Writer::error`
 before sending its bytes. This is a transport budget for unbounded mod-defined
-trees, including ingredients, loot vehicles and recipe slot displays.
+trees, including ingredients and recipe slot displays.
 
 Typed payloads use the same encoding with their own limits. They count lists, present
 options, boxes, shared pointers, NBT containers and explicit recursion, not derived record

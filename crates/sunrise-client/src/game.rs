@@ -2731,6 +2731,9 @@ struct GameLevel<'w> {
     /// `LootContextParams.INTERACTING_ENTITY` of a block-interaction drop: the
     /// player whose click `use_without_item` runs for.
     interacting: Option<sunrise_world::loot::LootEntity>,
+    /// `LootContextParams.TOOL` of a block-interaction drop, when an item
+    /// triggered the interaction (`None` for bare-hand `use_without_item`).
+    interacting_tool: Option<ItemStack>,
     /// What a location predicate of such a drop reads beyond the level's own
     /// fields (`blocks::location_world`).
     location: location_world::LocationRefs<'w>,
@@ -5489,6 +5492,7 @@ impl Game<'_> {
             drop_tool: None,
             drop_entity: None,
             interacting: None,
+            interacting_tool: None,
             location: location_world::LocationRefs {
                 dimension: self.dim.id(),
                 end: &self.end,

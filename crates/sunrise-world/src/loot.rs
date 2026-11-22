@@ -31,7 +31,9 @@ mod query_context;
 mod root;
 #[path = "loot_types.rs"]
 pub mod types;
+mod views;
 pub use fill::ContainerLootContext;
+pub use query::LootAbilityTool;
 #[path = "loot/tags.rs"]
 mod loot_tags;
 pub use loot_tags::LootTags;
@@ -122,49 +124,38 @@ impl<'a> PackOverlay<'a> {
     }
 }
 
-/// The tool a loot context names: its item id and enchantments.
-#[derive(Clone)]
-pub struct LootTool {
-    pub item: String,
-    pub enchantments: Vec<(String, i32)>,
-}
+/// Engine readers and editors for live loot parameters, candidates and output lists.
+pub use mod_api::__private::{
+    LootListAccess, LootStackAccess, LootStackEditAccess, LootToolAccess,
+};
+pub use mod_api::{ExplorationMap as ApiExplorationMap, LootExplorationView};
 
-/// What a mod's own loot kinds see of the roll: the entity, the damage,
-/// the player who killed it, the tool, the block, the luck, the biome,
-/// where the roll happens. Registered types borrow the evaluator's actual random. The tool and
-/// block are filled by the items engine (block drops, entity drops,
-/// loot_table, interact_loot); the entity, damage and player by the main
-/// loot engine; each is None in the other. A table without a mod's kinds
-/// draws nothing and stays bit-for-bit the same.
+/// Parameters borrowed from either evaluator for the duration of a loot operation.
+/// Randomness is lent separately from these immutable inputs.
+#[derive(Clone, Copy, Default)]
 pub struct LootContext<'a> {
-    /// First id wins; written after the root and all nested rolls, before #1270's modifier pass.
-    /// Unset reads as `UNKNOWN_LOOT_TABLE`; nested rolls never write it.
-    pub queried_table_id: Option<String>,
-    /// Stack whose data is queried; unchanged through nested rolls, absent in existing callers.
-    pub queried_stack: Option<LootStack>,
-    /// The entity the table names (`this`), if any.
+    /// First id wins; the root sets it after nested rolls and before global modifiers.
+    pub queried_table_id: Option<&'a str>,
+    /// The queried stack, shared by nested rolls.
+    pub queried_stack: Option<&'a LootStack>,
+    /// `THIS_ENTITY`, when supplied.
     pub entity: Option<&'a LootEntity>,
-    /// The damage that killed it, if any.
+    /// `DAMAGE_SOURCE`, when supplied.
     pub damage: Option<&'a LootDamage>,
-    /// The player whose kill dropped the table (`LootEntity`), if any.
+    /// `LAST_DAMAGE_PLAYER`, when supplied.
     pub player: Option<&'a LootEntity>,
-    /// The tool used, if any. The items engine fills it (all of its
-    /// tables: block drops, entity drops, loot_table, interact_loot);
-    /// the main loot engine has no tool in its context.
-    pub tool: Option<LootTool>,
-    /// The block a block-drop table breaks, if any. The items engine
-    /// fills it; the main loot engine has no block in its context.
+    /// `INTERACTING_ENTITY`, when supplied.
+    pub interacting_entity: Option<&'a LootEntity>,
+    /// `TOOL`, when supplied.
+    pub tool: Option<&'a dyn LootToolAccess>,
+    /// Block identifier for a block or block-interaction roll.
     pub block: Option<&'a str>,
     /// `LootContext.getLuck`.
     pub luck: f32,
-    /// The biome the roll is in, if any.
+    /// The biome the roll is in, if supplied.
     pub biome: Option<&'a str>,
-    /// Zero for registered codecs: their scoped context lends the actual roll random.
-    pub seed: i64,
-    /// Where the roll happens: the origin, the block entity and the level,
-    /// when the game rolled the table at a place (a broken block's drops,
-    /// a mob's death loot); None for the other rolls. Either engine fills it.
-    pub place: Option<Arc<LootPlace>>,
+    /// The roll's already scoped origin, block entity and level, if supplied.
+    pub place: Option<&'a LootPlace>,
 }
 
 /// One generated item stack.
@@ -265,7 +256,7 @@ struct Enchantment {
     /// `slots`: the equipment slot groups the enchantment works in.
     slots: Vec<String>,
     /// `effects` (equipment_drops and others).
-    effects: Value,
+    effects: Arc<Value>,
 }
 impl Enchantment {
     fn min_cost(&self, level: i32) -> i32 {
@@ -281,13 +272,13 @@ mod holder_sets;
 
 /// Loot tables, items, enchantments and the tags they reference.
 pub struct LootData {
-    holder_sets: holder_sets::Binding,
-    types: types::Types,
+    holder_sets: Arc<holder_sets::Binding>,
+    bindings: types::Bindings,
     component_defaults: Arc<HashMap<String, Compound>>,
     copies_entity_nbt: bool,
     tables: Arc<LootTables>,
     global_modifiers: Arc<global_modifiers::GlobalLootModifiers>,
-    modifiers: HashMap<String, Value>,
+    modifiers: Arc<HashMap<String, Value>>,
     predicates: Arc<HashMap<String, Value>>,
     items: HashMap<String, ItemFacts>,
     /// Enchantments in registry (identifier) order.
@@ -297,7 +288,7 @@ pub struct LootData {
     primary_answers: crate::enchantment_answers::AnswerTable,
     support_answers: crate::enchantment_answers::AnswerTable,
     /// Bound tags by registry and tag ID.
-    tags: loot_tags::BoundTags,
+    tags: Arc<loot_tags::BoundTags>,
     /// Smelting recipes in recipe id order: (ingredient, result, result count).
     smelting: Vec<(Value, String, i32)>,
 }
@@ -706,6 +697,27 @@ fn cost(v: &Value) -> (i32, i32) {
     )
 }
 
+/// Selected loot resources awaiting the owning server's load hooks and codec binding.
+pub struct LootLoadCandidate {
+    data: LootData,
+    types: types::Types,
+}
+
+impl LootLoadCandidate {
+    pub fn component_defaults(&self) -> &Arc<HashMap<String, Compound>> {
+        self.data.component_defaults()
+    }
+
+    /// Apply native edits before normalizing and binding the final immutable documents.
+    pub fn prepare(
+        mut self,
+        native: Option<&crate::native_load_context::LoadContext>,
+    ) -> io::Result<LootData> {
+        self.data.prepare_types(&self.types, native)?;
+        Ok(self.data)
+    }
+}
+
 impl LootData {
     /// Load tables, modifiers, predicates, tags and recipes from `data/`,
     /// and item metadata from the owning load's default-component snapshot.
@@ -724,16 +736,29 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
     ) -> io::Result<Self> {
-        Self::load_generation(root, overlay, defaults, types, None)
+        Self::load_generation(root, overlay, defaults, types, None)?.prepare(None)
     }
 
-    /// Load server loot with the damage catalog already bound for this generation.
+    /// Load server loot against its damage catalog, applying native edits, when present,
+    /// before binding the immutable generation's rules.
     pub fn load_with_damage(
         root: &Path,
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
         damage: &crate::damage_source::Catalog,
+        native: Option<&crate::native_load_context::LoadContext>,
     ) -> io::Result<Self> {
+        Self::load_candidate_with_damage(root, overlay, defaults, damage)?.prepare(native)
+    }
+
+    /// Read the server's loot resources while the other dependent registries are staged.
+    /// This candidate cannot be rolled until the owner prepares it.
+    pub fn load_candidate_with_damage(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &crate::item_defaults::ItemDefaults,
+        damage: &crate::damage_source::Catalog,
+    ) -> io::Result<LootLoadCandidate> {
         Self::load_generation(
             root,
             overlay,
@@ -749,8 +774,8 @@ impl LootData {
         defaults: &crate::item_defaults::ItemDefaults,
         types: types::Types,
         damage: Option<&crate::damage_source::Catalog>,
-    ) -> io::Result<Self> {
-        let mut loaded = Self::load_table_candidate(root, overlay, defaults, types, damage)?;
+    ) -> io::Result<LootLoadCandidate> {
+        let mut loaded = Self::load_table_candidate(root, overlay, defaults, &types, damage)?;
         let mut recipes = HashMap::new();
         load_kind(&root.join("data"), "recipe", &mut recipes)?;
         overlay_map(overlay, "recipe", &mut recipes);
@@ -782,8 +807,10 @@ impl LootData {
                 &loaded.tags,
             )?;
         }
-        loaded.prepare_types()?;
-        Ok(loaded)
+        Ok(LootLoadCandidate {
+            data: loaded,
+            types,
+        })
     }
 
     /// Prepare shared loot tables, predicates and modifiers for an item catalog.
@@ -795,9 +822,9 @@ impl LootData {
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
     ) -> io::Result<Self> {
-        let mut loaded =
-            Self::load_table_candidate(root, overlay, defaults, types::Types::capture(), None)?;
-        loaded.prepare_types()?;
+        let types = types::Types::capture();
+        let mut loaded = Self::load_table_candidate(root, overlay, defaults, &types, None)?;
+        loaded.prepare_types(&types, None)?;
         Ok(loaded)
     }
 
@@ -805,7 +832,7 @@ impl LootData {
         root: &Path,
         overlay: &PackOverlay,
         defaults: &crate::item_defaults::ItemDefaults,
-        types: types::Types,
+        types: &types::Types,
         damage: Option<&crate::damage_source::Catalog>,
     ) -> io::Result<Self> {
         let all = root.join("data");
@@ -859,7 +886,7 @@ impl LootData {
                         .filter_map(Value::as_str)
                         .map(str::to_owned)
                         .collect(),
-                    effects: e["effects"].clone(),
+                    effects: Arc::new(e["effects"].clone()),
                 }
             })
             .collect();
@@ -931,19 +958,19 @@ impl LootData {
             copies_entity_nbt: false,
             component_defaults: copy::component_defaults(defaults)
                 .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))?,
-            types,
+            bindings: Default::default(),
             tables,
             global_modifiers: Arc::default(),
-            modifiers,
+            modifiers: Arc::new(modifiers),
             predicates: Arc::new(predicates),
             items,
             enchantments,
             primary_answers: Default::default(),
             support_answers: Default::default(),
-            tags,
+            tags: Arc::new(tags),
             smelting: Vec::new(),
         };
-        binding.snapshot(&mut loaded)?;
+        binding.snapshot(&mut loaded, types)?;
         // Both enchantment engines bind the same item holder identities before
         // a part can leave an unchanged default out of the shared answer table.
         for enchantment in &mut loaded.enchantments {
@@ -960,7 +987,7 @@ impl LootData {
                 }
             }
         }
-        loaded.holder_sets = binding;
+        loaded.holder_sets = Arc::new(binding);
         Ok(loaded)
     }
     /// Whether any loaded function may request an entity's full saved NBT.
@@ -1043,22 +1070,21 @@ impl LootData {
     /// attacker's `equipment_drops` effects (Looting) applied to `chance`.
     pub fn equipment_drop_chance(&self, params: &EntityLootParams, chance: f32) -> f32 {
         // Enchantment.damageContext: no luck and no killing player.
-        let damage_params = EntityLootParams {
-            this: params.this.clone(),
-            damage: params.damage.clone(),
+        let damage_params = EntityFacts {
             player: None,
-            luck: 0.0,
-            attacker: params.attacker.clone(),
+            ..params.into()
         };
         let mut c = Context {
             query: query::current_query(),
+            place: current_native_loot_place(),
             data: self,
+            local_bindings: None,
             random: LegacyRandom::new(0),
             biome: None,
             visited: Vec::new(),
             luck: 0.0,
             open_water: None,
-            entity: Some(&damage_params),
+            entity: Some(damage_params),
             enchanted_level: None,
         };
         let mut chance = chance;
@@ -1151,13 +1177,15 @@ impl LootData {
         };
         let mut c = Context {
             query: query::current_query(),
+            place: current_native_loot_place(),
             data: self,
+            local_bindings: None,
             random: random.clone(),
             biome: None,
             visited: Vec::new(),
             luck: params.luck,
             open_water: None,
-            entity: Some(params),
+            entity: Some(params.into()),
             enchanted_level,
         };
         let items = c.roll_root(Some(table), json);
@@ -1293,7 +1321,9 @@ fn shuffle_and_split(result: &mut Vec<LootStack>, slots: usize, random: &mut imp
 
 struct Context<'a, R> {
     query: std::rc::Rc<query::LootQuery>,
+    place: Option<Arc<LootPlace>>,
     data: &'a LootData,
+    local_bindings: Option<&'a types::RuleMap>,
     random: R,
     biome: Option<&'a str>,
     visited: Vec<String>,
@@ -1302,25 +1332,40 @@ struct Context<'a, R> {
     /// A fishing hook's `is_open_water` for `entity_properties` (None: no entity).
     open_water: Option<bool>,
     /// The entity, damage source and killer parameters.
-    entity: Option<&'a EntityLootParams>,
+    entity: Option<EntityFacts<'a>>,
     /// Asked for a death's enchantment levels; None for every other roll.
     enchanted_level: Option<&'a mut EnchantedLevel<'a, R>>,
 }
 type Sink<'s, R> = dyn FnMut(&mut Context<'_, R>, LootStack) + 's;
+
+#[derive(Clone, Copy)]
+struct EntityFacts<'a> {
+    this: &'a LootEntity,
+    damage: Option<&'a LootDamage>,
+    player: Option<&'a LootEntity>,
+    attacker: Option<&'a LootEntity>,
+}
+
+impl<'a> From<&'a EntityLootParams> for EntityFacts<'a> {
+    fn from(params: &'a EntityLootParams) -> Self {
+        Self {
+            this: &params.this,
+            damage: params.damage.as_ref(),
+            player: params.player.as_ref(),
+            attacker: params.attacker.as_ref(),
+        }
+    }
+}
 
 impl<R: RandomSource> Context<'_, R> {
     /// A `LootContext.EntityTarget` parameter.
     fn target(&self, name: &str) -> Option<&LootEntity> {
         let p = self.entity?;
         match name {
-            "this" => Some(&p.this),
-            "attacker" => p
-                .damage
-                .as_ref()
-                .and_then(|d| d.source.as_ref())
-                .or(p.attacker.as_ref()),
-            "direct_attacker" => p.damage.as_ref()?.direct.as_ref(),
-            "attacking_player" => p.player.as_ref(),
+            "this" => Some(p.this),
+            "attacker" => p.damage.and_then(|d| d.source.as_ref()).or(p.attacker),
+            "direct_attacker" => p.damage?.direct.as_ref(),
+            "attacking_player" => p.player,
             _ => None,
         }
     }
@@ -1429,33 +1474,54 @@ impl<R: RandomSource> Context<'_, R> {
         }
     }
     fn condition(&mut self, c: &Value) -> bool {
-        if let Some(holds) =
-            query::condition(c, &self.query, self.query.tool.as_ref(), |item, ability| {
+        self.condition_with_bindings(c, self.local_bindings)
+    }
+    fn condition_with_bindings(&mut self, c: &Value, bindings: Option<&types::RuleMap>) -> bool {
+        if let Some(holds) = query::condition(
+            c,
+            &self.query,
+            self.query
+                .tool
+                .as_ref()
+                .map(|tool| tool as &dyn query::LootAbilityTool),
+            || {
+                query_context::roll_facts(
+                    &self.query,
+                    self.place.as_deref(),
+                    self.entity,
+                    self.biome,
+                    self.luck,
+                )
+            },
+            self.data,
+            |item, ability| {
                 crate::native_load_hooks::item_ability_default(item, ability, self.data)
-            })
-        {
+            },
+        ) {
             return holds;
         }
         let data = self.data;
         match c {
             Value::Null => true,
-            Value::Array(list) => list.iter().all(|c| self.condition(c)),
+            Value::Array(list) => list
+                .iter()
+                .all(|c| self.condition_with_bindings(c, bindings)),
             Value::String(id) => match data.predicates.get(id) {
-                Some(p) => self.condition(p),
+                Some(p) => self.condition_with_bindings(p, None),
                 None => false,
             },
             Value::Object(_) => match c["type"].as_str().unwrap_or("") {
-                "minecraft:inverted" => !self.condition(&c["term"]),
+                "minecraft:inverted" => !self.condition_with_bindings(&c["term"], bindings),
                 "minecraft:all_of" => c["terms"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .all(|t| self.condition(t)),
+                    .all(|t| self.condition_with_bindings(t, bindings)),
                 "minecraft:any_of" => c["terms"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .any(|t| self.condition(t)),
+                    .any(|t| self.condition_with_bindings(t, bindings)),
                 // FishingHookPredicate: the only entity property a hook has.
                 "minecraft:entity_properties"
                     if self.open_water.is_some()
@@ -1486,7 +1552,7 @@ impl<R: RandomSource> Context<'_, R> {
                 }
                 // DamageSourcePredicate (false without a damage source).
                 "minecraft:damage_source_properties" => {
-                    let Some(damage) = self.entity.and_then(|p| p.damage.as_ref()) else {
+                    let Some(damage) = self.entity.and_then(|p| p.damage) else {
                         return false;
                     };
                     let p = &c["predicate"];
@@ -1533,7 +1599,7 @@ impl<R: RandomSource> Context<'_, R> {
                 }
                 // A validated registered condition runs in the current roll's order.
                 k if k.contains(':') && !k.starts_with("minecraft:") => {
-                    self.registered_condition(k, c)
+                    self.registered_condition(bindings, k, c)
                 }
                 // An unknown type fails, as in items.rs `condition`.
                 _ => false,
@@ -1554,7 +1620,7 @@ impl<R: RandomSource> Context<'_, R> {
             Value::Object(_) => {
                 if self
                     .data
-                    .types
+                    .bindings
                     .conditional(m["type"].as_str().unwrap_or(""))
                     && !m["condition"].is_null()
                     && !self.condition(&m["condition"])
@@ -2058,7 +2124,7 @@ impl<R: RandomSource> Context<'_, R> {
             }
             // A validated registered function transforms only this stack.
             k if k.contains(':') && !k.starts_with("minecraft:") => {
-                stack = self.registered_function(k, f, stack);
+                self.registered_function(k, f, &mut stack);
             }
             // Lore and other data without random draws.
             _ => {}
@@ -2410,7 +2476,7 @@ mod namespace_tests {
         // retains the damage registry and binds only these new tag files.
         let overlay = PackOverlay::new(&files);
         let damage = damage.reload_tags(&root, &overlay).unwrap();
-        let loot = LootData::load_with_damage(&root, &overlay, &defaults, &damage).unwrap();
+        let loot = LootData::load_with_damage(&root, &overlay, &defaults, &damage, None).unwrap();
         let params = EntityLootParams {
             damage: Some(LootDamage {
                 kind: "test:hit".into(),
@@ -3263,7 +3329,7 @@ mod native_kinds_tests {
             min_cost: (0, 0),
             max_cost: (100, 0),
             slots: vec![],
-            effects: Value::Null,
+            effects: Arc::new(Value::Null),
         });
         data
     }
@@ -3355,7 +3421,7 @@ mod native_kinds_tests {
                     min_cost: (0, 0),
                     max_cost: (100, 0),
                     slots: vec![],
-                    effects: Value::Null,
+                    effects: Arc::new(Value::Null),
                 })
                 .collect();
             let total: i64 = weights.iter().map(|&w| i64::from(w)).sum();
