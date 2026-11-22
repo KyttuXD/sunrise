@@ -1,15 +1,18 @@
 //! The `client_chat` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
 
 pub trait Hooks {
-    /// NeoForge's `ClientChatEvent`: a client is about to send `message`.
-    /// `original_message` is immutable; change `message` or set `cancel` to
-    /// prevent sending.
+    /// NeoForge's `ClientChatEvent`: the play listener is about to send a chat
+    /// message, from the chat box or `NetworkClientHost::send_chat`. Edits are
+    /// applied before signing. Return `Flow::Cancel` or clear `message` to send
+    /// nothing. `original_message` stays unchanged. Does not run for commands.
     #[hook(
         dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "cancel",
         neoforge = "ClientChatEvent",
+        event_per_listener = true,
+        version = 2,
         cancellable = true
     )]
     fn client_chat(

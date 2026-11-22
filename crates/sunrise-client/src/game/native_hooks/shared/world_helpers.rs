@@ -134,7 +134,7 @@ impl Game<'_> {
         let decision = if self.screen_hooks_heard() {
             let current = self.screen_change_view(Screen::Mod);
             let none = self.screen_change_view(Screen::Playing);
-            self.decide_screen(&current, &screen_view_with_id(&none, "title"), true)
+            self.decide_screen(&current, &screen_view_with_id(&none, "title"), true, false)
         } else {
             ScreenDecision::Open
         };

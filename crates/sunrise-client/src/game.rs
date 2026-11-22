@@ -1064,8 +1064,6 @@ mod native_bots;
 mod native_capability_cache_tests;
 #[path = "game/modding/native_cauldron_contents.rs"]
 mod native_cauldron_contents;
-#[path = "game/modding/native_chat_recipients.rs"]
-mod native_chat_recipients;
 #[cfg(test)]
 #[path = "game/modding/native_chat_recipients_tests.rs"]
 mod native_chat_recipients_tests;

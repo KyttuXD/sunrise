@@ -37,17 +37,17 @@ pub trait Hooks {
         new: &mut Option<BlockState>,
         #[engine] ticks: &mut Ticks,
     );
-    /// A command the local player typed or clicked in chat, without its
-    /// slash, before the server and Sunrise's commands see it: set `ran`
-    /// when the mod ran it. Client-side: a server never asks, not for
-    /// command blocks, guests or the console.
+    /// A local client command without its leading slash, before it is sent to
+    /// the server, including commands submitted by `NetworkClientHost::send_chat`.
+    /// Return `Flow::Cancel` when the mod handles it. Server commands do not fire this hook.
     #[hook(
         target = "sunrise_client::game::native_hooks::base::Game<'_>::native_command",
         dispatch = "flat",
         side = "client",
         contract = "cancel",
         out = "ran",
-        version = 2,
+        event_per_listener = true,
+        version = 3,
         neoforge = "none (ClientChatEvent is for chat messages; client commands are added by RegisterClientCommandsEvent)"
     )]
     fn command(command: &str, ran: &mut bool);

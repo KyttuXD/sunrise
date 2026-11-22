@@ -1173,15 +1173,17 @@ pub(super) fn emit<'a>(
             let reply_outside_event =
                 matches!(contract, Contract::Listen | Contract::Replace) || answered_return;
             let shared_collect_output = collected.is_some() && !answered && !collect_cancel;
-            let cancellation_only =
-                local_cancel && contract == Contract::Cancel && rollback.is_empty();
-            if (!reply_outside_event && !shared_collect_output && !cancellation_only)
+            let local_cancel_outputs = local_cancel
+                && contract == Contract::Cancel
+                && hook.output_validator.is_none()
+                && surfaces.is_empty();
+            if (!reply_outside_event && !shared_collect_output && !local_cancel_outputs)
                 || !stack_outputs.is_empty()
                 || hook.owner.is_some()
                 || hook.context == Some(PhaseContext::ChunkDisk)
             {
                 return Err(format!(
-                    "{name}: event_per_listener requires a listen or replace hook, a collect hook with a shared borrowed output, or a global cancel hook with no writable output except cancellation"
+                    "{name}: event_per_listener requires a listen or replace hook, a collect hook with a shared borrowed output, or a global cancel hook with rollback-capable outputs and no output validator"
                 ));
             }
             (String::new(), build)
@@ -1541,7 +1543,7 @@ pub(super) fn emit<'a>(
                 let (accepted, publish_each, publish_end) = if local_cancel {
                     (
                         format!("*{out}"),
-                        format!("*{out} = {event}.cancelled;"),
+                        format!("*{out} = {event}.cancelled; {local_write_back}"),
                         String::new(),
                     )
                 } else {

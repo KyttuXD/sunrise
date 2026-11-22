@@ -96,17 +96,17 @@ borrowed service.
 
 ## Chat lines and respawn
 
-Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
-hook is asked once for each placed receiver, the sender included, before any of them is sent the line, with the
-`sender`, `sender_name`, the `message` players see and the `recipient`. Set `hidden` and that one receiver is sent
-nothing, no chat index and no pending acknowledgement; the others still get the line signed as it was sent, so its
-signature verifies for them. It covers a player's chat after `server_chat` let it through and `/say` and `/me`, signed
-or not. For a non-player `/say` source, such as the console or a command block, `sender` is the nil UUID (`0`) and
-`sender_name` is the source's display name. Whispers (`/msg`) are not public and are not asked. It is not a second
-`server_chat`: that hook is heard once for a typed line and cancels it for everyone, while this one is per receiver
-and also covers `/say` and `/me`. With no listener nothing is asked or allocated. A `/say` requested inside
-`chat_recipient` fails instead of reentering the hook or sending an unchecked line. The server's log keeps every
-broadcast line, hidden or not.
+Use `chat_recipient` for per-player filtering of public chat, such as an ignore list. It is asked once per placed
+network player whose chat settings accept player chat, including an eligible sender. Return `Flow::Cancel` to omit
+that copy; it doesn't advance the recipient's chat index or add an acknowledgement. The other recipients still
+get the original signed body. The server logs and checks trust first, then asks immediately before each eligible
+delivery; a disconnected player is not asked. The hook covers player chat accepted by `server_chat` and public
+commands `/say` and `/me`, after selector resolution and decoration, not private `/msg` deliveries. For a non-player source such as
+the console or a command block, `sender` is zero and `sender_name` is the source's display name.
+
+A public message sent by a command inside `chat_recipient` goes through the same hook again. Use the event's
+sender and text to distinguish it from the line that prompted your command. A listener that panics is reported
+and disabled for the session without canceling other listeners' decisions or unrelated deliveries.
 
 `player.respawn(host)` makes the same request as the client's Respawn button (`PERFORM_RESPAWN`). Call it outside
 player hooks, for example from `server_tick`. `Ok(())` means the request was accepted, not that the replacement is
@@ -276,9 +276,10 @@ Both output methods drop one leading slash and run at permission level 4 from th
 level (`MinecraftServer.createCommandSourceStack`), restoring the active level afterwards.
 Blank input or no open server yields `false` with no messages. Dedicated-console-only commands
 such as `stop` and `op` are unknown to this dispatcher. Output goes to the source that issued
-that command, not to an outer command's capture. Chat to other recipients, operator broadcasts,
-and logs are not source messages; outgoing confirmations addressed to the non-player console
-source (such as `/msg`) arrive as `CommandFeedback::System`. The console accepts success
+that command, not to an outer command's capture. Public `/say` and `/me` announcements are chat,
+not source feedback; use `chat_recipient` to observe per-player delivery attempts. Other chat to
+recipients, operator broadcasts, and logs are not source messages. Outgoing confirmations addressed
+to the non-player console source (such as `/msg`) arrive as `CommandFeedback::System`. The console accepts success
 feedback even when `send_command_feedback` is off for players. A failed run can already have
 sent success messages.
 

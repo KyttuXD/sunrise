@@ -120,16 +120,16 @@ pub trait Commands {
     /// included; use [`Self::run_command_with_feedback`] to receive structured messages including
     /// delayed ones, and to tell success, failure and direct system messages apart. Both methods
     /// have the same execution result and source routing. A command can fail after already sending
-    /// success feedback.
+    /// success feedback. Public `/say` and `/me` announcements are chat, not source feedback.
     fn run_command_with_output(&mut self, line: &str) -> CommandResult {
         unimplemented!("Commands::run_command_with_output")
     }
     /// Side: server.
     /// Runs `line` as the server console from the world spawn level
     /// (`MinecraftServer.createCommandSourceStack`), dropping one leading slash, and sends the
-    /// command source's structured messages to `output` in order as they occur. Logs, chat to
-    /// other recipients and operator broadcasts are not source feedback; outgoing confirmations
-    /// addressed to a non-player command source (such as `/msg`) are delivered as
+    /// command source's structured messages to `output` in order as they occur. Logs, public
+    /// chat, chat to other recipients and operator broadcasts are not source feedback.
+    /// Outgoing confirmations addressed to a non-player command source (such as `/msg`) are delivered as
     /// [`CommandFeedback::System`]. Nested calls have their own output. Output is not truncated;
     /// the receiver decides what to keep or display. A component that cannot be represented is
     /// sent as a `TextFormError` in its place. Dropping the receiver stops delivery but does not

@@ -226,21 +226,8 @@ pub enum HostEvent {
         conn: u32,
         flying: bool,
     },
-    /// A chat line to show on the host (already broadcast to the guests);
-    /// a dedicated server logs it, `[Not Secure]` unless signed and fresh.
-    Chat {
-        line: String,
-        secure: bool,
-    },
-    /// A chat message a player sent (after it was broadcast), for server mods.
-    PlayerChat {
-        sender: u128,
-        text: String,
-    },
-    /// A chat message the sender's chain let through,
-    /// not yet broadcast: with server mods loaded, the game tells them
-    /// (`native_server_chat`, NeoForge's `ServerChatEvent`) and then
-    /// broadcasts it with `Hub::broadcast_chat`.
+    /// A chat message the sender's chain let through. The game fires
+    /// `ServerChatEvent` when subscribed, then owns its publication.
     ChatSubmitted {
         message: Box<chat::ChatMessage>,
         bound: Box<play::ChatTypeBound>,
@@ -7229,7 +7216,7 @@ mod tests {
 
     /// `handleChatSessionUpdate` shares `chatMessageChain` with chat: a new
     /// session is announced after a message that came before it. With mods
-    /// loaded that message waits for the game (`ChatSubmitted`), so the
+    /// the message waits for the game (`ChatSubmitted`), so the
     /// announcement waits behind it; with nothing held it goes out at once.
     #[test]
     fn a_new_chat_session_waits_behind_chat_the_mods_hold() {

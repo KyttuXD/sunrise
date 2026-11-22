@@ -121,8 +121,6 @@ pub fn event_kind(event: &HostEvent) -> EventKind {
         HostEvent::Input { conn, .. } => ("input", Some(*conn), None),
         HostEvent::Kicked { name, .. } => ("kick", None, Some(name.clone())),
         HostEvent::Flight { conn, .. } => ("flight", Some(*conn), None),
-        HostEvent::Chat { .. } => ("chat line", None, None),
-        HostEvent::PlayerChat { .. } => ("chat", None, None),
         HostEvent::Warn(_) => ("warning", None, None),
         HostEvent::Error(_) => ("error", None, None),
     }

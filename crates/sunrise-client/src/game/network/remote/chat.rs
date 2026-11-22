@@ -312,35 +312,20 @@ impl Game<'_> {
         let chat_type = r.registries.data("minecraft:chat_type", bound.chat_type);
         comp_text(&chat_type_decorate(chat_type, decoration, bound, content))
     }
-    /// ClientPacketListener.sendChat / sendCommand, signed with a chat
-    /// session (game/network/remote_chat.rs). The Chat option's Hidden and System
-    /// levels keep chat out and Hidden keeps the commands out (ChatAbilities).
+    /// Submit chat through the play listener from an interactive input. The screen
+    /// has already normalized and recorded the line; control inputs also obey chat visibility.
     pub(in crate::game) fn send_signed_chat_input(&mut self, message: &str) {
-        let message = message.trim();
         if message.is_empty() || !self.chat_abilities().allows(message) {
             return;
         }
-        if let Some(command) = message.strip_prefix('/') {
-            if self.studio_command(command) {
-                return;
-            }
-            self.send_command(command);
-        } else {
-            self.send_signed_chat(message);
+        if message
+            .strip_prefix('/')
+            .is_some_and(|command| self.studio_command(command))
+        {
+            return;
         }
-    }
-    /// ChatScreen.handleChatInput fires the client event for chat, not commands.
-    pub(in crate::game) fn send_chat_from_screen(&mut self, message: &str) {
-        if message.starts_with('/') || !mod_api::__private::listened(mod_api::HookId::ClientChat) {
-            self.send_signed_chat_input(message);
-        } else if let Some(uuid) = self.remote.as_ref().map(|r| r.profile) {
-            let id = self.own_entity_id();
-            let sent = chat_after_event(message, |outgoing, cancel| {
-                self.native_client_chat(id, uuid, message, outgoing, cancel);
-            });
-            if let Some(outgoing) = sent {
-                self.send_signed_chat(&outgoing);
-            }
+        if let Err(error) = self.send_chat(message) {
+            log::warn!("Chat input could not be sent: {error}");
         }
     }
 }

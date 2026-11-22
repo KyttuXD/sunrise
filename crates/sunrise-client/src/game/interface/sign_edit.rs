@@ -536,6 +536,12 @@ impl Game<'_> {
     /// wrote (ServerboundSignUpdatePacket); the window's own world keeps it
     /// and sends it to its guests (`sendBlockUpdated`).
     pub(super) fn close_sign_editor(&mut self) {
+        self.remove_sign_editor();
+        self.capture(true);
+    }
+
+    /// `AbstractSignEditScreen.removed` publishes the edit even on replacement.
+    pub(super) fn remove_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             if self.remote.is_some() {
                 self.send(S::SignUpdate(play::SignUpdate {
@@ -550,7 +556,6 @@ impl Game<'_> {
             // the editor that closes gives the sign up.
             self.world.block_entities.set_sign_editor(edit.pos, None);
         }
-        self.capture(true);
     }
     /// `ServerPlayer.openTextEdit` for the guest whose action opened a sign:
     /// the block, then the editor, on its client, and the guest may write on it.

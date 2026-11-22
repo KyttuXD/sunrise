@@ -2287,14 +2287,6 @@ pub(super) fn client_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// What `ChatScreen.handleChatInput` sends of typed chat once `ClientChatEvent` (`ask`, with
-/// the outgoing message and the cancel flag) had its say: nothing when canceled or emptied.
-fn chat_after_event(message: &str, ask: impl FnOnce(&mut String, &mut bool)) -> Option<String> {
-    let mut outgoing = message.to_owned();
-    let mut cancel = false;
-    ask(&mut outgoing, &mut cancel);
-    (!cancel && !outgoing.is_empty()).then_some(outgoing)
-}
 /// `Entity.isOnFire` for the window's player: while the server's flag is set
 /// the predicted tick's countdown never takes `fire_ticks` below 1.
 pub(super) fn hold_server_fire(fire_ticks: i32, server_on_fire: bool) -> i32 {
@@ -2722,9 +2714,7 @@ pub(crate) mod tests {
         spawn
     }
 
-    use super::{
-        boat_interact_passes, chat_after_event, item_frame_interact_passes, remote_object_swings,
-    };
+    use super::{boat_interact_passes, item_frame_interact_passes, remote_object_swings};
 
     #[test]
     #[ignore = "daily"]

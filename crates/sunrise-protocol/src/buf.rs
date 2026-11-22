@@ -349,10 +349,13 @@ primitive!(Uuid, u128, uuid, uuid);
 pub struct Str;
 impl Codec<String> for Str {
     fn read(r: &mut Reader) -> Result<String> {
-        r.string(32767)
+        StrN::<32767>::read(r)
     }
     fn write(v: &String, w: &mut Writer) {
-        w.string(v)
+        StrN::<32767>::write(v, w);
+    }
+    fn validate(v: &String) -> Result<()> {
+        StrN::<32767>::validate(v)
     }
 }
 /// A string with a smaller vanilla limit, e.g. player names (16).
@@ -362,7 +365,15 @@ impl<const N: usize> Codec<String> for StrN<N> {
         r.string(N)
     }
     fn write(v: &String, w: &mut Writer) {
-        w.string(v)
+        w.string(v);
+    }
+    fn validate(v: &String) -> Result<()> {
+        // Utf8String.write checks Java's UTF-16 length. A valid Rust string
+        // cannot take more than three UTF-8 bytes per UTF-16 code unit.
+        if v.len() > N && v.encode_utf16().nth(N).is_some() {
+            return Err(Error::new(format!("string exceeds {N} UTF-16 code units")));
+        }
+        Ok(())
     }
 }
 /// Identifier.STREAM_CODEC: a validated resource location, with the default namespace.
